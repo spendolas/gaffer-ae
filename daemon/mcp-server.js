@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { register as registerProjectSummary } from './tools/projectSummary.js';
 import { register as registerEffectMatchNames } from './tools/effectMatchNames.js';
+import { register as registerCaptureActiveComp } from './tools/captureActiveComp.js';
 
 /**
  * Creates and starts the MCP HTTP server.
@@ -49,6 +50,7 @@ export function startMcpServer(port, queue) {
 
     registerProjectSummary(server, queue, z);
     registerEffectMatchNames(server, queue, z);
+    registerCaptureActiveComp(server, queue, z);
 
     return server;
   }
