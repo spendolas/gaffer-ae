@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Gaffer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Adobe Clean", "Segoe UI", sans-serif;
+      font-size: 12px;
+      background: #232323;
+      color: #e0e0e0;
+      padding: 12px;
+      overflow: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .wordmark {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #fafafa;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+    }
+    .led {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #c44;
+      transition: background 0.3s;
+    }
+    .led.connected { background: #4c8; }
+    .section {
+      margin-bottom: 10px;
+    }
+    .label {
+      font-size: 10px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 3px;
+    }
+    .value {
+      font-family: "SF Mono", "Consolas", monospace;
+      font-size: 11px;
+      color: #ccc;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 3px;
+      padding: 4px 6px;
+      max-height: 40px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn {
+      background: #3a3a3a;
+      border: 1px solid #555;
+      color: #ddd;
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .btn:hover { background: #4a4a4a; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="wordmark">Gaffer</span>
+    <div class="status">
+      <div id="led" class="led"></div>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Last JSX</div>
+    <div id="lastJsx" class="value">—</div>
+  </div>
+
+  <div class="section">
+    <div class="label">Last Result</div>
+    <div id="lastResult" class="value">—</div>
+  </div>
+
+  <button id="reconnectBtn" class="btn">Reconnect</button>
+
+  <script src="lib/CSInterface.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
