@@ -103,9 +103,11 @@ export function startMcpServer(port, queue) {
     }
   });
 
-  app.listen(port, '127.0.0.1', () => {
-    console.log(`Gaffer: MCP on http://127.0.0.1:${port}/mcp`);
+  return new Promise((resolve, reject) => {
+    var server = app.listen(port, '127.0.0.1', () => {
+      console.log(`Gaffer: MCP on http://127.0.0.1:${port}/mcp`);
+      resolve(app);
+    });
+    server.on('error', reject);
   });
-
-  return app;
 }

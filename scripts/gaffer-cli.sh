@@ -4,7 +4,7 @@
 #        ./gaffer-cli.sh  (interactive mode)
 
 GAFFER_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PROMPT_FILE="$GAFFER_DIR/prompts/gaffer.md"
+PROMPT_FILE="$GAFFER_DIR/panel/prompts/gaffer.md"
 
 if [ ! -f "$PROMPT_FILE" ]; then
   echo "Error: gaffer.md not found at $PROMPT_FILE" >&2

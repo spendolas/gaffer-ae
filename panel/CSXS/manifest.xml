@@ -39,12 +39,12 @@
           <Menu>Gaffer</Menu>
           <Geometry>
             <Size>
-              <Width>300</Width>
-              <Height>200</Height>
+              <Width>350</Width>
+              <Height>500</Height>
             </Size>
             <MinSize>
-              <Width>200</Width>
-              <Height>100</Height>
+              <Width>280</Width>
+              <Height>400</Height>
             </MinSize>
           </Geometry>
         </UI>

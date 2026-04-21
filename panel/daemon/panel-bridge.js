@@ -11,16 +11,29 @@ export class PanelBridge {
   constructor(port) {
     this.port = port;
     this.ws = null;
-    this.pending = new Map(); // id → { resolve, reject, timer }
+    this.pending = new Map();
     this.wss = null;
+    this.onChat = null;
+    this.onChatCancel = null;
   }
 
   start() {
-    this.wss = new WebSocketServer({ port: this.port });
+    return new Promise((resolve, reject) => {
+      this.wss = new WebSocketServer({ port: this.port });
+      this.wss.once('error', reject);
+      this.wss.once('listening', () => {
+        this.wss.removeListener('error', reject);
+        this._setupConnectionHandler();
+        console.log(`Gaffer: panel bridge on ws://127.0.0.1:${this.port}`);
+        resolve();
+      });
+    });
+  }
+
+  _setupConnectionHandler() {
+    this.wss.on('error', (e) => console.error('Gaffer: WS server error', e.message));
 
     this.wss.on('connection', (socket) => {
-      // Replace existing connection — CEP may open multiple WebSocket
-      // connections (mixed-context, panel reload, etc.)
       if (this.ws) {
         console.log('Gaffer: replacing existing panel connection');
         try { this.ws.close(); } catch (e) { /* ignore */ }
@@ -32,6 +45,18 @@ export class PanelBridge {
       socket.on('message', (data) => {
         try {
           var msg = JSON.parse(data.toString());
+
+          // Typed messages (chat protocol)
+          if (msg.type === 'chat') {
+            if (this.onChat) this.onChat(msg, socket);
+            return;
+          }
+          if (msg.type === 'chat_cancel') {
+            if (this.onChatCancel) this.onChatCancel();
+            return;
+          }
+
+          // Legacy: JSX response (no type field)
           var entry = this.pending.get(msg.id);
           if (!entry) return;
 
@@ -41,7 +66,6 @@ export class PanelBridge {
           if (msg.ok === false) {
             entry.resolve(JSON.stringify({ ok: false, error: msg.error, line: msg.line }));
           } else {
-            // msg.result is the raw evalScript return (already JSON from safety wrapper)
             entry.resolve(msg.result);
           }
         } catch (e) {
@@ -50,7 +74,6 @@ export class PanelBridge {
       });
 
       socket.on('close', () => {
-        // Only act if this is still the active socket (not a replaced one)
         if (this.ws === socket) {
           console.log('Gaffer: panel disconnected');
           this.ws = null;
@@ -66,8 +89,6 @@ export class PanelBridge {
         console.error('Gaffer: panel socket error', e.message);
       });
     });
-
-    console.log(`Gaffer: panel bridge on ws://127.0.0.1:${this.port}`);
   }
 
   send(code) {
@@ -88,9 +109,13 @@ export class PanelBridge {
     });
   }
 
-  stop() {
-    if (this.wss) {
-      this.wss.close();
+  sendToPanel(msg) {
+    if (this.ws && this.ws.readyState === 1) {
+      this.ws.send(JSON.stringify(msg));
     }
+  }
+
+  stop() {
+    if (this.wss) this.wss.close();
   }
 }
