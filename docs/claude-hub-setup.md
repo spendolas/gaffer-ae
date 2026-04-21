@@ -38,12 +38,12 @@ This gates `runJSX` behind `writeAccess` — read-only rooms can inspect AE but 
 2. Create a new room
 3. Set `projectDir` to your AE project directory
 4. Enable `writeAccess` if agents should modify the AE project
-5. Add agents (see [agent templates](claude-hub-agent-templates.md))
+5. Add agents (see [agent templates](claude-hub-agents.md))
 6. Add Gaffer system prompt to room `notes` (paste contents of `prompts/gaffer.md`)
 
 ## Step 3: Add agents
 
-Use the agent templates in [claude-hub-agent-templates.md](claude-hub-agent-templates.md).
+Use the agent templates in [claude-hub-agents.md](claude-hub-agents.md).
 At minimum, add the **Gaffer (Operator)** agent.
 
 ## How tool gating works

@@ -1,6 +1,6 @@
-# Claude Hub Agent Templates for Gaffer
+# Claude Hub Agent Configs for Gaffer
 
-Three ready-to-use agent configs. Add these as agents in a Claude Hub room.
+Suggested agent configs. When creating a room in Claude Hub, add agents with these name/role values.
 
 ## Gaffer (Operator)
 
