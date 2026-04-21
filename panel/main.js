@@ -20,7 +20,6 @@
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
-  var hasNodeJs = (typeof require !== 'undefined');
 
   // ── Status ──
 
@@ -35,39 +34,19 @@
   // ── Daemon auto-start ──
 
   function startDaemon() {
-    if (daemonStartAttempted || !hasNodeJs) return;
+    if (daemonStartAttempted) return;
     daemonStartAttempted = true;
     setStatus('starting', 'Starting daemon...');
 
-    try {
-      var cp = require('child_process');
-      var fs = require('fs');
-      var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    var startScript = extPath + '/daemon/start.sh';
 
-      // Try compiled binary first, fall back to node
-      var binaryPath = extPath + '/daemon/gaffer-daemon';
-      if (process.platform === 'win32') binaryPath += '.exe';
+    // Call simple launcher script via ExtendScript
+    var jsx = 'system.callSystem("bash \\"' + startScript + '\\"")';
 
-      var cmd, args;
-      if (fs.existsSync(binaryPath)) {
-        cmd = binaryPath;
-        args = [];
-      } else {
-        cmd = 'node';
-        args = [extPath + '/daemon/index.js'];
-      }
-
-      var child = cp.spawn(cmd, args, {
-        detached: true,
-        stdio: 'ignore',
-        cwd: extPath + '/daemon',
-        env: Object.assign({}, process.env),
-      });
-      child.unref();
-      console.log('Gaffer: daemon spawned (pid ' + child.pid + ')');
-    } catch (e) {
-      console.error('Gaffer: failed to spawn daemon', e);
-    }
+    cs.evalScript(jsx, function (result) {
+      console.log('Gaffer: daemon spawn: ' + result);
+    });
   }
 
   // ── WebSocket ──
