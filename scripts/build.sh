@@ -7,26 +7,14 @@ DAEMON_DIR="$REPO_DIR/panel/daemon"
 
 echo "=== Gaffer Build ==="
 
-# Check tools
-if ! command -v bun &>/dev/null; then
-  echo "ERROR: bun not found. Install: curl -fsSL https://bun.sh/install | bash"
-  exit 1
-fi
-
+# Check esbuild
 cd "$DAEMON_DIR"
-
-# 1. Install deps if needed
-if [ ! -d node_modules ]; then
-  echo "Installing dependencies..."
-  npm install 2>&1 | tail -3
-fi
-
-# 2. Install esbuild if needed
 if ! npx esbuild --version &>/dev/null 2>&1; then
+  echo "Installing esbuild..."
   npm install --save-dev esbuild
 fi
 
-# 3. Bundle ESM → CJS
+# 1. Bundle ESM → CJS
 echo "Bundling daemon..."
 mkdir -p dist
 npx esbuild index.js \
@@ -39,21 +27,51 @@ npx esbuild index.js \
 
 echo "Bundle: $(du -h dist/bundle.cjs | cut -f1)"
 
-# 4. Compile with bun
-echo "Compiling standalone binary..."
-rm -f gaffer-daemon
-bun build dist/bundle.cjs --compile --outfile gaffer-daemon
+# 2. Generate SEA blob
+echo "Generating SEA blob..."
+cat > dist/sea-config.json << EOF
+{
+  "main": "$DAEMON_DIR/dist/bundle.cjs",
+  "output": "$DAEMON_DIR/dist/sea-prep.blob"
+}
+EOF
+node --experimental-sea-config dist/sea-config.json
 
-echo "Binary: $(du -h gaffer-daemon | cut -f1)"
+# 3. Detect platform and download matching Node binary
+ARCH=$(uname -m)
+OS=$(uname -s)
 
-# 5. Cross-compile for other targets if requested
-if [ "${1:-}" = "--all" ]; then
-  echo "Cross-compiling..."
-  bun build dist/bundle.cjs --compile --target=bun-linux-x64 --outfile dist/gaffer-daemon-linux-x64 2>/dev/null || echo "  linux-x64: skipped (may need bun update)"
-  bun build dist/bundle.cjs --compile --target=bun-windows-x64 --outfile dist/gaffer-daemon-win-x64.exe 2>/dev/null || echo "  win-x64: skipped (may need bun update)"
-  ls -lh dist/gaffer-daemon-* 2>/dev/null
+if [ "$OS" = "Darwin" ]; then
+  if [ "$ARCH" = "arm64" ]; then
+    PLATFORM="darwin-arm64"
+  else
+    PLATFORM="darwin-x64"
+  fi
+elif [ "$OS" = "Linux" ]; then
+  PLATFORM="linux-x64"
+else
+  echo "ERROR: Unsupported platform $OS/$ARCH"
+  exit 1
 fi
+
+NODE_VERSION="v20.14.0"
+NODE_URL="https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-$PLATFORM.tar.gz"
+
+if [ ! -f "dist/node-$PLATFORM" ]; then
+  echo "Downloading Node.js $NODE_VERSION for $PLATFORM..."
+  curl -sL "$NODE_URL" | tar -xz --strip-components=2 -C dist "node-$NODE_VERSION-$PLATFORM/bin/node"
+  mv dist/node "dist/node-$PLATFORM"
+fi
+
+# 4. Inject SEA blob into Node binary
+echo "Building standalone binary..."
+cp "dist/node-$PLATFORM" gaffer-daemon
+codesign --remove-signature gaffer-daemon 2>/dev/null || true
+npx postject gaffer-daemon NODE_SEA_BLOB dist/sea-prep.blob \
+  --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
+  --macho-segment-name NODE_SEA
+codesign --sign - gaffer-daemon 2>/dev/null || true
 
 echo ""
 echo "=== Build complete ==="
-echo "Binary at: $DAEMON_DIR/gaffer-daemon"
+echo "Binary: $(du -h gaffer-daemon | cut -f1) ($(file gaffer-daemon | cut -d: -f2))"
