@@ -8,34 +8,24 @@
     html, body { height: 100%; overflow: hidden; }
     body {
       font-family: "Adobe Clean", "Segoe UI", sans-serif;
-      font-size: 12px;
+      font-size: 14px;
       background: #232323;
       color: #e0e0e0;
       display: flex;
       flex-direction: column;
       height: 100%;
     }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      border-bottom: 1px solid #333;
-      flex-shrink: 0;
+    .clear-btn {
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 9px;
+      cursor: pointer;
+      margin-right: 6px;
     }
-    .wordmark {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: #fafafa;
-    }
-    .status {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 10px;
-    }
+    .clear-btn:hover { color: #ccc; border-color: #666; }
     .led {
       width: 7px;
       height: 7px;
@@ -59,7 +49,7 @@
       padding: 6px 10px;
       border-radius: 6px;
       max-width: 95%;
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.5;
       white-space: pre-wrap;
       word-wrap: break-word;
@@ -79,15 +69,25 @@
       border-color: #c44;
       color: #e88;
     }
-    .tool-indicator {
-      font-size: 10px;
-      color: #999;
-      padding: 2px 0;
+    .tool-pill {
+      display: inline-block;
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      margin: 2px 2px 2px 0;
       font-family: "SF Mono", "Consolas", monospace;
+      background: #333;
+      color: #999;
     }
-    .tool-indicator.running { color: #da3; }
-    .tool-indicator.done { color: #4c8; }
-    .tool-indicator.error { color: #c44; }
+    .tool-pill.running { background: #3a3520; color: #da3; }
+    .tool-pill.done { background: #1a3520; color: #4c8; }
+    .tool-pill.error { background: #3a2020; color: #c44; }
+    .typing-indicator {
+      color: #666;
+      font-style: italic;
+    }
+    @keyframes blink { 50% { opacity: 0.3; } }
+    .typing-dot { animation: blink 1s infinite; }
 
     /* Input */
     .chat-input-area {
@@ -96,6 +96,11 @@
       padding: 8px 12px;
       border-top: 1px solid #333;
       flex-shrink: 0;
+      flex-direction: column;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
     }
     .chat-input {
       flex: 1;
@@ -111,8 +116,7 @@
     }
     .chat-input:focus { border-color: #666; }
     .chat-input:disabled { opacity: 0.5; }
-    .send-btn {
-      background: #3a5a8a;
+    .send-btn, .stop-btn {
       border: none;
       color: #ddd;
       padding: 6px 12px;
@@ -121,8 +125,16 @@
       cursor: pointer;
       flex-shrink: 0;
     }
+    .send-btn { background: #3a5a8a; }
     .send-btn:hover { background: #4a6a9a; }
     .send-btn:disabled { opacity: 0.4; cursor: default; }
+    .stop-btn { background: #8a3a3a; display: none; }
+    .stop-btn:hover { background: #9a4a4a; }
+    .input-hint {
+      font-size: 9px;
+      color: #555;
+      text-align: right;
+    }
 
     /* Activity log */
     .activity-log {
@@ -135,6 +147,15 @@
       color: #777;
       cursor: pointer;
       user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .activity-right {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
     }
     .activity-log .value {
       font-family: "SF Mono", "Consolas", monospace;
@@ -148,23 +169,27 @@
   </style>
 </head>
 <body>
-  <div class="header">
-    <span class="wordmark">Gaffer</span>
-    <div class="status">
-      <div id="led" class="led"></div>
-      <span id="statusText">Starting...</span>
-    </div>
-  </div>
-
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
-    <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="2" disabled></textarea>
-    <button id="sendBtn" class="send-btn" disabled>Send</button>
+    <div class="chat-input-row">
+      <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="2" disabled></textarea>
+      <button id="sendBtn" class="send-btn" disabled>Send</button>
+      <button id="stopBtn" class="stop-btn">Stop</button>
+    </div>
+    <div class="input-hint">Enter to send, Shift+Enter for newline</div>
   </div>
 
   <details class="activity-log">
-    <summary>Activity</summary>
+    <summary>
+      <span class="activity-left">Activity</span>
+      <span class="activity-right">
+        <button id="clearBtn" class="clear-btn">Clear chat</button>
+        <button id="reloadBtn" class="clear-btn">Reload</button>
+        <span id="led" class="led"></span>
+        <span id="statusText">Starting...</span>
+      </span>
+    </summary>
     <div id="lastJsx" class="value">-</div>
     <div id="lastResult" class="value">-</div>
   </details>

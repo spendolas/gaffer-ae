@@ -13,6 +13,8 @@
   var chatMessagesEl = document.getElementById('chatMessages');
   var chatInputEl = document.getElementById('chatInput');
   var sendBtnEl = document.getElementById('sendBtn');
+  var stopBtnEl = document.getElementById('stopBtn');
+  var clearBtnEl = document.getElementById('clearBtn');
 
   // Chat state
   var currentSessionId = null;
@@ -20,6 +22,7 @@
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
+  var wasConnected = false;
 
   // ── Status ──
 
@@ -39,10 +42,17 @@
     setStatus('starting', 'Starting daemon...');
 
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
-    var startScript = extPath + '/daemon/start.sh';
 
-    // Call simple launcher script via ExtendScript
-    var jsx = 'system.callSystem("bash \\"' + startScript + '\\"")';
+    // Detect OS and call appropriate launcher script
+    var jsx = '(function() {'
+      + 'var isWin = $.os.indexOf("Windows") !== -1;'
+      + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
+      + 'if (isWin) {'
+      + '  return system.callSystem("powershell -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"");'
+      + '} else {'
+      + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"");'
+      + '}'
+      + '})()';
 
     cs.evalScript(jsx, function (result) {
       console.log('Gaffer: daemon spawn: ' + result);
@@ -129,6 +139,7 @@
     ws.onopen = function () {
       console.log('Gaffer: connected to daemon');
       setStatus('connected', 'Connected');
+      wasConnected = true;
       reconnectDelay = 1000;
     };
 
@@ -137,6 +148,11 @@
     ws.onclose = function () {
       console.log('Gaffer: disconnected from daemon');
       setStatus('disconnected', 'Disconnected');
+      // If daemon crashed after being connected, allow restart
+      if (wasConnected) {
+        daemonStartAttempted = false;
+        wasConnected = false;
+      }
       if (!daemonStartAttempted) startDaemon();
       scheduleReconnect();
     };
@@ -166,8 +182,7 @@
       sessionId: currentSessionId,
     }));
     chatInputEl.value = '';
-    chatBusy = true;
-    sendBtnEl.disabled = true;
+    setChatBusy(true);
     startAssistantMessage();
   }
 
@@ -179,10 +194,18 @@
     scrollToBottom();
   }
 
+  function setChatBusy(busy) {
+    chatBusy = busy;
+    sendBtnEl.disabled = busy;
+    sendBtnEl.style.display = busy ? 'none' : '';
+    stopBtnEl.style.display = busy ? '' : 'none';
+  }
+
   function startAssistantMessage() {
     var div = document.createElement('div');
     div.className = 'chat-msg assistant';
     div.id = 'currentResponse';
+    div.innerHTML = '<span class="typing-indicator"><span class="typing-dot">...</span></span>';
     chatMessagesEl.appendChild(div);
     scrollToBottom();
   }
@@ -191,6 +214,9 @@
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
     el = document.getElementById('currentResponse');
+    // Remove typing indicator on first real chunk
+    var typing = el.querySelector('.typing-indicator');
+    if (typing) typing.remove();
     el.textContent += text;
     scrollToBottom();
   }
@@ -198,20 +224,23 @@
   function showToolStatus(tool, status) {
     var el = document.getElementById('currentResponse');
     if (!el) return;
-    var indicator = document.createElement('div');
-    indicator.className = 'tool-indicator ' + status;
-    var icon = status === 'running' ? '⟳' : status === 'done' ? '✓' : '✗';
-    indicator.textContent = icon + ' ' + tool;
-    el.appendChild(indicator);
+    var pill = document.createElement('span');
+    pill.className = 'tool-pill ' + status;
+    var icon = status === 'running' ? '~ ' : status === 'done' ? '+ ' : 'x ';
+    pill.textContent = icon + tool;
+    el.appendChild(pill);
     scrollToBottom();
   }
 
   function finalizeChatResponse(sessionId) {
     currentSessionId = sessionId;
     var el = document.getElementById('currentResponse');
-    if (el) el.removeAttribute('id');
-    chatBusy = false;
-    sendBtnEl.disabled = false;
+    if (el) {
+      var typing = el.querySelector('.typing-indicator');
+      if (typing) typing.remove();
+      el.removeAttribute('id');
+    }
+    setChatBusy(false);
     chatInputEl.focus();
   }
 
@@ -219,11 +248,24 @@
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
     el = document.getElementById('currentResponse');
+    var typing = el.querySelector('.typing-indicator');
+    if (typing) typing.remove();
     el.className += ' error';
     el.textContent += '\n[Error: ' + error + ']';
     el.removeAttribute('id');
-    chatBusy = false;
-    sendBtnEl.disabled = false;
+    setChatBusy(false);
+  }
+
+  function clearChat() {
+    chatMessagesEl.innerHTML = '';
+    currentSessionId = null;
+  }
+
+  function stopChat() {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'chat_cancel' }));
+    }
+    finalizeChatResponse(currentSessionId);
   }
 
   function scrollToBottom() {
@@ -233,12 +275,33 @@
   // ── Input handlers ──
 
   sendBtnEl.addEventListener('click', sendChatMessage);
+  stopBtnEl.addEventListener('click', stopChat);
+  clearBtnEl.addEventListener('click', clearChat);
+  document.getElementById('reloadBtn').addEventListener('click', function () {
+    location.reload();
+  });
   chatInputEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendChatMessage();
     }
   });
+
+  // ── Register keyboard shortcuts (CEP intercepts them by default) ──
+  cs.registerKeyEventsInterest(JSON.stringify([
+    { keyCode: 8 },                        // Backspace
+    { keyCode: 46 },                       // Delete
+    { keyCode: 65, metaKey: true },        // Cmd+A
+    { keyCode: 67, metaKey: true },        // Cmd+C
+    { keyCode: 86, metaKey: true },        // Cmd+V
+    { keyCode: 88, metaKey: true },        // Cmd+X
+    { keyCode: 90, metaKey: true },        // Cmd+Z
+    { keyCode: 65, ctrlKey: true },        // Ctrl+A (Windows)
+    { keyCode: 67, ctrlKey: true },        // Ctrl+C
+    { keyCode: 86, ctrlKey: true },        // Ctrl+V
+    { keyCode: 88, ctrlKey: true },        // Ctrl+X
+    { keyCode: 90, ctrlKey: true },        // Ctrl+Z
+  ]));
 
   // ── Start ──
   setStatus('starting', 'Starting...');

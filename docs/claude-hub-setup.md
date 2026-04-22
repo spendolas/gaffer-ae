@@ -21,12 +21,12 @@ if (config.writeAccess) {
 Add Gaffer tools to **both** branches:
 
 ```javascript
-// Read-only rooms: inspection only
-let allowedTools = 'Read,Grep,Glob,Bash(git *),Bash(gh *),...,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames';
+// Read-only rooms: inspection + screenshots only
+let allowedTools = 'Read,Grep,Glob,Bash(git *),Bash(gh *),...,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames,mcp__gaffer__captureActiveComp';
 
 // Write-access rooms: full Gaffer control
 if (config.writeAccess) {
-  allowedTools = 'Read,Write,Edit,Grep,Glob,Bash(*),WebFetch,WebSearch,mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames';
+  allowedTools = 'Read,Write,Edit,Grep,Glob,Bash(*),WebFetch,WebSearch,mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames,mcp__gaffer__captureActiveComp';
 }
 ```
 

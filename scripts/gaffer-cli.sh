@@ -11,7 +11,7 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-GAFFER_TOOLS="mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames"
+GAFFER_TOOLS="mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames,mcp__gaffer__captureActiveComp"
 
 if [ $# -gt 0 ]; then
   echo "$*" | claude -p --append-system-prompt "$(cat "$PROMPT_FILE")" --allowedTools "$GAFFER_TOOLS"

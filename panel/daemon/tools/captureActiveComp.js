@@ -4,8 +4,10 @@
  * Saves to /tmp/gaffer-capture-<timestamp>.png, cleans up old captures.
  */
 
+import { tmpdir } from 'node:os';
+
 var MAX_CAPTURES = 10;
-var CAPTURE_DIR = '/tmp';
+var CAPTURE_DIR = tmpdir();
 var CAPTURE_PREFIX = 'gaffer-capture-';
 
 function buildJSX(outputPath) {

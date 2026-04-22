@@ -36,6 +36,12 @@ export class PanelBridge {
     this.wss.on('connection', (socket) => {
       if (this.ws) {
         console.log('Gaffer: replacing existing panel connection');
+        // Reject pending requests from old socket
+        for (var [id, entry] of this.pending) {
+          clearTimeout(entry.timer);
+          entry.reject(new Error('Panel reconnected — old request abandoned'));
+        }
+        this.pending.clear();
         try { this.ws.close(); } catch (e) { /* ignore */ }
       }
 
