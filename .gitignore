@@ -3,3 +3,4 @@ node_modules/
 panel/daemon/gaffer-daemon
 panel/daemon/gaffer-daemon.exe
 panel/daemon/dist/
+panel/chat-history.json
