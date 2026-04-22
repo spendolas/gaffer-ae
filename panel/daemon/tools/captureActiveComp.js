@@ -18,7 +18,7 @@ function buildJSX(outputPath) {
   }
   var f = new File("${outputPath}");
   try {
-    comp.saveFrameToPng(comp.time, f);
+    comp.saveFrameToPng(comp.time, f).wait();
   } catch (e) {
     return JSON.stringify({ error: "saveFrameToPng failed: " + e.toString() + ". This can happen with certain color depths or effects. Try a different comp or check comp settings." });
   }
