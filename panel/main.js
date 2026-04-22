@@ -19,6 +19,7 @@
   // Chat state
   var currentSessionId = null;
   var chatBusy = false;
+  var chatHistory = []; // { role: 'user'|'assistant', text: string }
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
@@ -61,9 +62,71 @@
 
   // ── WebSocket ──
 
+  // ── Chat persistence (via ExtendScript file I/O) ──
+
+  var chatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history.json';
+
+  function saveChat() {
+    var data = JSON.stringify({ messages: chatHistory, sessionId: currentSessionId });
+    var escaped = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var jsx = "(function() {"
+      + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
+      + "f.open('w'); f.write('" + escaped + "'); f.close();"
+      + "return 'ok';"
+      + "})()";
+    cs.evalScript(jsx);
+  }
+
+  function restoreChat() {
+    var jsx = "(function() {"
+      + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
+      + "if (!f.exists) return '';"
+      + "f.open('r'); var d = f.read(); f.close();"
+      + "return d;"
+      + "})()";
+    cs.evalScript(jsx, function (result) {
+      if (!result || result === 'undefined' || result === 'EvalScript_ErrMessage') return;
+      try {
+        var data = JSON.parse(result);
+        if (!data || !data.messages) return;
+        currentSessionId = data.sessionId || null;
+        chatHistory = data.messages;
+        for (var i = 0; i < chatHistory.length; i++) {
+          var msg = chatHistory[i];
+          if (msg.role === 'user') {
+            var div = document.createElement('div');
+            div.className = 'chat-msg user';
+            div.textContent = msg.text;
+            chatMessagesEl.appendChild(div);
+          } else {
+            var div = document.createElement('div');
+            div.className = 'chat-msg assistant';
+            var textSpan = document.createElement('span');
+            textSpan.className = 'msg-text';
+            textSpan.textContent = msg.text;
+            div.appendChild(textSpan);
+            addCopyButton(div);
+            chatMessagesEl.appendChild(div);
+          }
+        }
+        scrollToBottom();
+      } catch (e) { /* corrupt data, ignore */ }
+    });
+  }
+
   function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.substring(0, len) + '...' : str;
+  }
+
+  function copyViaPbcopy(text, btn) {
+    // Use ExtendScript system.callSystem to pipe text to clipboard
+    var escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    var jsx = 'system.callSystem("echo \\"" + "' + escaped + '" + "\\" | pbcopy")';
+    cs.evalScript(jsx, function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    });
   }
 
   function evalScriptAsync(code) {
@@ -191,21 +254,46 @@
     div.className = 'chat-msg user';
     div.textContent = text;
     chatMessagesEl.appendChild(div);
+    chatHistory.push({ role: 'user', text: text });
+    saveChat();
     scrollToBottom();
   }
 
   function setChatBusy(busy) {
     chatBusy = busy;
     sendBtnEl.disabled = busy;
-    sendBtnEl.style.display = busy ? 'none' : '';
-    stopBtnEl.style.display = busy ? '' : 'none';
+    sendBtnEl.style.display = busy ? 'none' : 'block';
+    stopBtnEl.style.display = busy ? 'block' : 'none';
+  }
+
+  function addCopyButton(div) {
+    var copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', function () {
+      var textEl = div.querySelector('.msg-text');
+      var text = textEl ? textEl.textContent.trim() : div.textContent.trim();
+      try {
+        navigator.clipboard.writeText(text).then(function () {
+          copyBtn.textContent = 'Copied';
+          setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500);
+        }).catch(function () { copyViaPbcopy(text, copyBtn); });
+      } catch (e) {
+        copyViaPbcopy(text, copyBtn);
+      }
+    });
+    div.appendChild(copyBtn);
   }
 
   function startAssistantMessage() {
     var div = document.createElement('div');
     div.className = 'chat-msg assistant';
     div.id = 'currentResponse';
-    div.innerHTML = '<span class="typing-indicator"><span class="typing-dot">...</span></span>';
+    addCopyButton(div);
+    var typing = document.createElement('span');
+    typing.className = 'typing-indicator';
+    typing.innerHTML = '<span class="typing-dot">...</span>';
+    div.appendChild(typing);
     chatMessagesEl.appendChild(div);
     scrollToBottom();
   }
@@ -217,7 +305,20 @@
     // Remove typing indicator on first real chunk
     var typing = el.querySelector('.typing-indicator');
     if (typing) typing.remove();
-    el.textContent += text;
+    // Append as text node to preserve Copy button
+    var textNode = el.querySelector('.msg-text');
+    if (!textNode) {
+      textNode = document.createElement('span');
+      textNode.className = 'msg-text';
+      // Insert before the copy button
+      var copyBtn = el.querySelector('.copy-btn');
+      if (copyBtn) {
+        el.insertBefore(textNode, copyBtn);
+      } else {
+        el.appendChild(textNode);
+      }
+    }
+    textNode.textContent += text;
     scrollToBottom();
   }
 
@@ -238,7 +339,16 @@
     if (el) {
       var typing = el.querySelector('.typing-indicator');
       if (typing) typing.remove();
-      el.removeAttribute('id');
+      var msgText = el.querySelector('.msg-text');
+      if ((!msgText || !msgText.textContent.trim()) && !el.querySelector('.tool-pill')) {
+        el.remove();
+      } else {
+        el.removeAttribute('id');
+        if (msgText && msgText.textContent.trim()) {
+          chatHistory.push({ role: 'assistant', text: msgText.textContent.trim() });
+          saveChat();
+        }
+      }
     }
     setChatBusy(false);
     chatInputEl.focus();
@@ -259,6 +369,9 @@
   function clearChat() {
     chatMessagesEl.innerHTML = '';
     currentSessionId = null;
+    chatHistory = [];
+    saveChat();
+    if (chatBusy) startAssistantMessage();
   }
 
   function stopChat() {
@@ -287,23 +400,13 @@
     }
   });
 
-  // ── Register keyboard shortcuts (CEP intercepts them by default) ──
-  cs.registerKeyEventsInterest(JSON.stringify([
-    { keyCode: 8 },                        // Backspace
-    { keyCode: 46 },                       // Delete
-    { keyCode: 65, metaKey: true },        // Cmd+A
-    { keyCode: 67, metaKey: true },        // Cmd+C
-    { keyCode: 86, metaKey: true },        // Cmd+V
-    { keyCode: 88, metaKey: true },        // Cmd+X
-    { keyCode: 90, metaKey: true },        // Cmd+Z
-    { keyCode: 65, ctrlKey: true },        // Ctrl+A (Windows)
-    { keyCode: 67, ctrlKey: true },        // Ctrl+C
-    { keyCode: 86, ctrlKey: true },        // Ctrl+V
-    { keyCode: 88, ctrlKey: true },        // Ctrl+X
-    { keyCode: 90, ctrlKey: true },        // Ctrl+Z
-  ]));
+  // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching
+  // the panel JS. registerKeyEventsInterest doesn't work in CEP 12 for these.
+  // Copy is handled via Copy buttons on each message instead.
 
   // ── Start ──
+  stopBtnEl.style.display = 'none';
+  restoreChat();
   setStatus('starting', 'Starting...');
   connect();
 })();

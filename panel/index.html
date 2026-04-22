@@ -53,6 +53,9 @@
       line-height: 1.5;
       white-space: pre-wrap;
       word-wrap: break-word;
+      user-select: text;
+      -webkit-user-select: text;
+      cursor: text;
     }
     .chat-msg.user {
       background: #3a3a5a;
@@ -69,6 +72,16 @@
       border-color: #c44;
       color: #e88;
     }
+    .copy-btn {
+      display: block;
+      background: none;
+      border: none;
+      color: #666;
+      font-size: 9px;
+      padding: 3px 0 0 0;
+      cursor: pointer;
+    }
+    .copy-btn:active { color: #aaa; }
     .tool-pill {
       display: inline-block;
       font-size: 9px;
@@ -128,7 +141,7 @@
     .send-btn { background: #3a5a8a; }
     .send-btn:hover { background: #4a6a9a; }
     .send-btn:disabled { opacity: 0.4; cursor: default; }
-    .stop-btn { background: #8a3a3a; display: none; }
+    .stop-btn { background: #8a3a3a; }
     .stop-btn:hover { background: #9a4a4a; }
     .input-hint {
       font-size: 9px;

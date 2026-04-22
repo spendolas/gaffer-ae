@@ -17,7 +17,11 @@ function buildJSX(outputPath) {
     return JSON.stringify({ error: "No active composition" });
   }
   var f = new File("${outputPath}");
-  comp.saveFrameToPng(comp.time, f);
+  try {
+    comp.saveFrameToPng(comp.time, f);
+  } catch (e) {
+    return JSON.stringify({ error: "saveFrameToPng failed: " + e.toString() + ". This can happen with certain color depths or effects. Try a different comp or check comp settings." });
+  }
   if (f.exists) {
     return JSON.stringify({ ok: true, path: f.fsName, width: comp.width, height: comp.height, time: comp.time });
   } else {
