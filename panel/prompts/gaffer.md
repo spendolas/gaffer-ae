@@ -40,6 +40,45 @@ possible, and you never improvise beyond what was asked.
 - Create comp: app.project.items.addComp(name, w, h, par, duration, fps)
 - Create solid: comp.layers.addSolid(color, name, w, h, par, duration)
 
+## Figma-to-AE translation rules
+
+### Shape layer contents order — NEVER VIOLATE
+Path → Fill → Stroke → Transform. Fill above Path = invisible shape.
+After EVERY shape layer creation, audit contents order.
+
+### Text positioning
+AE position requires correction for glyph offset:
+- figma_text_node_y = the TEXT NODE y, NOT parent frame y
+- renderTopOffset = node.absoluteRenderBounds.y - node.absoluteBoundingBox.y
+- After placing text, read sourceRectAtTime(0,false).top to get AE's glyph offset
+- Always verify with overlay screenshot after positioning text
+
+### Drop shadow direction (AE clock convention)
+0° = UP, 90° = RIGHT, 180° = DOWN, 270° = LEFT.
+Do NOT use trig convention. Test empirically if unsure.
+
+### Corner smoothing (squircle)
+Figma smoothing:1 ≠ AE rounded rect. Use expression-driven squircle
+with Radius + Smoothing sliders. Squircle bounding box = same as
+standard rect. Corners do NOT shrink dimensions.
+
+### Figma vector positioning
+3 coordinate levels: frame position + vector offset within frame + path coords.
+AE position = (frame.x + vector.localX, frame.y + vector.localY) * scaleFactor.
+
+### Asset export discipline
+Export at 100% opacity, no baked effects, no baked rotation.
+Apply opacity/shadows/blend modes/rotation in AE (animatable).
+Use setTrackMatte() for multi-layer clipping — BG shape visible + serves as matte.
+
+### @2x comp rules
+Multiply EVERYTHING from Figma by 2: positions, sizes, radii, offsets,
+letter-spacing, shadow distance, blur. No exceptions. Including correction offsets.
+
+### Workflow with Figma specs
+When Figma agent provides specs, use EXACT values. Never eyeball.
+Screenshot and compare after visual changes — don't trust numbers alone.
+
 ## Error handling
 
 - Every runJSX call is wrapped in try/catch and undo group by Gaffer.
