@@ -8,7 +8,7 @@ $panelDir = "$repoDir\panel"
 
 Write-Host "=== Gaffer Installer (Windows) ==="
 
-# 1. Check Claude CLI
+# 1. Check prerequisites
 Write-Host "Checking prerequisites..."
 $claudeBin = $null
 $candidates = @(
@@ -27,25 +27,30 @@ if (-not $claudeBin) {
 }
 Write-Host "  Claude CLI: $claudeBin"
 
-# Check binary
-$daemonBin = "$panelDir\daemon\gaffer-daemon.exe"
-if (-not (Test-Path $daemonBin)) {
-    Write-Host "ERROR: gaffer-daemon.exe not found. Run build.sh --all first."
+$nodeVersion = & node --version 2>$null
+if (-not $nodeVersion) {
+    Write-Host "ERROR: Node.js not found. Install from https://nodejs.org"
     exit 1
 }
-Write-Host "  Daemon binary: found"
+Write-Host "  Node.js: $nodeVersion"
 
-# 2. Copy extension
+# 2. Symlink extension (or copy on systems without symlink support)
 Write-Host "Installing extension to $installDir..."
 if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
-New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+try {
+    New-Item -ItemType SymbolicLink -Path $installDir -Target $panelDir -Force | Out-Null
+    Write-Host "  (symlinked)"
+} catch {
+    # Symlinks may require admin on some Windows configs — fall back to copy
+    robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
+    Write-Host "  (copied)"
+}
 
-# Copy panel files (exclude dev artifacts)
-robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
-
-# 3. Write config
-Write-Host "Writing config..."
-@{claudeBin = $claudeBin} | ConvertTo-Json | Set-Content "$installDir\.gaffer-config.json"
+# 3. Install daemon dependencies
+Write-Host "Installing daemon dependencies..."
+Push-Location "$panelDir\daemon"
+& npm install --production
+Pop-Location
 
 # 4. Registry: PlayerDebugMode
 Write-Host "Setting PlayerDebugMode in registry..."

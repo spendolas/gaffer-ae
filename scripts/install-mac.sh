@@ -27,33 +27,22 @@ if [ -z "$CLAUDE_BIN" ]; then
 fi
 echo "  Claude CLI: $CLAUDE_BIN"
 
-# Check binary exists
-if [ ! -f "$PANEL_DIR/daemon/gaffer-daemon" ]; then
-  echo "ERROR: gaffer-daemon binary not found. Run scripts/build.sh first."
+if ! command -v node &>/dev/null; then
+  echo "ERROR: Node.js not found. Install from https://nodejs.org"
   exit 1
 fi
-echo "  Daemon binary: found"
+echo "  Node.js: $(node --version)"
 
-# 2. Copy extension
+# 2. Symlink extension (edits to panel/ are live)
 echo "Installing extension to $INSTALL_DIR..."
 if [ -e "$INSTALL_DIR" ]; then
   rm -rf "$INSTALL_DIR"
 fi
-mkdir -p "$INSTALL_DIR"
+ln -sf "$PANEL_DIR" "$INSTALL_DIR"
 
-# Copy panel files (exclude dev artifacts)
-rsync -a \
-  --exclude 'node_modules' \
-  --exclude 'daemon/dist' \
-  --exclude 'daemon/package-lock.json' \
-  --exclude '.debug' \
-  "$PANEL_DIR/" "$INSTALL_DIR/"
-
-# 3. Write config
-echo "Writing config..."
-cat > "$INSTALL_DIR/.gaffer-config.json" << EOJSON
-{"claudeBin": "$CLAUDE_BIN"}
-EOJSON
+# 3. Install daemon dependencies
+echo "Installing daemon dependencies..."
+cd "$PANEL_DIR/daemon" && npm install --production 2>&1 | tail -3
 
 # 4. Set PlayerDebugMode
 echo "Setting PlayerDebugMode..."
