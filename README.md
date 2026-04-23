@@ -1,42 +1,94 @@
 # Gaffer
 
-An After Effects automation agent. Claude controls AE by writing ExtendScript, driven from a chat UI inside the AE panel or from Claude Code CLI.
+An After Effects automation agent. Chat with Claude directly inside an AE panel — Claude controls After Effects by writing ExtendScript via MCP tools.
+
+## Quick Start
+
+Open Claude Code and say:
+
+> Install Gaffer from https://github.com/spendolas/gaffer-ae
+
+Claude will handle the rest. Then restart After Effects and open **Window > Extensions > Gaffer**.
 
 ## Prerequisites
 
-- **After Effects** 2025 or 2026
-- **Claude Code CLI** — [install](https://claude.ai/code)
-- **Node.js** 18+ — [install](https://nodejs.org)
+- After Effects 2025 or 2026
+- Claude Code CLI ([install](https://claude.ai/code))
+- Node.js 18+ ([install](https://nodejs.org))
 
-## Install
+---
 
-### macOS
+## Install Instructions for Claude
 
-```bash
-git clone https://github.com/spendolas/gaffer-ae.git gaffer
-cd gaffer
-./scripts/install-mac.sh
-```
+<details>
+<summary>Claude: read this section when asked to install Gaffer.</summary>
 
-### Windows
+### What to do
 
-```powershell
-git clone https://github.com/spendolas/gaffer-ae.git gaffer
-cd gaffer
-powershell -ExecutionPolicy Bypass -File scripts\install-win.ps1
-```
+1. **Check prerequisites** — verify `node` and `claude` are on PATH. If not, tell the user what's missing.
 
-Then restart After Effects and open **Window > Extensions > Gaffer**.
+2. **Clone the repo** to a permanent location (the extension symlinks here, so it must persist):
+   ```bash
+   # macOS
+   git clone https://github.com/spendolas/gaffer-ae.git "$HOME/.gaffer"
+   
+   # Windows
+   git clone https://github.com/spendolas/gaffer-ae.git "$env:USERPROFILE\.gaffer"
+   ```
+
+3. **Install daemon dependencies:**
+   ```bash
+   cd "$HOME/.gaffer/panel/daemon" && npm install --production
+   ```
+
+4. **Symlink the panel into the CEP extensions directory:**
+   ```bash
+   # macOS
+   ln -sf "$HOME/.gaffer/panel" "$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+   
+   # Windows (PowerShell, may need admin)
+   New-Item -ItemType SymbolicLink -Path "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel" -Target "$env:USERPROFILE\.gaffer\panel" -Force
+   ```
+
+5. **Enable unsigned CEP extensions:**
+   ```bash
+   # macOS
+   defaults write com.adobe.CSXS.11 PlayerDebugMode 1
+   defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+   
+   # Windows (PowerShell)
+   foreach ($v in @("11","12")) { 
+     $k = "HKCU:\Software\Adobe\CSXS.$v"
+     if (!(Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+     Set-ItemProperty -Path $k -Name PlayerDebugMode -Value 1 -Type DWord
+   }
+   ```
+
+6. **Register the MCP server with Claude Code:**
+   ```bash
+   claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
+   ```
+
+7. **Tell the user:** "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
+
+### Troubleshooting
+
+- **Panel doesn't appear in AE menu:** PlayerDebugMode not set, or AE needs full restart (not just panel reload).
+- **Panel shows "Disconnected":** Daemon failed to start. Check `/tmp/gaffer-daemon.log` (macOS) or `%TEMP%\gaffer-daemon.log` (Windows). Usually a missing `npm install`.
+- **MCP tools not available:** Run `claude mcp add` step again. Verify with `claude mcp list`.
+
+</details>
+
+---
 
 ## What it does
 
-The panel auto-starts a local daemon that connects Claude to After Effects via MCP. You can:
+The panel auto-starts a local daemon that connects Claude to After Effects via MCP.
 
 - **Chat in the panel** — ask Claude to modify your AE project directly
-- **Use CLI** — `./scripts/gaffer-cli.sh "add a wiggle to the selected layer"`
 - **Use Claude Code** — any `claude` session sees the Gaffer MCP tools automatically
 
-## MCP Tools
+### MCP Tools
 
 | Tool | Description |
 |------|-------------|
@@ -45,35 +97,10 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 | `listEffectMatchNames` | All effects grouped by category (cached) |
 | `captureActiveComp` | Screenshot current frame as PNG |
 
-## How it works
+### Architecture
 
 ```
-Panel (CEP in AE) ←WebSocket→ Daemon (Node.js) ←MCP HTTP→ Claude
+Panel (CEP in AE) <-WebSocket-> Daemon (Node.js) <-MCP HTTP-> Claude
 ```
 
-- Panel auto-starts the daemon on load
-- Daemon serializes all AE calls (no races)
-- Every mutation is wrapped in an undo group prefixed "Gaffer:"
-- Chat spawns `claude -p` with a tuned AE system prompt
-
-## Development
-
-```bash
-# Start daemon manually (instead of auto-start)
-cd panel/daemon && npm install && node index.js
-
-# Register MCP server with Claude Code
-claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
-```
-
-Panel is symlinked during install, so edits to `panel/` are live. Reload the panel in AE to pick up changes (or use the Reload button in the panel).
-
-## Optional: Build standalone binary
-
-Compiles the daemon into a single executable (no Node.js needed at runtime):
-
-```bash
-./scripts/build.sh
-```
-
-Requires Node.js at build time. The binary is platform-specific (macOS/Windows/Linux). The panel's launcher script prefers the binary if present, falls back to `node`.
+Every mutation is wrapped in an undo group prefixed "Gaffer:" — always Cmd+Z safe.
