@@ -13,7 +13,7 @@ An After Effects automation agent. Claude controls AE by writing ExtendScript, d
 ### macOS
 
 ```bash
-git clone <repo-url> gaffer
+git clone https://github.com/spendolas/gaffer-ae.git gaffer
 cd gaffer
 ./scripts/install-mac.sh
 ```
@@ -21,7 +21,7 @@ cd gaffer
 ### Windows
 
 ```powershell
-git clone <repo-url> gaffer
+git clone https://github.com/spendolas/gaffer-ae.git gaffer
 cd gaffer
 powershell -ExecutionPolicy Bypass -File scripts\install-win.ps1
 ```
