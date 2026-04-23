@@ -123,6 +123,11 @@ Before you begin, read these rules. They apply to every step below.
 - **Panel doesn't appear in AE menu:** PlayerDebugMode not set, or AE needs full restart (not just panel reload).
 - **Panel shows "Disconnected":** Daemon failed to start. Check `/tmp/gaffer-daemon.log` (macOS) or `%TEMP%\gaffer-daemon.log` (Windows). Usually a missing `npm install`.
 - **MCP tools not available:** Run `claude mcp add` step again. Verify with `claude mcp list`.
+- **MCP tools show as disconnected in `claude mcp list`:** Most common cause — the Gaffer panel is not open in After Effects. Open AE, then open Window > Extensions > Gaffer, then re-run `claude mcp list`. If the panel is open and it still shows disconnected, check the panel's connection indicator. If the panel also shows disconnected, the daemon failed to start — see "Panel shows Disconnected" above.
+- **Install says my Node version is too old:** Gaffer requires Node 18+. Check with `node --version`. If you manage Node with nvm or fnm, switch to a supported version before re-running the install. Otherwise install from [nodejs.org](https://nodejs.org).
+- **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` or `node` aren't on your shell's PATH, the check fails even if they're installed. Open a fresh terminal, run `which node` and `which claude` (macOS) or `where.exe node` and `where.exe claude` (Windows) to confirm. Fix PATH before re-running.
+- **`claude` errors or asks me to log in:** Gaffer doesn't install authentication. Run `claude` once manually, complete the login flow, confirm it works, then re-run the Gaffer install.
+- **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh.
 
 </details>
 
