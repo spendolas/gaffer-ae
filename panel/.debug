@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionList>
+  <Extension Id="com.gaffer.panel.main">
+    <HostList>
+      <Host Name="AEFT" Port="13870"/>
+    </HostList>
+  </Extension>
+</ExtensionList>

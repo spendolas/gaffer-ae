@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+panel/daemon/gaffer-daemon
+panel/daemon/gaffer-daemon.exe
+panel/daemon/dist/
+panel/chat-history.json

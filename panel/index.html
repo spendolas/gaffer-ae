@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Gaffer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: "Adobe Clean", "Segoe UI", sans-serif;
+      font-size: 14px;
+      background: #232323;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .clear-btn {
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 9px;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+    .clear-btn:hover { color: #ccc; border-color: #666; }
+    .led {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #c44;
+      transition: background 0.3s;
+    }
+    .led.connected { background: #4c8; }
+    .led.starting { background: #da3; }
+
+    /* Chat */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chat-msg {
+      padding: 6px 10px;
+      border-radius: 6px;
+      max-width: 95%;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      user-select: text;
+      -webkit-user-select: text;
+      cursor: text;
+    }
+    .chat-msg.user {
+      background: #3a3a5a;
+      align-self: flex-end;
+      color: #ddd;
+    }
+    .chat-msg.assistant {
+      background: #2a2a2a;
+      border: 1px solid #3a3a3a;
+      align-self: flex-start;
+      color: #ccc;
+    }
+    .chat-msg.error {
+      border-color: #c44;
+      color: #e88;
+    }
+    .copy-btn {
+      display: block;
+      background: none;
+      border: none;
+      color: #666;
+      font-size: 9px;
+      padding: 3px 0 0 0;
+      cursor: pointer;
+    }
+    .copy-btn:active { color: #aaa; }
+    .tool-pill {
+      display: inline-block;
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      margin: 2px 2px 2px 0;
+      font-family: "SF Mono", "Consolas", monospace;
+      background: #333;
+      color: #999;
+    }
+    .tool-pill.running { background: #3a3520; color: #da3; }
+    .tool-pill.done { background: #1a3520; color: #4c8; }
+    .tool-pill.error { background: #3a2020; color: #c44; }
+    .typing-indicator {
+      color: #666;
+      font-style: italic;
+    }
+    @keyframes blink { 50% { opacity: 0.3; } }
+    .typing-dot { animation: blink 1s infinite; }
+
+    /* Input */
+    .chat-input-area {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-top: 1px solid #333;
+      flex-shrink: 0;
+      flex-direction: column;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
+    }
+    .chat-input {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 8px;
+      resize: none;
+      outline: none;
+    }
+    .chat-input:focus { border-color: #666; }
+    .chat-input:disabled { opacity: 0.5; }
+    .send-btn, .stop-btn {
+      border: none;
+      color: #ddd;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .send-btn { background: #3a5a8a; }
+    .send-btn:hover { background: #4a6a9a; }
+    .send-btn:disabled { opacity: 0.4; cursor: default; }
+    .stop-btn { background: #8a3a3a; }
+    .stop-btn:hover { background: #9a4a4a; }
+    .input-hint {
+      font-size: 9px;
+      color: #555;
+      text-align: right;
+    }
+
+    /* Activity log */
+    .activity-log {
+      border-top: 1px solid #333;
+      padding: 4px 12px;
+      flex-shrink: 0;
+      font-size: 10px;
+    }
+    .activity-log summary {
+      color: #777;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .activity-right {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+    }
+    .activity-log .value {
+      font-family: "SF Mono", "Consolas", monospace;
+      font-size: 10px;
+      color: #888;
+      padding: 2px 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <div id="chatMessages" class="chat-messages"></div>
+
+  <div class="chat-input-area">
+    <div class="chat-input-row">
+      <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="2" disabled></textarea>
+      <button id="sendBtn" class="send-btn" disabled>Send</button>
+      <button id="stopBtn" class="stop-btn">Stop</button>
+    </div>
+    <div class="input-hint">Enter to send, Shift+Enter for newline</div>
+  </div>
+
+  <details class="activity-log">
+    <summary>
+      <span class="activity-left">Activity</span>
+      <span class="activity-right">
+        <button id="clearBtn" class="clear-btn">Clear chat</button>
+        <button id="reloadBtn" class="clear-btn">Reload</button>
+        <span id="led" class="led"></span>
+        <span id="statusText">Starting...</span>
+      </span>
+    </summary>
+    <div id="lastJsx" class="value">-</div>
+    <div id="lastResult" class="value">-</div>
+  </details>
+
+  <script src="lib/CSInterface.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
