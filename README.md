@@ -12,9 +12,10 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
 
 ## Prerequisites
 
-- After Effects 2025 or 2026
+- After Effects 2022+
 - Claude Code CLI ([install](https://claude.ai/code))
 - Node.js 18+ ([install](https://nodejs.org))
+- No git required
 
 ---
 
@@ -27,30 +28,34 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
 
 1. **Check prerequisites** — verify `node` and `claude` are on PATH. If not, tell the user what's missing.
 
-2. **Clone the repo** to a permanent location (the extension symlinks here, so it must persist):
+2. **Download and extract** directly into the CEP extensions directory (no repo clone needed):
    ```bash
    # macOS
-   git clone https://github.com/spendolas/gaffer-ae.git "$HOME/.gaffer"
+   INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+   mkdir -p "$INSTALL_DIR"
+   curl -sL https://github.com/spendolas/gaffer-ae/archive/refs/heads/main.tar.gz | tar -xz --strip-components=2 -C "$INSTALL_DIR" gaffer-ae-main/panel
    
-   # Windows
-   git clone https://github.com/spendolas/gaffer-ae.git "$env:USERPROFILE\.gaffer"
+   # Windows (PowerShell)
+   $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
+   New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+   Invoke-WebRequest -Uri "https://github.com/spendolas/gaffer-ae/archive/refs/heads/main.zip" -OutFile "$env:TEMP\gaffer.zip"
+   Expand-Archive -Path "$env:TEMP\gaffer.zip" -DestinationPath "$env:TEMP\gaffer-extract" -Force
+   Copy-Item -Recurse -Force "$env:TEMP\gaffer-extract\gaffer-ae-main\panel\*" $installDir
+   Remove-Item -Recurse -Force "$env:TEMP\gaffer.zip", "$env:TEMP\gaffer-extract"
    ```
 
 3. **Install daemon dependencies:**
    ```bash
-   cd "$HOME/.gaffer/panel/daemon" && npm install --production
-   ```
-
-4. **Symlink the panel into the CEP extensions directory:**
-   ```bash
    # macOS
-   ln -sf "$HOME/.gaffer/panel" "$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+   cd "$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel/daemon" && npm install --production
    
-   # Windows (PowerShell, may need admin)
-   New-Item -ItemType SymbolicLink -Path "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel" -Target "$env:USERPROFILE\.gaffer\panel" -Force
+   # Windows
+   Push-Location "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel\daemon"
+   npm install --production
+   Pop-Location
    ```
 
-5. **Enable unsigned CEP extensions:**
+4. **Enable unsigned CEP extensions:**
    ```bash
    # macOS
    defaults write com.adobe.CSXS.11 PlayerDebugMode 1
@@ -64,12 +69,12 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
    }
    ```
 
-6. **Register the MCP server with Claude Code:**
+5. **Register the MCP server with Claude Code:**
    ```bash
    claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
    ```
 
-7. **Tell the user:** "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
+6. **Tell the user:** "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
 
 ### Troubleshooting
 
