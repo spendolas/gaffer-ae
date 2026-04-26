@@ -12,10 +12,11 @@ LOG="${TMPDIR:-/tmp}/gaffer-update.log"
 exec >> "$LOG" 2>&1
 echo "=== Update started: $(date) ==="
 
-# Get latest commit hash
-LATEST_COMMIT=$(curl -s "https://api.github.com/repos/$REPO/commits/main" | grep -o '"sha": "[^"]*' | head -1 | cut -d'"' -f4)
+# Get latest version info from raw version.json
+REMOTE_VERSION=$(curl -s "https://raw.githubusercontent.com/$REPO/main/panel/version.json")
+LATEST_COMMIT=$(echo "$REMOTE_VERSION" | grep -o '"commit": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
 if [ -z "$LATEST_COMMIT" ]; then
-  echo "ERROR: Could not fetch latest commit"
+  echo "ERROR: Could not fetch latest version.json"
   exit 1
 fi
 echo "Latest commit: $LATEST_COMMIT"

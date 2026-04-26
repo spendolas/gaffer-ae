@@ -436,28 +436,27 @@
   }
 
   function checkForUpdate(silent) {
-    fetch('https://api.github.com/repos/spendolas/gaffer-ae/commits/main', {
-      headers: { 'Accept': 'application/vnd.github+json' }
-    }).then(function (r) { return r.json(); }).then(function (data) {
-      if (!data || !data.sha) return;
-      var latestCommit = data.sha;
-      if (!versionData.commit) {
-        // No installed version known, can't compare
-        if (!silent) alert('Local version unknown. Reinstall to enable updates.');
-        return;
-      }
-      if (latestCommit === versionData.commit) {
-        if (!silent) alert('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
-        return;
-      }
-      if (latestCommit === dismissedUpdateCommit) return;
-      // Show banner
-      updateTextEl.textContent = '⬆ Update available: ' + latestCommit.substring(0, 7) + ' (current: ' + versionData.commit.substring(0, 7) + ')';
-      updateBannerEl.classList.add('visible');
-      updateBannerEl._latestCommit = latestCommit;
-    }).catch(function (e) {
-      if (!silent) alert('Update check failed: ' + e.message);
-    });
+    // Fetch remote version.json directly — content match means same release.
+    // Avoids commit-hash chicken-and-egg from amend hooks.
+    fetch('https://raw.githubusercontent.com/spendolas/gaffer-ae/main/panel/version.json?t=' + Date.now())
+      .then(function (r) { return r.json(); })
+      .then(function (remote) {
+        if (!remote || !remote.commit) return;
+        if (!versionData.commit) {
+          if (!silent) alert('Local version unknown. Reinstall to enable updates.');
+          return;
+        }
+        if (remote.commit === versionData.commit) {
+          if (!silent) alert('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
+          return;
+        }
+        if (remote.commit === dismissedUpdateCommit) return;
+        updateTextEl.textContent = '⬆ Update available: ' + remote.commit.substring(0, 7) + ' (current: ' + versionData.commit.substring(0, 7) + ')';
+        updateBannerEl.classList.add('visible');
+        updateBannerEl._latestCommit = remote.commit;
+      }).catch(function (e) {
+        if (!silent) alert('Update check failed: ' + e.message);
+      });
   }
 
   function runUpdate() {

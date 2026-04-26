@@ -11,11 +11,11 @@ $logPath = Join-Path $env:TEMP "gaffer-update.log"
 Start-Transcript -Path $logPath -Append
 Write-Host "=== Update started: $(Get-Date) ==="
 
-# Get latest commit hash
-$apiResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/commits/main"
-$latestCommit = $apiResponse.sha
+# Get latest version info from raw version.json
+$remoteVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/main/panel/version.json"
+$latestCommit = $remoteVersion.commit
 if (-not $latestCommit) {
-    Write-Error "Could not fetch latest commit"
+    Write-Error "Could not fetch latest version.json"
     exit 1
 }
 Write-Host "Latest commit: $latestCommit"
