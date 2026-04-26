@@ -34,7 +34,8 @@ export class ChatHandler {
       return;
     }
 
-    var args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+    var model = msg.model || 'opus';
+    var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
 
     if (this.sessionId) {
       // Continue existing conversation

@@ -170,6 +170,53 @@
       gap: 5px;
       font-size: 10px;
     }
+    .activity-settings {
+      padding: 6px 0 4px 0;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      font-size: 10px;
+      color: #999;
+      border-bottom: 1px solid #2a2a2a;
+      margin-bottom: 4px;
+    }
+    .activity-settings label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .model-select {
+      background: #1a1a1a;
+      border: 1px solid #444;
+      color: #ddd;
+      font-size: 10px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .update-banner {
+      background: #2a3a5a;
+      border-bottom: 1px solid #4a5a7a;
+      padding: 6px 12px;
+      font-size: 11px;
+      color: #ddd;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .update-banner.visible { display: flex; }
+    .update-banner .actions { display: flex; gap: 4px; }
+    .update-banner button {
+      background: #3a5a8a;
+      border: none;
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .update-banner button.dismiss {
+      background: transparent;
+      color: #aaa;
+    }
     .activity-log .value {
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 10px;
@@ -182,6 +229,14 @@
   </style>
 </head>
 <body>
+  <div id="updateBanner" class="update-banner">
+    <span id="updateText">Update available</span>
+    <span class="actions">
+      <button id="updateBtn">Update now</button>
+      <button id="dismissUpdateBtn" class="dismiss">Dismiss</button>
+    </span>
+  </div>
+
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
@@ -203,6 +258,18 @@
         <span id="statusText">Starting...</span>
       </span>
     </summary>
+    <div class="activity-settings">
+      <label>Model:
+        <select id="modelSelect" class="model-select">
+          <option value="opus">Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="autoCheckUpdates"> Auto-check updates</label>
+      <button id="checkNowBtn" class="clear-btn">Check now</button>
+      <span id="versionText" style="margin-left:auto; color:#666;">v—</span>
+    </div>
     <div id="lastJsx" class="value">-</div>
     <div id="lastResult" class="value">-</div>
   </details>

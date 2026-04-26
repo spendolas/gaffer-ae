@@ -15,11 +15,22 @@
   var sendBtnEl = document.getElementById('sendBtn');
   var stopBtnEl = document.getElementById('stopBtn');
   var clearBtnEl = document.getElementById('clearBtn');
+  var modelSelectEl = document.getElementById('modelSelect');
+  var autoCheckEl = document.getElementById('autoCheckUpdates');
+  var checkNowBtnEl = document.getElementById('checkNowBtn');
+  var versionTextEl = document.getElementById('versionText');
+  var updateBannerEl = document.getElementById('updateBanner');
+  var updateTextEl = document.getElementById('updateText');
+  var updateBtnEl = document.getElementById('updateBtn');
+  var dismissUpdateBtnEl = document.getElementById('dismissUpdateBtn');
 
   // Chat state
   var currentSessionId = null;
   var chatBusy = false;
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
+  var currentModel = 'opus';
+  var autoCheckUpdates = true;
+  var dismissedUpdateCommit = null;
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
@@ -67,7 +78,13 @@
   var chatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history.json';
 
   function saveChat() {
-    var data = JSON.stringify({ messages: chatHistory, sessionId: currentSessionId });
+    var data = JSON.stringify({
+      messages: chatHistory,
+      sessionId: currentSessionId,
+      model: currentModel,
+      autoCheckUpdates: autoCheckUpdates,
+      dismissedUpdateCommit: dismissedUpdateCommit,
+    });
     var escaped = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var jsx = "(function() {"
       + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
@@ -91,6 +108,17 @@
         if (!data || !data.messages) return;
         currentSessionId = data.sessionId || null;
         chatHistory = data.messages;
+        if (data.model) {
+          currentModel = data.model;
+          modelSelectEl.value = currentModel;
+        }
+        if (typeof data.autoCheckUpdates === 'boolean') {
+          autoCheckUpdates = data.autoCheckUpdates;
+          autoCheckEl.checked = autoCheckUpdates;
+        }
+        if (data.dismissedUpdateCommit) {
+          dismissedUpdateCommit = data.dismissedUpdateCommit;
+        }
         for (var i = 0; i < chatHistory.length; i++) {
           var msg = chatHistory[i];
           if (msg.role === 'user') {
@@ -243,6 +271,7 @@
       type: 'chat',
       message: text,
       sessionId: currentSessionId,
+      model: currentModel,
     }));
     chatInputEl.value = '';
     setChatBusy(true);
@@ -385,6 +414,80 @@
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
   }
 
+  // ── Version + update check ──
+
+  var versionData = { version: 'dev', commit: null };
+
+  function loadVersion() {
+    var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
+    var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
+    cs.evalScript(jsx, function (result) {
+      if (result && result !== 'undefined') {
+        try {
+          versionData = JSON.parse(result);
+          var label = 'v' + (versionData.version || 'dev');
+          if (versionData.commit) label += ' (' + versionData.commit.substring(0, 7) + ')';
+          versionTextEl.textContent = label;
+        } catch (e) { /* ignore */ }
+      } else {
+        versionTextEl.textContent = 'v(dev)';
+      }
+    });
+  }
+
+  function checkForUpdate(silent) {
+    fetch('https://api.github.com/repos/spendolas/gaffer-ae/commits/main', {
+      headers: { 'Accept': 'application/vnd.github+json' }
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data || !data.sha) return;
+      var latestCommit = data.sha;
+      if (!versionData.commit) {
+        // No installed version known, can't compare
+        if (!silent) alert('Local version unknown. Reinstall to enable updates.');
+        return;
+      }
+      if (latestCommit === versionData.commit) {
+        if (!silent) alert('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
+        return;
+      }
+      if (latestCommit === dismissedUpdateCommit) return;
+      // Show banner
+      updateTextEl.textContent = '⬆ Update available: ' + latestCommit.substring(0, 7) + ' (current: ' + versionData.commit.substring(0, 7) + ')';
+      updateBannerEl.classList.add('visible');
+      updateBannerEl._latestCommit = latestCommit;
+    }).catch(function (e) {
+      if (!silent) alert('Update check failed: ' + e.message);
+    });
+  }
+
+  function runUpdate() {
+    if (chatBusy) {
+      alert('Please wait for current response to finish before updating.');
+      return;
+    }
+    var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    var script = extPath + '/daemon/update.sh';
+    var jsx = '(function(){'
+      + 'var isWin = $.os.indexOf("Windows") !== -1;'
+      + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
+      + 'if (isWin) return system.callSystem("powershell -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
+      + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
+      + '})()';
+    cs.evalScript(jsx, function (result) {
+      console.log('Gaffer: update result:', result);
+      // Reload panel to pick up new files
+      setTimeout(function () { location.reload(); }, 1000);
+    });
+  }
+
+  function dismissUpdate() {
+    if (updateBannerEl._latestCommit) {
+      dismissedUpdateCommit = updateBannerEl._latestCommit;
+      saveChat();
+    }
+    updateBannerEl.classList.remove('visible');
+  }
+
   // ── Input handlers ──
 
   sendBtnEl.addEventListener('click', sendChatMessage);
@@ -393,6 +496,17 @@
   document.getElementById('reloadBtn').addEventListener('click', function () {
     location.reload();
   });
+  modelSelectEl.addEventListener('change', function () {
+    currentModel = modelSelectEl.value;
+    saveChat();
+  });
+  autoCheckEl.addEventListener('change', function () {
+    autoCheckUpdates = autoCheckEl.checked;
+    saveChat();
+  });
+  checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
+  updateBtnEl.addEventListener('click', runUpdate);
+  dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
   chatInputEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -406,7 +520,13 @@
 
   // ── Start ──
   stopBtnEl.style.display = 'none';
+  autoCheckEl.checked = autoCheckUpdates;
+  modelSelectEl.value = currentModel;
   restoreChat();
+  loadVersion();
+  if (autoCheckUpdates) {
+    setTimeout(function () { checkForUpdate(true); }, 2000);
+  }
   setStatus('starting', 'Starting...');
   connect();
 })();
