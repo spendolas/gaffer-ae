@@ -131,7 +131,8 @@
             div.className = 'chat-msg assistant';
             var textSpan = document.createElement('span');
             textSpan.className = 'msg-text';
-            textSpan.textContent = msg.text;
+            textSpan.dataset.raw = msg.text;
+            textSpan.innerHTML = renderMarkdown(msg.text);
             div.appendChild(textSpan);
             addCopyButton(div);
             chatMessagesEl.appendChild(div);
@@ -301,7 +302,10 @@
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', function () {
       var textEl = div.querySelector('.msg-text');
-      var text = textEl ? textEl.textContent.trim() : div.textContent.trim();
+      // Prefer raw markdown source; fall back to rendered text
+      var text = textEl && textEl.dataset && textEl.dataset.raw
+        ? textEl.dataset.raw
+        : (textEl ? textEl.textContent.trim() : div.textContent.trim());
       try {
         navigator.clipboard.writeText(text).then(function () {
           copyBtn.textContent = 'Copied';
@@ -312,6 +316,15 @@
       }
     });
     div.appendChild(copyBtn);
+  }
+
+  function renderMarkdown(text) {
+    if (typeof marked === 'undefined') return text;
+    try {
+      return marked.parse(text, { breaks: true, gfm: true });
+    } catch (e) {
+      return text;
+    }
   }
 
   function startAssistantMessage() {
@@ -331,23 +344,20 @@
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
     el = document.getElementById('currentResponse');
-    // Remove typing indicator on first real chunk
     var typing = el.querySelector('.typing-indicator');
     if (typing) typing.remove();
-    // Append as text node to preserve Copy button
     var textNode = el.querySelector('.msg-text');
     if (!textNode) {
       textNode = document.createElement('span');
       textNode.className = 'msg-text';
-      // Insert before the copy button
+      textNode.dataset.raw = '';
       var copyBtn = el.querySelector('.copy-btn');
-      if (copyBtn) {
-        el.insertBefore(textNode, copyBtn);
-      } else {
-        el.appendChild(textNode);
-      }
+      if (copyBtn) el.insertBefore(textNode, copyBtn);
+      else el.appendChild(textNode);
     }
-    textNode.textContent += text;
+    // Accumulate raw markdown, re-render on each chunk
+    textNode.dataset.raw = (textNode.dataset.raw || '') + text;
+    textNode.innerHTML = renderMarkdown(textNode.dataset.raw);
     scrollToBottom();
   }
 
@@ -369,12 +379,15 @@
       var typing = el.querySelector('.typing-indicator');
       if (typing) typing.remove();
       var msgText = el.querySelector('.msg-text');
-      if ((!msgText || !msgText.textContent.trim()) && !el.querySelector('.tool-pill')) {
+      var rawText = msgText && msgText.dataset && msgText.dataset.raw
+        ? msgText.dataset.raw.trim()
+        : (msgText ? msgText.textContent.trim() : '');
+      if (!rawText && !el.querySelector('.tool-pill')) {
         el.remove();
       } else {
         el.removeAttribute('id');
-        if (msgText && msgText.textContent.trim()) {
-          chatHistory.push({ role: 'assistant', text: msgText.textContent.trim() });
+        if (rawText) {
+          chatHistory.push({ role: 'assistant', text: rawText });
           saveChat();
         }
       }
