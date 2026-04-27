@@ -37,9 +37,11 @@ export class ChatHandler {
     var model = msg.model || 'opus';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
 
-    if (this.sessionId) {
-      // Continue existing conversation
-      args.push('--resume', this.sessionId);
+    // Use sessionId from panel (persists across daemon restarts via chat-history.json)
+    var sessionId = msg.sessionId || this.sessionId;
+    if (sessionId) {
+      args.push('--resume', sessionId);
+      this.sessionId = sessionId;
     } else {
       // New conversation
       args.push(
