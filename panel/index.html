@@ -103,9 +103,11 @@
     .msg-text h2 { font-size: 14px; }
     .msg-text h3 { font-size: 13px; }
     .msg-text h4 { font-size: 12px; color: #ddd; }
-    .msg-text p { margin: 4px 0; }
+    .msg-text p { margin: 6px 0; }
     .msg-text p:first-child { margin-top: 0; }
     .msg-text p:last-child { margin-bottom: 0; }
+    .msg-text br { line-height: 0; }
+    .msg-text > br:first-child, .msg-text > br + br { display: none; }
     .msg-text strong { color: #fafafa; font-weight: 600; }
     .msg-text em { color: #ddd; font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 4px 0 4px 18px; padding: 0; }

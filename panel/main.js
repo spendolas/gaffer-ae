@@ -321,7 +321,7 @@
   function renderMarkdown(text) {
     if (typeof marked === 'undefined') return text;
     try {
-      return marked.parse(text, { breaks: true, gfm: true });
+      return marked.parse(text, { breaks: false, gfm: true });
     } catch (e) {
       return text;
     }
