@@ -321,11 +321,13 @@
   function renderMarkdown(text) {
     if (typeof marked === 'undefined') return text;
     try {
-      // Collapse 3+ newlines (incl. whitespace-only lines) into 2
+      // Normalize whitespace: collapse 3+ newlines, strip blanks between list
+      // items so marked produces tight lists (no <p> inside <li>).
       var clean = text
         .replace(/(\n[ \t]*){3,}/g, '\n\n')
-        .replace(/^\s+/, '')
-        .replace(/\s+$/, '');
+        .replace(/^(\s*[-*+]\s+.*)\n\s*\n(?=\s*[-*+]\s)/gm, '$1\n')
+        .replace(/^(\s*\d+\.\s+.*)\n\s*\n(?=\s*\d+\.\s)/gm, '$1\n')
+        .trim();
       return marked.parse(clean, { breaks: false, gfm: true });
     } catch (e) {
       return text;
