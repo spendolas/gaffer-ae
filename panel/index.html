@@ -39,12 +39,20 @@
     /* Chat */
     .chat-messages {
       flex: 1;
-      overflow-y: auto;
+      overflow-y: scroll;
       padding: 8px 12px;
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
+    .chat-messages::-webkit-scrollbar { width: 10px; }
+    .chat-messages::-webkit-scrollbar-track { background: #1a1a1a; }
+    .chat-messages::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 5px;
+      border: 2px solid #1a1a1a;
+    }
+    .chat-messages::-webkit-scrollbar-thumb:hover { background: #555; }
     .chat-msg {
       padding: 6px 10px;
       border-radius: 6px;
@@ -101,7 +109,9 @@
     .msg-text strong { color: #fafafa; font-weight: 600; }
     .msg-text em { color: #ddd; font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 4px 0 4px 18px; padding: 0; }
-    .msg-text li { margin: 2px 0; }
+    .msg-text li { margin: 0; }
+    .msg-text li > p { margin: 0; }
+    .msg-text li + li { margin-top: 2px; }
     .msg-text code {
       background: #1a1a1a;
       border: 1px solid #333;
