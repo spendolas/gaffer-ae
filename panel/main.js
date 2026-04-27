@@ -321,7 +321,9 @@
   function renderMarkdown(text) {
     if (typeof marked === 'undefined') return text;
     try {
-      return marked.parse(text, { breaks: false, gfm: true });
+      // Collapse 3+ newlines into 2 (kills empty paragraphs)
+      var clean = text.replace(/\n{3,}/g, '\n\n').replace(/^\s+/, '');
+      return marked.parse(clean, { breaks: false, gfm: true });
     } catch (e) {
       return text;
     }
