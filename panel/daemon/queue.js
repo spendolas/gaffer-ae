@@ -10,8 +10,8 @@ export class Queue {
     this.pending = Promise.resolve();
   }
 
-  enqueue(code, undoLabel) {
-    var wrapped = wrapInSafety(code, undoLabel);
+  enqueue(code, undoLabel, readOnly) {
+    var wrapped = wrapInSafety(code, undoLabel, readOnly);
     var task = this.pending.then(() => this.bridge.send(wrapped));
     // Swallow rejection to keep chain alive for next call
     this.pending = task.catch(() => {});

@@ -44,7 +44,7 @@ export function register(server, queue, z) {
     },
     async () => {
       try {
-        var result = await queue.enqueue(JSX_CODE, 'getProjectSummary');
+        var result = await queue.enqueue(JSX_CODE, 'getProjectSummary', true);
         return { content: [{ type: 'text', text: result }] };
       } catch (e) {
         return {

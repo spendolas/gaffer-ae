@@ -43,7 +43,7 @@ export function register(server, queue, z) {
         var timestamp = Date.now();
         var outputPath = `${CAPTURE_DIR}/${CAPTURE_PREFIX}${timestamp}.png`;
         var jsx = buildJSX(outputPath);
-        var raw = await queue.enqueue(jsx, 'captureActiveComp');
+        var raw = await queue.enqueue(jsx, 'captureActiveComp', true);
 
         // Clean up old captures (keep last MAX_CAPTURES)
         cleanup().catch(() => {});

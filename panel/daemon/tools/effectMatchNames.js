@@ -30,7 +30,7 @@ export function register(server, queue, z) {
     async ({ category }) => {
       try {
         if (!cache) {
-          var raw = await queue.enqueue(JSX_CODE, 'listEffectMatchNames');
+          var raw = await queue.enqueue(JSX_CODE, 'listEffectMatchNames', true);
           // Safety wrapper returns: {"ok":true,"result":"<json-string>"}
           var parsed = JSON.parse(raw);
           if (parsed.ok === false) {
