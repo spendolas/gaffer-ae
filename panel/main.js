@@ -32,6 +32,12 @@
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
 
+  // AE host info
+  var hostEnv = (function () {
+    try { return JSON.parse(cs.getHostEnvironment()); } catch (e) { return {}; }
+  })();
+  var aeVersion = (hostEnv.appVersion || 'unknown').split('x')[0]; // "26.0x67" → "26.0"
+
   // Daemon auto-start state
   var daemonStartAttempted = false;
   var wasConnected = false;
@@ -229,7 +235,11 @@
     }
 
     ws.onopen = function () {
-      console.log('Gaffer: connected to daemon');
+      console.log('Gaffer: connected to daemon as AE ' + aeVersion);
+      // Register with daemon so it can route by AE version
+      try {
+        ws.send(JSON.stringify({ type: 'register', aeVersion: aeVersion }));
+      } catch (e) { /* ignore */ }
       setStatus('connected', 'Connected');
       wasConnected = true;
       reconnectDelay = 1000;
@@ -273,6 +283,7 @@
       message: text,
       sessionId: currentSessionId,
       model: currentModel,
+      aeVersion: aeVersion,
     }));
     chatInputEl.value = '';
     setChatBusy(true);

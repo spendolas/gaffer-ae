@@ -77,12 +77,13 @@ export function register(server, queue, z) {
           height: z.number(),
           name: z.string().optional(),
         }).optional().describe('Artboard dimensions. If provided and no active comp matches, a new comp is created.'),
+        aeVersion: z.string().optional().describe('Target AE version when multiple instances are open. Omit if only one AE is open.'),
       },
     },
-    async ({ layers, artboard }) => {
+    async ({ layers, artboard, aeVersion }) => {
       try {
         var jsx = translateToJSX(layers, artboard);
-        var result = await queue.enqueue(jsx, 'importFromFigma');
+        var result = await queue.enqueue(jsx, 'importFromFigma', false, aeVersion);
         return { content: [{ type: 'text', text: result }] };
       } catch (e) {
         return {

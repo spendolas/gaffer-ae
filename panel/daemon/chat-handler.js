@@ -34,6 +34,11 @@ export class ChatHandler {
       return;
     }
 
+    // If panel reported its AE version, inject it so Claude routes tool calls correctly
+    if (msg.aeVersion) {
+      systemPrompt += '\n\n## Connected AE\n\nYou are connected to After Effects ' + msg.aeVersion + '. When calling Gaffer tools that accept an aeVersion parameter, pass "' + msg.aeVersion + '". This routes the call to the correct AE instance.\n';
+    }
+
     var model = msg.model || 'opus';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
 

@@ -25,12 +25,13 @@ export function register(server, queue, z) {
           .string()
           .optional()
           .describe('Filter by category name (case-insensitive substring match)'),
+        aeVersion: z.string().optional().describe('Target AE version when multiple instances are open. Omit if only one AE is open.'),
       },
     },
-    async ({ category }) => {
+    async ({ category, aeVersion }) => {
       try {
         if (!cache) {
-          var raw = await queue.enqueue(JSX_CODE, 'listEffectMatchNames', true);
+          var raw = await queue.enqueue(JSX_CODE, 'listEffectMatchNames', true, aeVersion);
           // Safety wrapper returns: {"ok":true,"result":"<json-string>"}
           var parsed = JSON.parse(raw);
           if (parsed.ok === false) {

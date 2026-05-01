@@ -40,11 +40,13 @@ export function register(server, queue, z) {
     {
       description:
         'Get a summary of the active AE project: active comp details, selected layers, project path, and item count. Call this before any non-trivial task to understand project state.',
-      inputSchema: {},
+      inputSchema: {
+        aeVersion: z.string().optional().describe('Target AE version when multiple instances are open. Omit if only one AE is open.'),
+      },
     },
-    async () => {
+    async ({ aeVersion } = {}) => {
       try {
-        var result = await queue.enqueue(JSX_CODE, 'getProjectSummary', true);
+        var result = await queue.enqueue(JSX_CODE, 'getProjectSummary', true, aeVersion);
         return { content: [{ type: 'text', text: result }] };
       } catch (e) {
         return {

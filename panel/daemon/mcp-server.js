@@ -34,11 +34,12 @@ export function startMcpServer(port, queue) {
         inputSchema: {
           code: z.string().describe('ExtendScript code to execute in After Effects'),
           undoLabel: z.string().optional().describe('Label for the undo group in AE history'),
+          aeVersion: z.string().optional().describe('Target AE version when multiple instances are open (e.g. "26.0", "25.6.4"). Omit if only one AE is open.'),
         },
       },
-      async ({ code, undoLabel }) => {
+      async ({ code, undoLabel, aeVersion }) => {
         try {
-          var result = await queue.enqueue(code, undoLabel);
+          var result = await queue.enqueue(code, undoLabel, false, aeVersion);
           return { content: [{ type: 'text', text: result }] };
         } catch (e) {
           return {

@@ -36,14 +36,16 @@ export function register(server, queue, z) {
     {
       description:
         'Capture the current frame of the active composition as a PNG screenshot. Returns the file path. Useful for visual inspection of what the comp looks like right now.',
-      inputSchema: {},
+      inputSchema: {
+        aeVersion: z.string().optional().describe('Target AE version when multiple instances are open. Omit if only one AE is open.'),
+      },
     },
-    async () => {
+    async ({ aeVersion } = {}) => {
       try {
         var timestamp = Date.now();
         var outputPath = `${CAPTURE_DIR}/${CAPTURE_PREFIX}${timestamp}.png`;
         var jsx = buildJSX(outputPath);
-        var raw = await queue.enqueue(jsx, 'captureActiveComp', true);
+        var raw = await queue.enqueue(jsx, 'captureActiveComp', true, aeVersion);
 
         // Clean up old captures (keep last MAX_CAPTURES)
         cleanup().catch(() => {});
