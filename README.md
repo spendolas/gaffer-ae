@@ -100,16 +100,37 @@ Before you begin, read these rules. They apply to every step below.
    }
    ```
 
-6. **Register the MCP server with Claude Code:**
+6. **Pin the claude binary path** so the daemon doesn't have to guess at runtime (AE-spawned subprocesses inherit a stripped PATH):
+   ```bash
+   # macOS
+   CLAUDE_PATH="$(command -v claude)"
+   INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+   if [ -n "$CLAUDE_PATH" ] && [ -x "$CLAUDE_PATH" ]; then
+     printf '{"claudeBin":"%s"}\n' "$CLAUDE_PATH" > "$INSTALL_DIR/.gaffer-config.json"
+   else
+     echo "WARNING: claude not found on PATH, skipping config pin"
+   fi
+
+   # Windows (PowerShell)
+   $cmd = Get-Command claude -ErrorAction SilentlyContinue
+   $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
+   if ($cmd -and $cmd.Source) {
+     @{claudeBin=$cmd.Source} | ConvertTo-Json -Compress | Set-Content "$installDir\.gaffer-config.json"
+   } else {
+     Write-Warning "claude not found on PATH, skipping config pin"
+   }
+   ```
+
+7. **Register the MCP server with Claude Code:**
    ```bash
    claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
    ```
 
-7. **Tell the user:** "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
+8. **Tell the user:** "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
 
    Note: Gaffer's MCP tools are only available while the panel is open in After Effects. If you run `claude` in a terminal without AE open, the tools will appear disconnected. Open AE first.
 
-8. **Verify the install.** After the user has restarted After Effects and confirmed the panel is visible under Window > Extensions > Gaffer, run these checks:
+9. **Verify the install.** After the user has restarted After Effects and confirmed the panel is visible under Window > Extensions > Gaffer, run these checks:
 
    a. `claude mcp list` — confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open.
 
@@ -127,6 +148,7 @@ Before you begin, read these rules. They apply to every step below.
 - **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` or `node` aren't on your shell's PATH, the check fails even if they're installed. Open a fresh terminal, run `which node` and `which claude` (macOS) or `where.exe node` and `where.exe claude` (Windows) to confirm. Fix PATH before re-running.
 - **`claude` errors or asks me to log in:** Gaffer doesn't install authentication. Run `claude` once manually, complete the login flow, confirm it works, then re-run the Gaffer install.
 - **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh.
+- **Chat fails with `Error: claude cli not found` despite Claude being installed:** The daemon couldn't locate the `claude` binary. Override discovery by writing `<extension-dir>/.gaffer-config.json` with `{"claudeBin": "/full/path/to/claude"}`. Find your path with `which claude` from a terminal.
 
 </details>
 
