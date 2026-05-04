@@ -17,6 +17,7 @@ export class ChatHandler {
 
   async handleChat(msg, socket) {
     this.cancel();
+    this._lastEmit = null;
 
     try {
       var claudeBin = await findClaudeBinary();
@@ -113,7 +114,13 @@ export class ChatHandler {
     if (event.type === 'assistant' && event.message && event.message.content) {
       for (var block of event.message.content) {
         if (block.type === 'text' && block.text) {
-          socket.send(JSON.stringify({ type: 'chat_chunk', text: block.text }));
+          // Add paragraph break when starting a new text block after a tool
+          // use, or after a previous text block (multi-message turn).
+          var prefix = (this._lastEmit === 'text' || this._lastEmit === 'tool')
+            ? '\n\n'
+            : '';
+          socket.send(JSON.stringify({ type: 'chat_chunk', text: prefix + block.text }));
+          this._lastEmit = 'text';
         }
         if (block.type === 'tool_use') {
           socket.send(JSON.stringify({
@@ -121,6 +128,7 @@ export class ChatHandler {
             tool: block.name || 'unknown',
             status: 'running',
           }));
+          this._lastEmit = 'tool';
         }
         if (block.type === 'tool_result') {
           socket.send(JSON.stringify({
@@ -128,6 +136,7 @@ export class ChatHandler {
             tool: block.name || 'unknown',
             status: block.is_error ? 'error' : 'done',
           }));
+          this._lastEmit = 'tool';
         }
       }
     }
