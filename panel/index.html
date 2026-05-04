@@ -178,7 +178,8 @@
       background: #333;
       color: #999;
     }
-    .tool-pill.running { background: #3a3520; color: #da3; }
+    @keyframes pillPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .tool-pill.running { background: #3a3520; color: #da3; animation: pillPulse 1.5s ease-in-out infinite; }
     .tool-pill.done { background: #1a3520; color: #4c8; }
     .tool-pill.error { background: #3a2020; color: #c44; }
     .typing-indicator {

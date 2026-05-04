@@ -251,7 +251,7 @@
         return;
       }
       if (msg.type === 'chat_tool_use') {
-        showToolStatus(msg.tool, msg.status);
+        showToolStatus(msg.tool, msg.status, msg.id);
         return;
       }
       if (msg.type === 'chat_done') {
@@ -436,14 +436,18 @@
     scrollToBottom();
   }
 
-  function showToolStatus(tool, status) {
+  function showToolStatus(tool, status, id) {
     var el = document.getElementById('currentResponse');
     if (!el) return;
-    var pill = document.createElement('span');
+    // Reuse existing pill for this tool call (dedupe running → done/error)
+    var pill = id ? el.querySelector('[data-tool-id="' + id + '"]') : null;
+    if (!pill) {
+      pill = document.createElement('span');
+      if (id) pill.dataset.toolId = id;
+      el.appendChild(pill);
+    }
     pill.className = 'tool-pill ' + status;
-    var icon = status === 'running' ? '~ ' : status === 'done' ? '+ ' : 'x ';
-    pill.textContent = icon + tool;
-    el.appendChild(pill);
+    pill.textContent = tool;
     scrollToBottom();
   }
 

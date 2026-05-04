@@ -9,6 +9,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 var TOOLS = 'mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames,mcp__gaffer__captureActiveComp';
 
+// Build a human-readable label for tool pills. Strips mcp__gaffer__ prefix
+// and appends a hint from the tool's input args.
+function shortToolLabel(name, input) {
+  var n = (name || 'tool').replace(/^mcp__gaffer__/, '');
+  if (!input || typeof input !== 'object') return n;
+
+  var hint = '';
+  if (typeof input.undoLabel === 'string' && input.undoLabel) {
+    hint = input.undoLabel;
+  } else if (typeof input.code === 'string' && input.code) {
+    hint = input.code.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 50);
+  } else if (typeof input.category === 'string' && input.category) {
+    hint = input.category;
+  } else if (Array.isArray(input.layers)) {
+    hint = input.layers.length + ' layers';
+  }
+  return hint ? n + ': ' + hint : n;
+}
+
 export class ChatHandler {
   constructor() {
     this.activeProcess = null;
@@ -125,16 +144,18 @@ export class ChatHandler {
         if (block.type === 'tool_use') {
           socket.send(JSON.stringify({
             type: 'chat_tool_use',
-            tool: block.name || 'unknown',
+            tool: shortToolLabel(block.name, block.input),
             status: 'running',
+            id: block.id,
           }));
           this._lastEmit = 'tool';
         }
         if (block.type === 'tool_result') {
           socket.send(JSON.stringify({
             type: 'chat_tool_use',
-            tool: block.name || 'unknown',
+            tool: block.name || 'tool',
             status: block.is_error ? 'error' : 'done',
+            id: block.tool_use_id,
           }));
           this._lastEmit = 'tool';
         }
