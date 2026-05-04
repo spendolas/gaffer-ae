@@ -89,12 +89,11 @@ Before you begin, read these rules. They apply to every step below.
 
 5. **Enable unsigned CEP extensions:**
    ```bash
-   # macOS
-   defaults write com.adobe.CSXS.11 PlayerDebugMode 1
-   defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+   # macOS — covers AE 2022 (CSXS 11), 2025 (CSXS 12), 2026+ (CSXS 13+)
+   for v in 11 12 13; do defaults write com.adobe.CSXS.$v PlayerDebugMode 1; done
    
    # Windows (PowerShell)
-   foreach ($v in @("11","12")) { 
+   foreach ($v in @("11","12","13")) { 
      $k = "HKCU:\Software\Adobe\CSXS.$v"
      if (!(Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
      Set-ItemProperty -Path $k -Name PlayerDebugMode -Value 1 -Type DWord

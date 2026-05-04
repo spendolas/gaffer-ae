@@ -32,11 +32,18 @@
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
 
-  // AE host info
+  // AE host info — log raw env for diagnostics; some AE versions populate
+  // different fields than appVersion.
+  var hostEnvRaw = '';
   var hostEnv = (function () {
-    try { return JSON.parse(cs.getHostEnvironment()); } catch (e) { return {}; }
+    try {
+      hostEnvRaw = cs.getHostEnvironment();
+      return JSON.parse(hostEnvRaw);
+    } catch (e) { return {}; }
   })();
-  var aeVersion = (hostEnv.appVersion || 'unknown').split('x')[0]; // "26.0x67" → "26.0"
+  console.log('Gaffer: hostEnv raw:', hostEnvRaw);
+  var rawVer = hostEnv.appVersion || hostEnv.appName || '';
+  var aeVersion = rawVer ? String(rawVer).split('x')[0] : 'unknown';
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
@@ -54,14 +61,52 @@
 
   // ── Daemon auto-start ──
 
-  function startDaemon() {
-    if (daemonStartAttempted) return;
-    daemonStartAttempted = true;
-    setStatus('starting', 'Starting daemon...');
+  function spawnViaNode() {
+    // Direct Node spawn — works on Apple Silicon AE where system.callSystem
+    // silently fails. Returns true on success, false if Node integration
+    // unavailable (legacy CEP context).
+    if (typeof require === 'undefined') return false;
+    try {
+      var cp = require('child_process');
+      var fs = require('fs');
+      var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+      var daemonDir = extPath + '/daemon';
+      var isWin = process.platform === 'win32';
 
+      var nodeBin = null;
+      var candidates = isWin
+        ? []
+        : ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
+      for (var i = 0; i < candidates.length; i++) {
+        try { if (fs.existsSync(candidates[i])) { nodeBin = candidates[i]; break; } } catch (e) {}
+      }
+      if (!nodeBin) nodeBin = isWin ? 'node' : '/usr/bin/env';
+      var args = (nodeBin === '/usr/bin/env') ? ['node', 'index.js'] : ['index.js'];
+
+      var logPath = isWin
+        ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-daemon.log'
+        : '/tmp/gaffer-daemon.log';
+      var out = fs.openSync(logPath, 'a');
+
+      var child = cp.spawn(nodeBin, args, {
+        cwd: daemonDir,
+        detached: true,
+        stdio: ['ignore', out, out],
+        windowsHide: true,
+      });
+      child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
+      child.unref();
+      console.log('Gaffer: daemon spawned via Node, pid=' + child.pid + ' bin=' + nodeBin);
+      return true;
+    } catch (e) {
+      console.error('Gaffer: spawnViaNode failed:', e);
+      return false;
+    }
+  }
+
+  function spawnViaExtendScript() {
+    // Fallback for CEP contexts without Node integration.
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
-
-    // Detect OS and call appropriate launcher script
     var jsx = '(function() {'
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
@@ -71,10 +116,21 @@
       + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"");'
       + '}'
       + '})()';
-
     cs.evalScript(jsx, function (result) {
-      console.log('Gaffer: daemon spawn: ' + result);
+      console.log('Gaffer: daemon spawn via ExtendScript: ' + result);
     });
+  }
+
+  function startDaemon() {
+    if (daemonStartAttempted) return;
+    daemonStartAttempted = true;
+    setStatus('starting', 'Starting daemon...');
+
+    // Prefer Node spawn (works on Apple Silicon). Fall back to ExtendScript
+    // system.callSystem if Node integration isn't available.
+    if (!spawnViaNode()) {
+      spawnViaExtendScript();
+    }
   }
 
   // ── WebSocket ──
@@ -496,7 +552,35 @@
       return;
     }
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
-    var script = extPath + '/daemon/update.sh';
+    var daemonDir = extPath + '/daemon';
+
+    function reloadAfterUpdate() {
+      setTimeout(function () { location.reload(); }, 2000);
+    }
+
+    // Prefer Node spawn (Apple Silicon-safe), fall back to ExtendScript.
+    if (typeof require !== 'undefined') {
+      try {
+        var cp = require('child_process');
+        var isWin = process.platform === 'win32';
+        var cmd, args;
+        if (isWin) {
+          cmd = 'powershell';
+          args = ['-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
+        } else {
+          cmd = 'bash';
+          args = [daemonDir + '/update.sh'];
+        }
+        var child = cp.spawn(cmd, args, { detached: true, stdio: 'ignore' });
+        child.unref();
+        console.log('Gaffer: update spawned via Node');
+        reloadAfterUpdate();
+        return;
+      } catch (e) {
+        console.error('Gaffer: update spawn (Node) failed, falling back', e);
+      }
+    }
+
     var jsx = '(function(){'
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
@@ -504,9 +588,8 @@
       + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
       + '})()';
     cs.evalScript(jsx, function (result) {
-      console.log('Gaffer: update result:', result);
-      // Reload panel to pick up new files
-      setTimeout(function () { location.reload(); }, 1000);
+      console.log('Gaffer: update result (ExtendScript):', result);
+      reloadAfterUpdate();
     });
   }
 
