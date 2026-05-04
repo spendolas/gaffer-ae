@@ -49,7 +49,7 @@ Start-Sleep -Seconds 1
 # Replace files (preserve user data)
 Write-Host "Replacing files..."
 robocopy "$extracted\panel" $panelDir /E /PURGE `
-    /XF chat-history.json gaffer-daemon gaffer-daemon.exe `
+    /XF chat-history.json `
     /XD node_modules dist | Out-Null
 
 # Restore chat history

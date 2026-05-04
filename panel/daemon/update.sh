@@ -52,7 +52,6 @@ echo "Replacing files..."
 rsync -a --delete \
   --exclude 'chat-history.json' \
   --exclude 'daemon/node_modules' \
-  --exclude 'daemon/gaffer-daemon' \
   --exclude 'daemon/dist' \
   "$EXTRACTED/panel/" "$PANEL_DIR/"
 
