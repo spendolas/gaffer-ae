@@ -32,18 +32,19 @@
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
 
-  // AE host info — log raw env for diagnostics; some AE versions populate
-  // different fields than appVersion.
-  var hostEnvRaw = '';
+  // AE host info — getHostEnvironment may return either a JSON string or
+  // an already-parsed object depending on CEP version.
   var hostEnv = (function () {
     try {
-      hostEnvRaw = cs.getHostEnvironment();
-      return JSON.parse(hostEnvRaw);
+      var raw = cs.getHostEnvironment();
+      if (typeof raw === 'string') return JSON.parse(raw);
+      if (raw && typeof raw === 'object') return raw;
+      return {};
     } catch (e) { return {}; }
   })();
-  console.log('Gaffer: hostEnv raw:', hostEnvRaw);
-  var rawVer = hostEnv.appVersion || hostEnv.appName || '';
+  var rawVer = hostEnv.appVersion || '';
   var aeVersion = rawVer ? String(rawVer).split('x')[0] : 'unknown';
+  console.log('Gaffer: AE version =', aeVersion, 'host =', hostEnv.appName);
 
   // Daemon auto-start state
   var daemonStartAttempted = false;
