@@ -37,6 +37,7 @@ export class ChatHandler {
   async handleChat(msg, socket) {
     this.cancel();
     this._lastEmit = null;
+    this._toolNames = {};
 
     try {
       var claudeBin = await findClaudeBinary();
@@ -133,27 +134,37 @@ export class ChatHandler {
     if (event.type === 'assistant' && event.message && event.message.content) {
       for (var block of event.message.content) {
         if (block.type === 'text' && block.text) {
-          // Add paragraph break when starting a new text block after a tool
-          // use, or after a previous text block (multi-message turn).
           var prefix = (this._lastEmit === 'text' || this._lastEmit === 'tool')
             ? '\n\n'
             : '';
           socket.send(JSON.stringify({ type: 'chat_chunk', text: prefix + block.text }));
           this._lastEmit = 'text';
+          // Remember tool name keyed by id for matching tool_result later
+          this._toolNames = this._toolNames || {};
         }
         if (block.type === 'tool_use') {
+          this._toolNames = this._toolNames || {};
+          this._toolNames[block.id] = shortToolLabel(block.name, block.input);
           socket.send(JSON.stringify({
             type: 'chat_tool_use',
-            tool: shortToolLabel(block.name, block.input),
+            tool: this._toolNames[block.id],
             status: 'running',
             id: block.id,
           }));
           this._lastEmit = 'tool';
         }
+      }
+    }
+
+    // tool_result blocks arrive in 'user' events from the Claude streaming format
+    if (event.type === 'user' && event.message && event.message.content) {
+      for (var block of event.message.content) {
         if (block.type === 'tool_result') {
+          this._toolNames = this._toolNames || {};
+          var label = this._toolNames[block.tool_use_id] || 'tool';
           socket.send(JSON.stringify({
             type: 'chat_tool_use',
-            tool: block.name || 'tool',
+            tool: label,
             status: block.is_error ? 'error' : 'done',
             id: block.tool_use_id,
           }));
