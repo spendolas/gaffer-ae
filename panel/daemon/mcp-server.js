@@ -7,6 +7,20 @@ import { register as registerProjectSummary } from './tools/projectSummary.js';
 import { register as registerEffectMatchNames } from './tools/effectMatchNames.js';
 import { register as registerCaptureActiveComp } from './tools/captureActiveComp.js';
 import { register as registerImportFromFigma } from './tools/importFromFigma.js';
+import { register as registerListFonts } from './tools/listFonts.js';
+import { register as registerListCompositions } from './tools/listCompositions.js';
+import { register as registerGetSelectedLayers } from './tools/getSelectedLayers.js';
+import { register as registerListFootage } from './tools/listFootage.js';
+import { register as registerListExpressions } from './tools/listExpressions.js';
+import { register as registerListExpressionControls } from './tools/listExpressionControls.js';
+import { register as registerGetRenderQueue } from './tools/getRenderQueue.js';
+import { register as registerGetLayerKeyframes } from './tools/getLayerKeyframes.js';
+import { register as registerFindLayers } from './tools/findLayers.js';
+import { register as registerWhereUsed } from './tools/whereUsed.js';
+import { register as registerCaptureFrame } from './tools/captureFrame.js';
+import { register as registerCaptureLayer } from './tools/captureLayer.js';
+import { register as registerRelinkFootage } from './tools/relinkFootage.js';
+import { register as registerAddToRenderQueue } from './tools/addToRenderQueue.js';
 
 /**
  * Creates and starts the MCP HTTP server.
@@ -54,6 +68,20 @@ export function startMcpServer(port, queue) {
     registerEffectMatchNames(server, queue, z);
     registerCaptureActiveComp(server, queue, z);
     registerImportFromFigma(server, queue, z);
+    registerListFonts(server, queue, z);
+    registerListCompositions(server, queue, z);
+    registerGetSelectedLayers(server, queue, z);
+    registerListFootage(server, queue, z);
+    registerListExpressions(server, queue, z);
+    registerListExpressionControls(server, queue, z);
+    registerGetRenderQueue(server, queue, z);
+    registerGetLayerKeyframes(server, queue, z);
+    registerFindLayers(server, queue, z);
+    registerWhereUsed(server, queue, z);
+    registerCaptureFrame(server, queue, z);
+    registerCaptureLayer(server, queue, z);
+    registerRelinkFootage(server, queue, z);
+    registerAddToRenderQueue(server, queue, z);
 
     return server;
   }

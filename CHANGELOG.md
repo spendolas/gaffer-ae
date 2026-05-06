@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 — 2026-05-06
+
+- **Per-install MCP multi-select** — pick which Connected MCP servers (Grip, Notion, Figma, etc.) the chat agent has access to, via the activity bar. Persisted per install, never committed to the repo.
+- **14 new MCP tools** for AE introspection, search, capture, and render-queue work:
+  - Discovery: `listFonts`, `listCompositions`, `getSelectedLayers`, `listFootage`, `listExpressions`, `listExpressionControls`, `getRenderQueue`, `getLayerKeyframes`
+  - Search: `findLayers` (regex/effect/expression), `whereUsed`
+  - Capture: `captureFrame` (any time, any comp), `captureLayer` (auto solo/restore)
+  - Modify: `relinkFootage`, `addToRenderQueue` (queues only — never starts a render)
+- **Image paste/drop input** — drop images anywhere on the panel or paste in the textarea. Full-panel "Drop image here" overlay, click-to-zoom lightbox, persisted thumbnails so bubbles survive panel reload.
+- **Apple Silicon / minimal-PATH fix** — daemon augments PATH on the `claude` subprocess so stdio MCP servers (e.g. grip's bare `node` command) can spawn under CEP's stripped environment.
+- **Cleaner tool pills** — dedupe by tool_use_id, descriptive labels, color states (running/done/error), proper transitions.
+
 ## v0.2.0 — 2026-04-24
 
 - **Model picker** in panel — choose between Opus (default), Sonnet, Haiku per session

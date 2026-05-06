@@ -21,6 +21,12 @@ bridge.start().catch((err) => {
 var chatHandler = new ChatHandler();
 bridge.onChat = (msg, socket) => chatHandler.handleChat(msg, socket);
 bridge.onChatCancel = () => chatHandler.cancel();
+bridge.onListMcps = async (socket) => {
+  var result = await chatHandler.listMcps();
+  if (socket && socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: 'mcps', servers: result.servers || [], error: result.error }));
+  }
+};
 
 var queue = new Queue(bridge);
 

@@ -17,12 +17,18 @@
   var clearBtnEl = document.getElementById('clearBtn');
   var modelSelectEl = document.getElementById('modelSelect');
   var autoCheckEl = document.getElementById('autoCheckUpdates');
+  var mcpListEl = document.getElementById('mcpList');
+  var refreshMcpsBtnEl = document.getElementById('refreshMcpsBtn');
   var checkNowBtnEl = document.getElementById('checkNowBtn');
   var versionTextEl = document.getElementById('versionText');
   var updateBannerEl = document.getElementById('updateBanner');
   var updateTextEl = document.getElementById('updateText');
   var updateBtnEl = document.getElementById('updateBtn');
   var dismissUpdateBtnEl = document.getElementById('dismissUpdateBtn');
+  var pastePreviewRowEl = document.getElementById('pastePreviewRow');
+  var dropOverlayEl = document.getElementById('dropOverlay');
+  var lightboxEl = document.getElementById('imgLightbox');
+  var lightboxImgEl = lightboxEl ? lightboxEl.querySelector('img') : null;
 
   // Chat state
   var currentSessionId = null;
@@ -31,6 +37,13 @@
   var currentModel = 'opus';
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
+  var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
+  var availableMcps = []; // [{id, displayName, status}]
+  var pendingImages = []; // [{path, dataUrl, name}] — staged for next send
+  var PASTE_PREFIX = 'gaffer-paste-';
+  var MAX_PASTE_FILES = 10;
+  var THUMB_MAX_EDGE = 512;
+  // mcpListEl + refreshMcpsBtnEl declared at top of file; do NOT redeclare here
 
   // AE host info — getHostEnvironment may return either a JSON string or
   // an already-parsed object depending on CEP version.
@@ -147,7 +160,16 @@
       model: currentModel,
       autoCheckUpdates: autoCheckUpdates,
       dismissedUpdateCommit: dismissedUpdateCommit,
+      enabledMcps: enabledMcps,
     });
+    // Prefer Node fs — handles large payloads (image dataUrls) reliably.
+    // Fall back to ExtendScript File I/O for legacy CEP without mixed-context.
+    if (typeof require !== 'undefined') {
+      try {
+        require('node:fs').writeFileSync(chatFilePath, data, 'utf8');
+        return;
+      } catch (e) { /* fall through */ }
+    }
     var escaped = data.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var jsx = "(function() {"
       + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
@@ -158,16 +180,7 @@
   }
 
   function restoreChat() {
-    var jsx = "(function() {"
-      + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
-      + "if (!f.exists) return '';"
-      + "f.open('r'); var d = f.read(); f.close();"
-      + "return d;"
-      + "})()";
-    cs.evalScript(jsx, function (result) {
-      if (!result || result === 'undefined' || result === 'EvalScript_ErrMessage') return;
-      try {
-        var data = JSON.parse(result);
+    function applyData(data) {
         if (!data || !data.messages) return;
         currentSessionId = data.sessionId || null;
         chatHistory = data.messages;
@@ -182,12 +195,34 @@
         if (data.dismissedUpdateCommit) {
           dismissedUpdateCommit = data.dismissedUpdateCommit;
         }
+        if (Array.isArray(data.enabledMcps)) {
+          enabledMcps = data.enabledMcps.slice();
+        }
         for (var i = 0; i < chatHistory.length; i++) {
           var msg = chatHistory[i];
           if (msg.role === 'user') {
             var div = document.createElement('div');
             div.className = 'chat-msg user';
-            div.textContent = msg.text;
+            if (msg.images && msg.images.length) {
+              var row = document.createElement('div');
+              row.className = 'bubble-images-row';
+              for (var k = 0; k < msg.images.length; k++) {
+                (function (item) {
+                  var img = document.createElement('img');
+                  img.className = 'bubble-image';
+                  img.src = item.dataUrl;
+                  img.alt = item.name || 'image';
+                  img.addEventListener('click', function () { openLightbox(item.dataUrl); });
+                  row.appendChild(img);
+                })(msg.images[k]);
+              }
+              div.appendChild(row);
+            }
+            if (msg.text) {
+              var t = document.createElement('div');
+              t.textContent = msg.text;
+              div.appendChild(t);
+            }
             chatMessagesEl.appendChild(div);
           } else {
             var div = document.createElement('div');
@@ -202,6 +237,30 @@
           }
         }
         scrollToBottom();
+    }
+
+    // Prefer Node fs — handles large payloads (image dataUrls) reliably.
+    if (typeof require !== 'undefined') {
+      try {
+        var fs = require('node:fs');
+        if (fs.existsSync(chatFilePath)) {
+          var raw = fs.readFileSync(chatFilePath, 'utf8');
+          if (raw) applyData(JSON.parse(raw));
+        }
+        return;
+      } catch (e) { /* fall through to ExtendScript */ }
+    }
+
+    var jsx = "(function() {"
+      + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
+      + "if (!f.exists) return '';"
+      + "f.open('r'); var d = f.read(); f.close();"
+      + "return d;"
+      + "})()";
+    cs.evalScript(jsx, function (result) {
+      if (!result || result === 'undefined' || result === 'EvalScript_ErrMessage') return;
+      try {
+        applyData(JSON.parse(result));
       } catch (e) { /* corrupt data, ignore */ }
     });
   }
@@ -262,13 +321,20 @@
         showChatError(msg.error);
         return;
       }
+      if (msg.type === 'mcps') {
+        availableMcps = msg.servers || [];
+        renderMcpList();
+        return;
+      }
 
       // ── Legacy: JSX execution request (no type field) ──
       if (!msg.id || !msg.code) return;
       lastJsxEl.textContent = truncate(msg.code, 80);
+      lastJsxEl.hidden = false;
 
       evalScriptAsync(msg.code).then(function (result) {
         lastResultEl.textContent = truncate(typeof result === 'string' ? result : JSON.stringify(result), 80);
+        lastResultEl.hidden = false;
         var response;
         if (typeof result === 'object' && result.ok === false) {
           response = JSON.stringify({ id: msg.id, ok: false, error: result.error, line: result.line });
@@ -300,6 +366,7 @@
       setStatus('connected', 'Connected');
       wasConnected = true;
       reconnectDelay = 1000;
+      requestMcpList();
     };
 
     ws.onmessage = handleMessage;
@@ -328,31 +395,245 @@
     }, reconnectDelay);
   }
 
+  // ── Image paste/drop ──
+
+  function tmpDir() {
+    try { return require('os').tmpdir(); } catch (e) {}
+    return process && process.platform === 'win32'
+      ? (process.env.TEMP || 'C:\\Windows\\Temp')
+      : '/tmp';
+  }
+
+  function joinPath(dir, name) {
+    try { return require('path').join(dir, name); } catch (e) {}
+    var sep = process && process.platform === 'win32' ? '\\' : '/';
+    return dir.replace(/[\\\/]+$/, '') + sep + name;
+  }
+
+  function pruneOldPastes() {
+    try {
+      var fs = require('node:fs');
+      var dir = tmpDir();
+      var entries = fs.readdirSync(dir)
+        .filter(function (f) { return f.indexOf(PASTE_PREFIX) === 0; })
+        .sort();
+      while (entries.length > MAX_PASTE_FILES) {
+        var oldest = entries.shift();
+        try { fs.unlinkSync(joinPath(dir, oldest)); } catch (e) {}
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function makeThumbnail(blob, maxEdge, cb) {
+    var url = URL.createObjectURL(blob);
+    var img = new Image();
+    img.onload = function () {
+      var w = img.width, h = img.height;
+      var scale = Math.min(1, maxEdge / Math.max(w, h));
+      var cw = Math.max(1, Math.round(w * scale));
+      var ch = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+      var dataUrl;
+      try { dataUrl = canvas.toDataURL('image/jpeg', 0.7); }
+      catch (e) { dataUrl = canvas.toDataURL('image/png'); }
+      URL.revokeObjectURL(url);
+      cb(dataUrl);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); cb(null); };
+    img.src = url;
+  }
+
+  function extForMime(mime) {
+    if (mime === 'image/jpeg') return 'jpg';
+    if (mime === 'image/gif') return 'gif';
+    if (mime === 'image/webp') return 'webp';
+    return 'png';
+  }
+
+  function handleImageBlob(blob) {
+    if (!blob) return;
+    if (typeof require === 'undefined') {
+      console.warn('Gaffer: require unavailable, cannot save pasted image');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var fs = require('node:fs');
+        var bytes = new Uint8Array(reader.result);
+        var ext = extForMime(blob.type);
+        var fname = PASTE_PREFIX + Date.now() + '-' + Math.floor(Math.random() * 1000) + '.' + ext;
+        var p = joinPath(tmpDir(), fname);
+        fs.writeFileSync(p, Buffer.from(bytes));
+        makeThumbnail(blob, THUMB_MAX_EDGE, function (dataUrl) {
+          pendingImages.push({ path: p, dataUrl: dataUrl || '', name: blob.name || ('paste.' + ext) });
+          renderPendingImages();
+          pruneOldPastes();
+        });
+      } catch (e) {
+        console.error('Gaffer: handleImageBlob failed', e);
+      }
+    };
+    reader.readAsArrayBuffer(blob);
+  }
+
+  function renderPendingImages() {
+    if (!pastePreviewRowEl) return;
+    pastePreviewRowEl.innerHTML = '';
+    for (var i = 0; i < pendingImages.length; i++) {
+      (function (idx, item) {
+        var chip = document.createElement('div');
+        chip.className = 'paste-chip';
+        chip.title = item.name || 'image';
+        var img = document.createElement('img');
+        img.src = item.dataUrl;
+        img.addEventListener('click', function () { openLightbox(item.dataUrl); });
+        var x = document.createElement('span');
+        x.className = 'paste-chip-x';
+        x.textContent = '×';
+        x.addEventListener('click', function (e) {
+          e.stopPropagation();
+          pendingImages.splice(idx, 1);
+          renderPendingImages();
+        });
+        chip.appendChild(img);
+        chip.appendChild(x);
+        pastePreviewRowEl.appendChild(chip);
+      })(i, pendingImages[i]);
+    }
+  }
+
+  function openLightbox(dataUrl) {
+    if (!lightboxEl || !lightboxImgEl || !dataUrl) return;
+    lightboxImgEl.src = dataUrl;
+    lightboxEl.hidden = false;
+  }
+
+  function closeLightbox() {
+    if (!lightboxEl || !lightboxImgEl) return;
+    lightboxEl.hidden = true;
+    lightboxImgEl.src = '';
+  }
+
+  if (lightboxEl) {
+    lightboxEl.addEventListener('click', closeLightbox);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !lightboxEl.hidden) closeLightbox();
+    });
+  }
+
+  // Paste — best-effort. AE may intercept Cmd+V at app level; in that
+  // case the event never fires. Drag-drop is the reliable path.
+  chatInputEl.addEventListener('paste', function (e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    var consumed = false;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) {
+        handleImageBlob(items[i].getAsFile());
+        consumed = true;
+      }
+    }
+    if (consumed) e.preventDefault();
+  });
+
+  // Drag-drop on whole panel. Counter-based to avoid flicker on child boundaries.
+  var dragDepth = 0;
+
+  function isFileDrag(e) {
+    if (!e.dataTransfer) return false;
+    var t = e.dataTransfer.types;
+    if (!t) return false;
+    for (var i = 0; i < t.length; i++) if (t[i] === 'Files') return true;
+    return false;
+  }
+
+  document.addEventListener('dragenter', function (e) {
+    if (!isFileDrag(e)) return;
+    dragDepth++;
+    if (dropOverlayEl) dropOverlayEl.classList.add('visible');
+  });
+  document.addEventListener('dragleave', function (e) {
+    if (!isFileDrag(e)) return;
+    dragDepth--;
+    if (dragDepth <= 0) {
+      dragDepth = 0;
+      if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
+    }
+  });
+  document.addEventListener('dragover', function (e) {
+    if (isFileDrag(e)) e.preventDefault();
+  });
+  document.addEventListener('drop', function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
+    var files = e.dataTransfer.files;
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].type.indexOf('image/') === 0) handleImageBlob(files[i]);
+    }
+  });
+
   // ── Chat UI ──
 
   function sendChatMessage() {
     var text = chatInputEl.value.trim();
-    if (!text || !ws || ws.readyState !== 1 || chatBusy) return;
+    if (!ws || ws.readyState !== 1 || chatBusy) return;
+    if (!text && pendingImages.length === 0) return;
 
-    appendUserMessage(text);
+    var imgs = pendingImages.slice();
+    var imgPrefix = imgs.map(function (p) { return '[image: ' + p.path + ']'; }).join('\n');
+    var fullMessage = imgPrefix ? (imgPrefix + (text ? '\n' + text : '')) : text;
+
+    appendUserMessage(text, imgs);
     ws.send(JSON.stringify({
       type: 'chat',
-      message: text,
+      message: fullMessage,
       sessionId: currentSessionId,
       model: currentModel,
       aeVersion: aeVersion,
+      enabledMcps: enabledMcps,
     }));
     chatInputEl.value = '';
+    pendingImages = [];
+    renderPendingImages();
     setChatBusy(true);
     startAssistantMessage();
   }
 
-  function appendUserMessage(text) {
+  function appendUserMessage(text, images) {
     var div = document.createElement('div');
     div.className = 'chat-msg user';
-    div.textContent = text;
+    if (images && images.length) {
+      var row = document.createElement('div');
+      row.className = 'bubble-images-row';
+      for (var i = 0; i < images.length; i++) {
+        (function (item) {
+          var img = document.createElement('img');
+          img.className = 'bubble-image';
+          img.src = item.dataUrl;
+          img.alt = item.name || 'image';
+          img.addEventListener('click', function () { openLightbox(item.dataUrl); });
+          row.appendChild(img);
+        })(images[i]);
+      }
+      div.appendChild(row);
+    }
+    if (text) {
+      var t = document.createElement('div');
+      t.textContent = text;
+      div.appendChild(t);
+    }
     chatMessagesEl.appendChild(div);
-    chatHistory.push({ role: 'user', text: text });
+    var entry = { role: 'user', text: text };
+    if (images && images.length) {
+      entry.images = images.map(function (i) { return { dataUrl: i.dataUrl, name: i.name }; });
+    }
+    chatHistory.push(entry);
     saveChat();
     scrollToBottom();
   }
@@ -506,6 +787,54 @@
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
   }
 
+  // ── MCP server picker ──
+
+  function requestMcpList() {
+    if (!ws || ws.readyState !== 1) return;
+    if (mcpListEl) mcpListEl.innerHTML = '<span style="color:#666;">loading…</span>';
+    ws.send(JSON.stringify({ type: 'list_mcps' }));
+  }
+
+  function renderMcpList() {
+    if (!mcpListEl) return;
+    mcpListEl.innerHTML = '';
+    if (!availableMcps.length) {
+      var empty = document.createElement('span');
+      empty.style.color = '#666';
+      empty.textContent = 'none registered';
+      mcpListEl.appendChild(empty);
+      return;
+    }
+    availableMcps.forEach(function (s) {
+      var label = document.createElement('label');
+      label.style.display = 'inline-flex';
+      label.style.alignItems = 'center';
+      label.style.gap = '3px';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.mcpId = s.id;
+      cb.checked = enabledMcps.indexOf(s.id) !== -1;
+      cb.addEventListener('change', function () {
+        if (cb.checked) {
+          if (enabledMcps.indexOf(s.id) === -1) enabledMcps.push(s.id);
+        } else {
+          enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
+        }
+        saveChat();
+      });
+      label.appendChild(cb);
+      var dot = document.createElement('span');
+      dot.style.marginLeft = '3px';
+      dot.style.fontSize = '8px';
+      if (s.status.indexOf('Connected') !== -1) { dot.style.color = '#4c8'; dot.textContent = '●'; }
+      else if (s.status.indexOf('auth') !== -1) { dot.style.color = '#da3'; dot.textContent = '●'; label.title = 'Needs auth'; }
+      else { dot.style.color = '#c44'; dot.textContent = '●'; label.title = s.status; }
+      label.appendChild(dot);
+      label.appendChild(document.createTextNode(' ' + s.displayName));
+      mcpListEl.appendChild(label);
+    });
+  }
+
   // ── Version + update check ──
 
   var versionData = { version: 'dev', commit: null };
@@ -623,6 +952,7 @@
     saveChat();
   });
   checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
+  if (refreshMcpsBtnEl) refreshMcpsBtnEl.addEventListener('click', requestMcpList);
   updateBtnEl.addEventListener('click', runUpdate);
   dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
   chatInputEl.addEventListener('keydown', function (e) {

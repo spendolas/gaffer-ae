@@ -161,14 +161,35 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 - **Chat in the panel** — ask Claude to modify your AE project directly
 - **Use Claude Code** — any `claude` session sees the Gaffer MCP tools automatically
 
+### Chat features
+
+- **Drop or paste images** into the panel — claude reads them as visual input. Click any thumbnail to zoom.
+- **Per-install MCP picker** in the activity bar — toggle which of your Connected MCP servers (Grip, Notion, Figma, etc.) the chat agent has access to. Stored locally, never committed.
+- **Model picker** — Opus / Sonnet / Haiku per session.
+
 ### MCP Tools
 
 | Tool | Description |
 |------|-------------|
 | `runJSX` | Execute ExtendScript in AE (undo-grouped, try/caught) |
 | `getProjectSummary` | Active comp, selected layers, project path |
+| `getSelectedLayers` | Detailed snapshot of selected layers (transform values, keyframe presence, expressions) |
+| `listCompositions` | All comps in the project, with dims/fps/duration |
+| `listFootage` | All footage items, including missing-media flag |
+| `listFonts` | Installed fonts (postScriptName) for text layer creation |
 | `listEffectMatchNames` | All effects grouped by category (cached) |
+| `listExpressions` | Recursive dump of every expression in the active comp |
+| `listExpressionControls` | Slider/Checkbox/Color/Point/Layer/Dropdown controls — returns ready-to-use bindRef strings |
+| `getRenderQueue` | Render queue state (status per item, output paths) |
+| `getLayerKeyframes` | Keyframe times/values/interpolation for one property |
+| `findLayers` | Search layers across the project by name regex, effect, or expression substring |
+| `whereUsed` | Find every comp + layer that uses a given footage or precomp item |
 | `captureActiveComp` | Screenshot current frame as PNG |
+| `captureFrame` | PNG of any comp at any time |
+| `captureLayer` | Render a single layer in isolation (auto solo + restore) |
+| `relinkFootage` | Repoint a missing or existing footage item to a new file |
+| `addToRenderQueue` | Queue a comp for render with output path + template (does not start the render) |
+| `importFromFigma` | Deterministic Figma → AE layer translation |
 
 ### Architecture
 

@@ -189,6 +189,24 @@
     @keyframes blink { 50% { opacity: 0.3; } }
     .typing-dot { animation: blink 1s infinite; }
 
+    /* Bubble image attachments */
+    .bubble-images-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .bubble-image {
+      max-width: 320px;
+      max-height: 240px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 4px;
+      cursor: zoom-in;
+      display: block;
+    }
+
     /* Input */
     .chat-input-area {
       display: flex;
@@ -201,6 +219,84 @@
     .chat-input-row {
       display: flex;
       gap: 6px;
+    }
+    .paste-preview-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .paste-preview-row:empty { display: none; }
+    .paste-chip {
+      position: relative;
+      width: 56px;
+      height: 56px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #1a1a1a;
+      border: 1px solid #444;
+    }
+    .paste-chip img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      cursor: zoom-in;
+    }
+    .paste-chip-x {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      width: 16px;
+      height: 16px;
+      line-height: 14px;
+      text-align: center;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.7);
+      color: #ddd;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .paste-chip-x:hover { background: #c44; color: #fff; }
+
+    /* Drag-over hint and lightbox */
+    .drop-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(35, 60, 100, 0.55);
+      border: 2px dashed #6ab0ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 1000;
+    }
+    .drop-overlay.visible { opacity: 1; }
+    .img-lightbox {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-out;
+      z-index: 1100;
+    }
+    .img-lightbox[hidden] { display: none; }
+    .img-lightbox img {
+      max-width: 90vw;
+      max-height: 90vh;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 4px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
     .chat-input {
       flex: 1;
@@ -327,12 +423,13 @@
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
+    <div class="paste-preview-row" id="pastePreviewRow"></div>
     <div class="chat-input-row">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="2" disabled></textarea>
       <button id="sendBtn" class="send-btn" disabled>Send</button>
       <button id="stopBtn" class="stop-btn">Stop</button>
     </div>
-    <div class="input-hint">Enter to send, Shift+Enter for newline</div>
+    <div class="input-hint">Enter to send, Shift+Enter for newline. Drop or paste images.</div>
   </div>
 
   <details class="activity-log">
@@ -357,9 +454,19 @@
       <button id="checkNowBtn" class="clear-btn">Check now</button>
       <span id="versionText" style="margin-left:auto; color:#666;">v—</span>
     </div>
-    <div id="lastJsx" class="value">-</div>
-    <div id="lastResult" class="value">-</div>
+    <div class="activity-settings activity-mcps">
+      <span style="color:#888;">MCP:</span>
+      <span id="mcpList" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+        <span style="color:#666;">loading…</span>
+      </span>
+      <button id="refreshMcpsBtn" class="clear-btn" style="margin-left:auto;">↻</button>
+    </div>
+    <div id="lastJsx" class="value" hidden></div>
+    <div id="lastResult" class="value" hidden></div>
   </details>
+
+  <div class="drop-overlay" id="dropOverlay"><span>Drop image here</span></div>
+  <div class="img-lightbox" id="imgLightbox" hidden><img></div>
 
   <script src="lib/CSInterface.js"></script>
   <script src="lib/marked.min.js"></script>

@@ -15,7 +15,9 @@ Claude Code / Claude Hub / Panel Chat
     │  MCP over Streamable HTTP (:9824)
     ▼
 Gaffer Daemon (Node.js or standalone SEA binary)
-  - MCP tools: runJSX, getProjectSummary, listEffectMatchNames, captureActiveComp
+  - MCP tools: runJSX + 18 typed tools (project/comp/layer discovery,
+    expression dump, keyframe inspection, layer/effect search, footage
+    relink, render queue add, frame/layer capture, Figma import)
   - Chat handler: spawns claude -p, streams response to panel
   - Serialized execution queue (mutex — no concurrent AE calls)
   - JSX safety wrapping (undo groups, try/catch, JSON return)

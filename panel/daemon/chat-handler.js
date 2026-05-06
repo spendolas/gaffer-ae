@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { findClaudeBinary } from './claude-binary.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -7,7 +7,27 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-var TOOLS = 'mcp__gaffer__runJSX,mcp__gaffer__getProjectSummary,mcp__gaffer__listEffectMatchNames,mcp__gaffer__captureActiveComp';
+var GAFFER_TOOLS = [
+  'mcp__gaffer__runJSX',
+  'mcp__gaffer__getProjectSummary',
+  'mcp__gaffer__listEffectMatchNames',
+  'mcp__gaffer__captureActiveComp',
+  'mcp__gaffer__importFromFigma',
+  'mcp__gaffer__listFonts',
+  'mcp__gaffer__listCompositions',
+  'mcp__gaffer__getSelectedLayers',
+  'mcp__gaffer__listFootage',
+  'mcp__gaffer__listExpressions',
+  'mcp__gaffer__listExpressionControls',
+  'mcp__gaffer__getRenderQueue',
+  'mcp__gaffer__getLayerKeyframes',
+  'mcp__gaffer__findLayers',
+  'mcp__gaffer__whereUsed',
+  'mcp__gaffer__captureFrame',
+  'mcp__gaffer__captureLayer',
+  'mcp__gaffer__relinkFootage',
+  'mcp__gaffer__addToRenderQueue',
+];
 
 // Build a human-readable label for tool pills. Strips mcp__gaffer__ prefix
 // and appends a hint from the tool's input args.
@@ -63,22 +83,40 @@ export class ChatHandler {
     var model = msg.model || 'opus';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
 
-    // Use sessionId from panel (persists across daemon restarts via chat-history.json)
+    // Build allowedTools for every call so MCP toggle changes apply
+    // immediately, even on resumed sessions.
+    var enabled = Array.isArray(msg.enabledMcps) ? msg.enabledMcps.filter(Boolean) : [];
+    var extra = enabled.map(function (id) {
+      // Claude transforms server names to tool prefixes: spaces/dots/dashes → underscores
+      return 'mcp__' + id.replace(/[\s.\-]/g, '_') + '__*';
+    });
+    var allowed = GAFFER_TOOLS.concat(extra).join(',');
+    args.push('--allowedTools', allowed);
+    console.log('Gaffer chat args: enabledMcps=' + JSON.stringify(enabled) + ' allowed=' + allowed);
+
     var sessionId = msg.sessionId || this.sessionId;
     if (sessionId) {
       args.push('--resume', sessionId);
       this.sessionId = sessionId;
     } else {
-      // New conversation
-      args.push(
-        '--append-system-prompt', systemPrompt,
-        '--allowedTools', TOOLS
-      );
+      // New conversation also gets the system prompt
+      args.push('--append-system-prompt', systemPrompt);
     }
+
+    // Augment PATH so claude can spawn stdio MCP servers (e.g. grip uses
+    // bare `node`). Daemon launched from CEP panel may have minimal PATH.
+    var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+    var currentPath = process.env.PATH || '';
+    var pathParts = currentPath.split(':');
+    for (var p of extraPaths) {
+      if (pathParts.indexOf(p) === -1) pathParts.push(p);
+    }
+    var augmentedEnv = { ...process.env, PATH: pathParts.join(':') };
+    console.log('Gaffer chat PATH: ' + augmentedEnv.PATH);
 
     var child = spawn(claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: augmentedEnv,
     });
     this.activeProcess = child;
 
@@ -187,5 +225,51 @@ export class ChatHandler {
       this.activeProcess.kill('SIGTERM');
       this.activeProcess = null;
     }
+  }
+
+  /**
+   * List registered MCP servers. Returns array of { id, displayName, status }
+   * for servers that are Connected. gaffer is filtered out (built-in).
+   */
+  async listMcps() {
+    var claudeBin;
+    try {
+      claudeBin = await findClaudeBinary();
+    } catch (e) {
+      return { error: e.message, servers: [] };
+    }
+
+    var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+    var pathParts = (process.env.PATH || '').split(':');
+    for (var p of extraPaths) {
+      if (pathParts.indexOf(p) === -1) pathParts.push(p);
+    }
+    var augmentedEnv = { ...process.env, PATH: pathParts.join(':') };
+
+    return new Promise(function (resolve) {
+      execFile(claudeBin, ['mcp', 'list'], { timeout: 8000, env: augmentedEnv }, function (err, stdout) {
+        if (err) {
+          resolve({ error: err.message, servers: [] });
+          return;
+        }
+        var servers = [];
+        var lines = stdout.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line || line.indexOf(':') === -1) continue;
+          // "<id>: <url-or-cmd> - <status>"
+          var firstColon = line.indexOf(':');
+          var id = line.substring(0, firstColon).trim();
+          var rest = line.substring(firstColon + 1);
+          var lastDash = rest.lastIndexOf(' - ');
+          if (lastDash === -1) continue;
+          var status = rest.substring(lastDash + 3).trim();
+          if (id === 'gaffer') continue;
+          var displayName = id.replace(/^claude\.ai /, '');
+          servers.push({ id: id, displayName: displayName, status: status });
+        }
+        resolve({ servers: servers });
+      });
+    });
   }
 }

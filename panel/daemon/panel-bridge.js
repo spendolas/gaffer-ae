@@ -19,6 +19,7 @@ export class PanelBridge {
     this.wss = null;
     this.onChat = null;
     this.onChatCancel = null;
+    this.onListMcps = null;
   }
 
   start() {
@@ -83,6 +84,10 @@ export class PanelBridge {
           }
           if (msg.type === 'chat_cancel') {
             if (this.onChatCancel) this.onChatCancel();
+            return;
+          }
+          if (msg.type === 'list_mcps') {
+            if (this.onListMcps) this.onListMcps(socket);
             return;
           }
 
