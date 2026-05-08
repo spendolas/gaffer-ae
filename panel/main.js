@@ -321,6 +321,10 @@
         showChatError(msg.error);
         return;
       }
+      if (msg.type === 'chat_event') {
+        showChatNotice(msg.message || msg.event);
+        return;
+      }
       if (msg.type === 'mcps') {
         availableMcps = msg.servers || [];
         renderMcpList();
@@ -756,6 +760,15 @@
     chatInputEl.focus();
   }
 
+  function showChatNotice(text) {
+    if (!text) return;
+    var notice = document.createElement('div');
+    notice.className = 'chat-notice';
+    notice.textContent = text;
+    chatMessagesEl.appendChild(notice);
+    scrollToBottom();
+  }
+
   function showChatError(error) {
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
@@ -766,6 +779,10 @@
     el.textContent += '\n[Error: ' + error + ']';
     el.removeAttribute('id');
     setChatBusy(false);
+    // Errors abandon the current session — drop the saved id so a reload
+    // doesn't resume a broken/bloated session and hit the same wall.
+    currentSessionId = null;
+    saveChat();
   }
 
   function clearChat() {

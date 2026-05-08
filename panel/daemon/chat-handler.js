@@ -48,10 +48,22 @@ function shortToolLabel(name, input) {
   return hint ? n + ': ' + hint : n;
 }
 
+// When the running session crosses this many input tokens we summarize it
+// and start fresh on the next turn. ~75% of the 200K Opus context — leaves
+// headroom so the summarizing call itself doesn't hit the wall.
+var COMPACT_THRESHOLD_TOKENS = 150000;
+
+var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
+
 export class ChatHandler {
   constructor() {
     this.activeProcess = null;
     this.sessionId = null;
+    this.lastInputTokens = 0;
+    this.compactedSummary = null;
+    this.compacting = false;
+    this.claudeBin = null;
+    this.envForSpawn = null;
   }
 
   async handleChat(msg, socket) {
@@ -114,13 +126,24 @@ export class ChatHandler {
     var augmentedEnv = { ...process.env, PATH: pathParts.join(':') };
     console.log('Gaffer chat PATH: ' + augmentedEnv.PATH);
 
+    // Cache for the background compaction call.
+    this.claudeBin = claudeBin;
+    this.envForSpawn = augmentedEnv;
+
+    // Prepend a continuity briefing if we just compacted the previous session.
+    var userMessage = msg.message;
+    if (this.compactedSummary && !sessionId) {
+      userMessage = "[Continuity from previous compacted session]\n" + this.compactedSummary + "\n\n[New message]\n" + userMessage;
+      this.compactedSummary = null;
+    }
+
     var child = spawn(claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: augmentedEnv,
     });
     this.activeProcess = child;
 
-    child.stdin.write(msg.message);
+    child.stdin.write(userMessage);
     child.stdin.end();
 
     var buffer = '';
@@ -156,6 +179,11 @@ export class ChatHandler {
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_done', sessionId: this.sessionId }));
       }
+      // If the session is approaching the context wall, summarize it now in
+      // the background so the next user turn can start fresh with continuity.
+      if (this.sessionId && this.lastInputTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
+        this._compactSession(socket);
+      }
     });
 
     child.on('error', (err) => {
@@ -172,6 +200,17 @@ export class ChatHandler {
     if (event.type === 'assistant' && event.message && event.message.content) {
       for (var block of event.message.content) {
         if (block.type === 'text' && block.text) {
+          // Some Claude CLI builds surface context-overflow as a plain
+          // assistant text "Prompt is too long" instead of an error event.
+          // Catch it here too and treat it as a session-reset signal.
+          if (/^prompt is too long\.?$/i.test(block.text.trim())) {
+            this.sessionId = null;
+            socket.send(JSON.stringify({
+              type: 'chat_error',
+              error: 'Conversation too long for the model. Session reset — your next message starts a fresh context.',
+            }));
+            return;
+          }
           var prefix = (this._lastEmit === 'text' || this._lastEmit === 'tool')
             ? '\n\n'
             : '';
@@ -212,12 +251,92 @@ export class ChatHandler {
     }
 
     if (event.type === 'result') {
+      // Detect context-overflow before adopting the session id — the next
+      // resume would just hit the same wall. Drop the session so the user
+      // can keep chatting; their next message starts a fresh context.
+      var resultText = (event.result || '').toString();
+      var isTooLong = event.subtype === 'error_max_tokens'
+        || /prompt is too long/i.test(resultText)
+        || /context.*length/i.test(resultText);
+      if (isTooLong) {
+        this.sessionId = null;
+        socket.send(JSON.stringify({
+          type: 'chat_error',
+          error: 'Conversation too long for the model. Session reset — your next message starts a fresh context.',
+        }));
+        return;
+      }
       this.sessionId = event.session_id || this.sessionId;
+      // Track the input-token total reported by the CLI so we can compact
+      // the session before the next turn would breach the context window.
+      if (event.usage && typeof event.usage.input_tokens === 'number') {
+        this.lastInputTokens = event.usage.input_tokens;
+      }
       // Final result text — send if we haven't streamed it yet
       if (event.result && event.subtype === 'success') {
         socket.send(JSON.stringify({ type: 'chat_result', text: event.result }));
       }
     }
+  }
+
+  // Summarize the current session in the background and store the result so
+  // the next user turn can start a fresh session without losing continuity.
+  // We re-use --resume so claude has the full context to summarize, then
+  // null out the sessionId so the next turn starts new.
+  _compactSession(socket) {
+    if (!this.claudeBin) return;
+    this.compacting = true;
+    var resumingId = this.sessionId;
+    if (socket && socket.readyState === 1) {
+      socket.send(JSON.stringify({
+        type: 'chat_event',
+        event: 'compacting',
+        message: 'Compacting conversation to fit context window…',
+      }));
+    }
+
+    var args = ['-p', '--model', 'haiku', '--resume', resumingId, '--dangerously-skip-permissions'];
+    var child = spawn(this.claudeBin, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: this.envForSpawn,
+    });
+    var out = '';
+    child.stdout.on('data', (chunk) => { out += chunk.toString(); });
+    child.stderr.on('data', (chunk) => {
+      console.error('Gaffer compact stderr:', chunk.toString().substring(0, 200));
+    });
+    child.stdin.write(COMPACT_PROMPT);
+    child.stdin.end();
+
+    child.on('close', (code) => {
+      this.compacting = false;
+      if (code === 0 && out.trim()) {
+        this.compactedSummary = out.trim();
+        // Drop the bloated session so the next chat starts fresh; the
+        // summary will be prepended to the next user message.
+        this.sessionId = null;
+        this.lastInputTokens = 0;
+        if (socket && socket.readyState === 1) {
+          socket.send(JSON.stringify({
+            type: 'chat_event',
+            event: 'compacted',
+            message: 'Conversation compacted. Continuing with summary.',
+          }));
+        }
+      } else {
+        if (socket && socket.readyState === 1) {
+          socket.send(JSON.stringify({
+            type: 'chat_event',
+            event: 'compact_failed',
+            message: 'Could not compact conversation — context will reset on overflow.',
+          }));
+        }
+      }
+    });
+    child.on('error', (err) => {
+      this.compacting = false;
+      console.error('Gaffer compact error:', err.message);
+    });
   }
 
   cancel() {
