@@ -12,6 +12,15 @@ function escapeForJSX(str) {
     .replace(/\r/g, '\\r');
 }
 
+// Strip nested app.beginUndoGroup/endUndoGroup calls — AE doesn't support
+// nesting and unmatched pairs leak into the undo stack, causing "undo
+// mismatch" dialogs on later cmd-z. The outer safety wrap is the only group.
+function stripNestedUndoGroups(code) {
+  return code
+    .replace(/app\s*\.\s*beginUndoGroup\s*\([^)]*\)\s*;?/g, '')
+    .replace(/app\s*\.\s*endUndoGroup\s*\(\s*\)\s*;?/g, '');
+}
+
 export function wrapInSafety(code, undoLabel, readOnly) {
   if (readOnly) {
     return `(function() {
@@ -23,11 +32,12 @@ export function wrapInSafety(code, undoLabel, readOnly) {
   }
 })();`;
   }
-  var label = undoLabel || code.substring(0, 40).replace(/[\r\n]/g, ' ');
+  var stripped = stripNestedUndoGroups(code);
+  var label = undoLabel || stripped.substring(0, 40).replace(/[\r\n]/g, ' ');
   return `(function() {
   app.beginUndoGroup("Gaffer: ${escapeForJSX(label)}");
   try {
-    var __result = eval(${JSON.stringify(code)});
+    var __result = eval(${JSON.stringify(stripped)});
     return JSON.stringify({ ok: true, result: String(__result != null ? __result : "undefined") });
   } catch (e) {
     return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null });
