@@ -112,7 +112,9 @@
          from JS. Bottom padding is CONSTANT — the box bottom is
          row-anchored, so 34px always clears the pill (26 + 8 gap) and
          staging chips/banner can't shift the scroll content. */
-      margin-bottom: calc(-1 * (var(--input-h, 52px) - var(--row-h, 48px) + 24px));
+      /* area height = row + 4px pads always (overlays are out of flow),
+         so the bleed is a constant 28px */
+      margin-bottom: -28px;
       padding: 8px 12px 34px;
       display: flex;
       flex-direction: column;
@@ -121,7 +123,7 @@
     /* Scrollbar stops at the input section's top edge — inset the track
        by the full bleed the chat box runs behind it */
     .chat-messages::-webkit-scrollbar-track {
-      margin-bottom: calc(var(--input-h, 52px) - var(--row-h, 48px) + 24px);
+      margin-bottom: 28px;
     }
     /* Global thin scrollbars (audit §1.5) — chat log, textarea, code
        blocks, MCP tiles row all inherit */
@@ -367,9 +369,11 @@
       height: 48px;
       background: linear-gradient(to top, var(--color-bg-panel) 50%, var(--color-bg-panel-0) 100%);
       pointer-events: none;
+      z-index: 1; /* above the overlays stack (washes the banner/tray bottom) */
     }
     .chat-input-row {
-      position: relative; /* paints above the chat fader */
+      position: relative;
+      z-index: 1; /* later than the fader at the same level — paints above it */
       display: flex;
       align-items: flex-end;
       gap: 6px;
@@ -748,12 +752,26 @@
     }
     /* UpdateBanner 191:1271 — hidden overlay pill docked flush above the
        input area, overlapping the chat bottom; no shadow (flat design) */
-    /* UpdateBanner 290:8929 — in-flow between the preview tray and the
-       input row; pill docks flush on the pill row (r 16/16/0/0), its
-       bottom washed by the chat fader per the Figma render */
+    /* Tray + banner live in an out-of-flow stack above the input row —
+       they float over the chat, so staging/dismissing them can never
+       resize the area or shift the scroll content. */
+    .input-overlays {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: calc(var(--row-h, 48px) + 2px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      pointer-events: none;
+    }
+    .input-overlays > * { pointer-events: auto; }
+    /* UpdateBanner 290:8929 — pill docks flush on the input row
+       (r 16/16/0/0), its bottom washed by the chat fader (Figma render) */
     .update-banner {
       display: none;
       justify-content: center;
+      align-self: stretch;
       padding: 0 6px;
     }
     .update-banner.visible { display: flex; }
@@ -821,14 +839,16 @@
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
-    <div class="paste-preview-row" id="pastePreviewRow"></div>
-    <div id="updateBanner" class="update-banner">
-      <div class="banner-pill">
-        <span id="updateText" class="banner-text">Update available</span>
-        <span class="actions">
-          <button id="updateBtn">Update</button>
-          <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss"></button>
-        </span>
+    <div class="input-overlays">
+      <div class="paste-preview-row" id="pastePreviewRow"></div>
+      <div id="updateBanner" class="update-banner">
+        <div class="banner-pill">
+          <span id="updateText" class="banner-text">Update available</span>
+          <span class="actions">
+            <button id="updateBtn">Update</button>
+            <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss"></button>
+          </span>
+        </div>
       </div>
     </div>
     <div class="chat-input-row">
