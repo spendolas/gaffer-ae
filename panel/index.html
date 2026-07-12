@@ -108,10 +108,12 @@
       flex: 1;
       overflow-y: scroll;
       /* Chat runs behind the input section down to the fader's solid
-         edge (26px into the input row); extra bottom padding lets
-         content scroll clear. --input-h/--row-h kept live from JS. */
+         edge (26px into the input row); --input-h/--row-h kept live
+         from JS. Bottom padding is CONSTANT — the box bottom is
+         row-anchored, so 34px always clears the pill (26 + 8 gap) and
+         staging chips/banner can't shift the scroll content. */
       margin-bottom: calc(-1 * (var(--input-h, 52px) - var(--row-h, 48px) + 24px));
-      padding: 8px 12px calc(var(--input-h, 52px) - var(--row-h, 48px) + 32px);
+      padding: 8px 12px 34px;
       display: flex;
       flex-direction: column;
       gap: 8px;
