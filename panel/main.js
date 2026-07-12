@@ -1287,6 +1287,16 @@
   modelSelectBtnEl.addEventListener('click', function (e) {
     e.preventDefault();
     modelSelectPopupEl.hidden = !modelSelectPopupEl.hidden;
+    if (!modelSelectPopupEl.hidden) {
+      // Fixed positioning so the drawer's overflow:hidden (animation
+      // requirement) can't clip the popup.
+      var r = modelSelectBtnEl.getBoundingClientRect();
+      var s = modelSelectPopupEl.style;
+      s.position = 'fixed';
+      s.left = r.left + 'px';
+      s.bottom = (window.innerHeight - r.top + 2) + 'px';
+      s.minWidth = r.width + 'px';
+    }
     updateModelSelect();
   });
   document.addEventListener('click', function (e) {
