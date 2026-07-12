@@ -4,3 +4,14 @@ panel/daemon/gaffer-daemon
 panel/daemon/gaffer-daemon.exe
 panel/daemon/dist/
 panel/chat-history.json
+
+# Local-only — licensed Adobe material, never publish
+AdobeClean.zip
+AdobeClean/
+Knowledge/
+
+# Session history (local tooling)
+.remember/
+
+# Design reference exports (local working material, repo is public)
+design/refs/
