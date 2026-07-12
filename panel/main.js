@@ -719,7 +719,7 @@
     addCopyButton(div);
     var typing = document.createElement('span');
     typing.className = 'typing-indicator';
-    typing.innerHTML = '<span class="typing-dot">...</span>';
+    typing.innerHTML = '<i></i><i></i><i></i>';
     div.appendChild(typing);
     chatMessagesEl.appendChild(div);
     scrollToBottom();
@@ -749,12 +749,20 @@
   function showToolStatus(tool, status, id) {
     var el = document.getElementById('currentResponse');
     if (!el) return;
+    // Pills live in a single row container inside the bubble (Figma
+    // ToolPillsRow) — the bubble itself is a flex column with gap 12.
+    var row = el.querySelector('.tool-pills-row');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'tool-pills-row';
+      el.appendChild(row);
+    }
     // Reuse existing pill for this tool call (dedupe running → done/error)
-    var pill = id ? el.querySelector('[data-tool-id="' + id + '"]') : null;
+    var pill = id ? row.querySelector('[data-tool-id="' + id + '"]') : null;
     if (!pill) {
       pill = document.createElement('span');
       if (id) pill.dataset.toolId = id;
-      el.appendChild(pill);
+      row.appendChild(pill);
     }
     pill.className = 'tool-pill ' + status;
     pill.textContent = tool;

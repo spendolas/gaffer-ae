@@ -61,16 +61,21 @@ window.__audit = (function () {
       reset();
       bubble('user', 'Add a wiggle to the selected layer with 4 rotations per second');
       var a = bubble('assistant', 'I added a wiggle expression to the Rotation property of "Logo". The layer now rotates with 4 oscillations per second at 30 degrees amplitude.');
-      a.insertBefore(el('span', 'tool-pill done', 'runJSX: wiggle rotation'), a.firstChild);
+      var row = el('div', 'tool-pills-row');
+      row.appendChild(el('span', 'tool-pill done', 'runJSX: wiggle rotation'));
+      a.insertBefore(row, a.firstChild);
     },
     'busy-pills': function () {
       reset();
       bubble('user', 'Analyse the comp and list all expressions');
       var a = bubble('assistant', '');
-      a.appendChild(el('span', 'tool-pill running', 'listExpressions'));
-      a.appendChild(el('span', 'tool-pill done', 'getProjectSummary'));
-      a.appendChild(el('span', 'tool-pill error', 'captureFrame: comp too large'));
-      var t = el('div', 'typing-indicator'); t.appendChild(el('span')); t.appendChild(el('span')); t.appendChild(el('span'));
+      var row = el('div', 'tool-pills-row');
+      row.appendChild(el('span', 'tool-pill running', 'listExpressions'));
+      row.appendChild(el('span', 'tool-pill done', 'getProjectSummary'));
+      row.appendChild(el('span', 'tool-pill error', 'captureFrame: comp too large'));
+      a.appendChild(row);
+      var t = el('span', 'typing-indicator');
+      t.innerHTML = '<i></i><i></i><i></i>';
       a.appendChild(t);
       document.getElementById('stopBtn').style.display = '';
       document.getElementById('sendBtn').style.display = 'none';

@@ -122,43 +122,57 @@
       border: 2px solid var(--color-bg-input);
     }
     .chat-messages::-webkit-scrollbar-thumb:hover { background: var(--color-text-hint); }
+    /* Bubbles — Figma Bubble set 183:1055. Children stack with gap 12;
+       flex `order` keeps copy/typing at the bottom regardless of DOM order. */
     .chat-msg {
-      padding: 6px 10px;
-      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 8px;
+      border-radius: 16px;
       max-width: 95%;
-      font-size: 13px;
-      line-height: 1.5;
+      font-size: 14px;
+      line-height: 16px;
       white-space: pre-wrap;
       word-wrap: break-word;
       user-select: text;
       -webkit-user-select: text;
       cursor: text;
     }
+    .chat-msg .msg-text,
+    .chat-msg > div:not(.bubble-images-row) { padding: 0 4px; }
     .chat-msg.user {
-      background: #3a3a5a;
+      background: var(--color-bubble-user-bg);
+      border-radius: 16px 16px 2px 16px;
       align-self: flex-end;
       color: var(--color-text-light);
     }
     .chat-msg.assistant {
-      background: #2a2a2a;
-      border: 1px solid #3a3a3a;
+      background: transparent;
+      border-radius: 16px 16px 16px 2px;
       align-self: flex-start;
+      max-width: min(300px, 95%);
       color: var(--color-text-light-2);
     }
     .chat-msg.error {
-      border-color: var(--color-accent-red);
+      background: var(--color-bubble-error-bg);
+      border-radius: 16px;
       color: var(--color-bubble-error-text);
     }
     .copy-btn {
-      display: block;
-      background: none;
+      order: 9;
+      align-self: flex-start;
+      width: 24px;
+      height: 24px;
+      padding: 4px;
       border: none;
-      color: var(--color-text-dimmest);
-      font-size: 9px;
-      padding: 3px 0 0 0;
+      border-radius: 8px;
+      background: var(--color-border-default);
+      color: var(--color-text-dimmer);
       cursor: pointer;
     }
     .copy-btn:active { color: var(--color-text-muted); }
+    .copy-btn .gicon { width: 16px; height: 16px; display: block; }
 
     /* Markdown rendering inside chat messages */
     .msg-text { display: block; }
@@ -180,25 +194,25 @@
     .msg-text strong { color: var(--color-text-strong); font-weight: 600; }
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
-    .msg-text li { margin: 0; font-size: 13px; line-height: 1.5; display: list-item; }
+    .msg-text li { margin: 0; font-size: 14px; line-height: 1.4; display: list-item; }
     .msg-text li > p { margin: 0; display: inline; }
     .msg-text li + li { margin-top: 2px; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
     .msg-text ul + p, .msg-text ol + p { margin-top: 6px; }
     .msg-text code {
-      background: var(--color-bg-input);
-      border: 1px solid var(--color-border-default);
-      border-radius: 3px;
-      padding: 1px 4px;
+      background: var(--color-code-inline-bg);
+      border: none;
+      border-radius: 8px;
+      padding: 1px 6px;
       font-family: "SF Mono", "Consolas", monospace;
-      font-size: 11px;
+      font-size: 12px;
       color: var(--color-text-code);
     }
     .msg-text pre {
       background: var(--color-bg-input);
-      border: 1px solid var(--color-border-default);
-      border-radius: 4px;
-      padding: 8px;
+      border: none;
+      border-radius: 8px;
+      padding: 4px 8px;
       margin: 6px 0;
       overflow-x: auto;
     }
@@ -207,8 +221,8 @@
       border: 0;
       padding: 0;
       color: var(--color-code-block-text);
-      font-size: 11px;
-      line-height: 1.5;
+      font-size: 12px;
+      line-height: 16px;
     }
     .msg-text blockquote {
       border-left: 2px solid var(--color-text-hint);
@@ -218,31 +232,44 @@
     }
     .msg-text a { color: var(--color-accent-blue); text-decoration: none; }
     .msg-text a:hover { text-decoration: underline; }
+    /* Tables — Figma MarkdownTable 185:1166: r8 container on bg/input,
+       zebra on odd data rows, panel-colored column dividers, no borders */
     .msg-text table {
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       margin: 6px 0;
-      font-size: 11px;
+      font-size: 12px;
+      line-height: 16px;
       width: 100%;
+      background: var(--color-bg-input);
+      border-radius: 8px;
+      overflow: hidden;
     }
     .msg-text th, .msg-text td {
-      border: 1px solid #3a3a3a;
+      border: none;
+      border-right: 1px solid var(--color-bg-panel);
       padding: 4px 8px;
       text-align: left;
-    }
-    .msg-text th {
-      background: #2a2a2a;
       color: var(--color-text-strong);
-      font-weight: 600;
     }
-    .msg-text tr:nth-child(even) td { background: var(--color-bg-panel); }
+    .msg-text th:last-child, .msg-text td:last-child { border-right: none; }
+    .msg-text th { font-weight: 800; }
+    .msg-text tbody tr:nth-child(odd) td { background: var(--color-bg-table-row); }
     .msg-text hr { border: 0; border-top: 1px solid var(--color-border-default); margin: 8px 0; }
 
+    .tool-pills-row {
+      order: 2;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      padding: 0 4px;
+    }
     .tool-pill {
       display: inline-block;
       font-size: 9px;
+      line-height: 13.5px;
       padding: 1px 6px;
       border-radius: 8px;
-      margin: 2px 2px 2px 0;
       font-family: "SF Mono", "Consolas", monospace;
       background: var(--color-border-default);
       color: var(--color-text-muted);
@@ -251,10 +278,24 @@
     .tool-pill.running { background: var(--color-pill-running); color: var(--color-accent-amber); animation: pillPulse 1.5s ease-in-out infinite; }
     .tool-pill.done { background: var(--color-pill-done); color: var(--color-accent-green); }
     .tool-pill.error { background: var(--color-pill-error); color: var(--color-accent-red); }
+    /* Three-dot typing indicator (Figma TypingIndicator 215:2620) */
     .typing-indicator {
+      order: 8;
+      display: inline-flex;
+      gap: 2px;
+      padding: 4px;
       color: var(--color-text-dimmest);
-      font-style: italic;
     }
+    .typing-indicator i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: typingPulse 1.2s ease-in-out infinite;
+    }
+    .typing-indicator i:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator i:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typingPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
     .chat-notice {
       align-self: center;
       color: var(--color-text-dimmer);
