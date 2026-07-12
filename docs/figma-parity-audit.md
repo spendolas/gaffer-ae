@@ -112,13 +112,13 @@ Design font **Adobe Clean**; code font **SF Mono** (fallback Consolas). Correcte
 **Bottom-docked overlay**, hidden by default: floats over the last 34px of the chat, **flush above InputArea** (radius [16,16,0,0] meets the input area). Container 360×34 pad [4,6,0,6]; **pill 255×32 horizontally centered**, pad **[6,6,6,12]** (L12), **gap 40** between text and actions. Text 12/16 `accent/blue`; UpdateBtn 46×20 r8 bg `btn/primary-bg` with label 10/10 in **`bg/panel`** (dark-on-blue); DismissBtn 20×20 r8 transparent, Close icon in `btn/primary-bg`. No shadow. Current: full-width top bar — position, shape, and colors all change.
 
 ### 4.6 MCP row (ActivitySettingsRow `kind=mcps` 185:1192; Cell: MCP picker open 173:506)
-The tiles row IS the picker ("open" = ActivityLog expanded). Tiles 40h × ~45w (min-width 45; may relax toward equal-fill only when few servers), gap 0, brand glyph 16–24px in **#E8EEFA**, monogram fallback (AC Bold SemiCond 16, e.g. "DS"). **The row scrolls horizontally** — user-confirmed intent; the file simply shows no overflow example (8 tiles). Keep the sort from current code (enabled → connected → auth → failed) so active servers sit in the visible viewport; thin overlay scrollbar per §1.5. Fill encodes state — **user-confirmed semantics (overrides the file's layer names, which say "On/Hovered")**:
+The tiles row IS the picker ("open" = ActivityLog expanded). Tiles 40h × ~45w (min-width 45; may relax toward equal-fill only when few servers), gap 0, brand glyph 16–24px in **#E8EEFA**, monogram fallback (AC Bold SemiCond 16, e.g. "DS"). **The row scrolls horizontally** — user-confirmed intent; the file simply shows no overflow example (8 tiles). Keep the sort from current code (enabled → connected → auth → failed) so active servers sit in the visible viewport; thin overlay scrollbar per §1.5. Fill encodes state — **user-confirmed semantics v2 (overrides the file's layer names; green is dropped — it competed with blue)**:
 - **Enabled** (in the chat allowlist) → `accent/blue`
-- **Available** (connected, not enabled) → `accent/green`
+- **Available** (connected, not enabled) → **no fill** (the file's transparent "Off" styling — availability needs no signal)
 - Needs auth → `accent/amber`
 - Error/failed → `accent/red`
-- The transparent "Off" variant in the molecule has no state under this mapping — treat as unused.
-**Every tile has a hover state**; no distinct hover visual is drawn in the file → implement a subtle treatment (e.g. fill brightness +12% or 0.85→1 opacity ramp), same rule for all fills incl. monograms.
+- `accent/green` is NOT used on tiles.
+**Every tile has a hover state**; none drawn in the file → subtle treatment (e.g. fill brightness +12%, or a faint `border/default` fill on the no-bg available tiles), same rule everywhere incl. monograms.
 
 **Icon acquisition pipeline** (user-requested): resolution order per server —
 1. **Bundled collection**: brand SVGs already in the Figma file (grip, Notion, Box, Spotify, Hugging Face, Three.js, Autodesk — exported in `design/refs/svg/`; ship in `panel/icons/`).
@@ -169,7 +169,7 @@ Child order: **ChatMessages (grow) → UpdateBanner (hidden overlay, out of flow
 5. Input hint line (design drops it — confirm)
 6. Compacting/compacted notices (style within notice/error bubble family)
 
-**All open items resolved (user, 2026-07-10):** assistant bubbles borderless · tile fills: **blue=Enabled, green=Available**, amber=auth, red=error, all with hover · MCPSettingsRow/MCPChipInline legacy, skip · Actions rows behind a debug toggle · Checkbox atom skipped in favor of Toggle.
+**All open items resolved (user, 2026-07-10):** assistant bubbles borderless · tile fills v2: **blue=Enabled, no-bg=Available** (green dropped), amber=auth, red=error, all with hover · MCPSettingsRow/MCPChipInline legacy, skip · Actions rows behind a debug toggle · Checkbox atom skipped in favor of Toggle.
 
 ## 6. Implementation backlog (ordered)
 
