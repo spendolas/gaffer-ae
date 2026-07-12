@@ -343,12 +343,25 @@
     .chat-input-area {
       position: relative; /* anchors the update-banner overlay */
       display: flex;
-      gap: 6px;
+      gap: 0; /* InputArea itemSpacing 0 — paste tray docks flush on the pill */
       padding: 2px 6px;
       flex-shrink: 0;
       flex-direction: column;
     }
+    /* Chat Fader 290:8501 — solid panel-bg block masking the chat bleed
+       behind the input area, reaching 14px above it (master geometry:
+       14 + half the area height) */
+    .chat-input-area::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: -14px;
+      height: calc(var(--input-h, 52px) / 2 + 14px);
+      background: var(--color-bg-panel);
+    }
     .chat-input-row {
+      position: relative; /* paints above the chat fader */
       display: flex;
       align-items: flex-end;
       gap: 6px;
@@ -356,13 +369,19 @@
       border-radius: 24px;
       padding: 8px;
     }
-    /* PastePreviewRow 191:1237 — pad 0/16, gap 4; ImageChip 185:1121 56x56 r8,
-       CloseBtn 219:3708 16x16 r8 overhanging the corner by 6px */
+    /* PastePreviewRow 185:1163 — centered tray docked flush on the pill:
+       bg/input fill, r 12/12/0/0, pad 4, gap 4. ImageChip 185:1121 56x56 r8,
+       CloseBtn 219:3708 16x16 r8 overhanging the corner by 6px; reverse
+       z-order (earlier chip's X above the next chip) set inline in JS. */
     .paste-preview-row {
+      position: relative; /* paints above the chat fader */
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
-      padding: 0 16px;
+      padding: 4px;
+      align-self: center;
+      background: var(--color-bg-input);
+      border-radius: 12px 12px 0 0;
     }
     .paste-preview-row:empty { display: none; }
     .paste-chip {

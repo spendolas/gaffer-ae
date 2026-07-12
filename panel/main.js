@@ -582,6 +582,9 @@
         var chip = document.createElement('div');
         chip.className = 'paste-chip';
         chip.title = item.name || 'image';
+        // Figma itemReverseZIndex: earlier chip's overhanging X paints
+        // above the next chip
+        chip.style.zIndex = String(MAX_PASTE_FILES - idx);
         var img = document.createElement('img');
         img.src = item.dataUrl;
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
