@@ -79,9 +79,14 @@
   function setStatus(state, text) {
     ledEl.className = 'led' + (state === 'connected' ? ' connected' : state === 'starting' ? ' starting' : '');
     statusTextEl.textContent = text || state;
-    var enabled = (state === 'connected') && !chatBusy;
     chatInputEl.disabled = state !== 'connected';
     sendBtnEl.disabled = state !== 'connected' || chatBusy;
+    // Figma InputRow state matrix: offline shows a bare panel-colored
+    // button + "Gaffer" placeholder; connected shows the italic prompt.
+    var offline = state !== 'connected';
+    chatInputEl.classList.toggle('offline', offline);
+    sendBtnEl.classList.toggle('offline', offline);
+    chatInputEl.placeholder = offline ? 'Gaffer' : 'Ask Gaffer...';
   }
 
   // ── Daemon auto-start ──
@@ -628,6 +633,8 @@
       enabledMcps: enabledMcps,
     }));
     chatInputEl.value = '';
+    chatInputEl.style.height = '32px';
+    sendBtnEl.classList.remove('typed');
     pendingImages = [];
     renderPendingImages();
     setChatBusy(true);
@@ -1118,6 +1125,12 @@
       sendChatMessage();
     }
   });
+  // Typed state + auto-grow (Figma InputRow mode=typed: field grows to 2+ lines)
+  chatInputEl.addEventListener('input', function () {
+    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
+    chatInputEl.style.height = '32px';
+    chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 80) + 'px';
+  });
 
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching
   // the panel JS. registerKeyEventsInterest doesn't work in CEP 12 for these.
@@ -1127,6 +1140,8 @@
   if (typeof GafferIcons !== 'undefined') {
     ledEl.innerHTML = GafferIcons.star;
     if (refreshMcpsBtnEl) refreshMcpsBtnEl.appendChild(icon('refresh'));
+    sendBtnEl.appendChild(icon('up'));
+    stopBtnEl.appendChild(icon('stop'));
   }
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
