@@ -114,14 +114,16 @@
       flex-direction: column;
       gap: 8px;
     }
-    .chat-messages::-webkit-scrollbar { width: 10px; }
-    .chat-messages::-webkit-scrollbar-track { background: var(--color-bg-input); }
-    .chat-messages::-webkit-scrollbar-thumb {
+    /* Global thin scrollbars (audit §1.5) — chat log, textarea, code
+       blocks, MCP tiles row all inherit */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
       background: var(--color-border-input);
-      border-radius: 5px;
-      border: 2px solid var(--color-bg-input);
+      border-radius: 3px;
     }
-    .chat-messages::-webkit-scrollbar-thumb:hover { background: var(--color-text-hint); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--color-text-hint); }
+    ::-webkit-scrollbar-corner { background: transparent; }
     /* Bubbles — Figma Bubble set 183:1055. Children stack with gap 12;
        flex `order` keeps copy/typing at the bottom regardless of DOM order. */
     .chat-msg {
