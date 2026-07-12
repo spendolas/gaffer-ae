@@ -531,8 +531,7 @@
     /* MCP tiles row (audit §4.6): 40h tiles, min 45w, equal-fill when few,
        horizontal scroll when many. Fill = state: blue enabled, none
        available, amber needs-auth, red failed. */
-    .activity-mcps { padding: 4px 0 4px 0; min-height: 48px; gap: 4px; }
-    .activity-mcps .icon-btn { margin-right: 8px; flex-shrink: 0; }
+    .activity-mcps { padding: 4px 0 4px 0; min-height: 48px; }
     .mcp-tiles {
       flex: 1;
       display: flex;
@@ -540,8 +539,14 @@
       align-items: stretch;
       min-width: 0;
     }
-    .mcp-loading { color: var(--color-text-dimmest); align-self: center; padding-left: 8px; }
-    .mcp-error { color: var(--color-accent-red); align-self: center; padding-left: 8px; }
+    .mcp-tiles::-webkit-scrollbar { display: none; } /* clean overflow, still scrolls */
+    .mcp-loading { color: var(--color-text-dimmest); margin: auto; }
+    .mcp-error { color: var(--color-accent-red); margin: auto; }
+    .mcp-tile.fade-in {
+      opacity: 0;
+      animation: tileFade 0.35s ease-out forwards;
+    }
+    @keyframes tileFade { to { opacity: 1; } }
     .mcp-tile {
       flex: 1 0 45px;
       min-width: 45px;
@@ -565,10 +570,31 @@
       width: 18px;
       height: 18px;
       object-fit: contain;
-      /* brand favicons are colored; design glyphs are monochrome light */
+      /* fallback for favicons without alpha (can't be masked) */
       filter: grayscale(1) brightness(1.9);
     }
+    /* alpha-bg favicons render as flat single-color glyphs via mask */
+    .mcp-tile .mask-glyph {
+      width: 18px;
+      height: 18px;
+      background: currentColor;
+      -webkit-mask-position: center;
+      -webkit-mask-size: contain;
+      -webkit-mask-repeat: no-repeat;
+    }
     .mcp-tile .gicon { width: 20px; height: 20px; }
+    .mcp-tooltip {
+      position: fixed;
+      z-index: 200;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--color-btn-icon-bg);
+      color: var(--color-text-light);
+      font-size: 10px;
+      line-height: 15px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
     .mcp-tile .monogram {
       font-family: "Adobe Clean SemiCondensed", "Adobe Clean", sans-serif;
       font-weight: 700;
@@ -748,7 +774,6 @@
       <div id="mcpList" class="mcp-tiles">
         <span class="mcp-loading">loading…</span>
       </div>
-      <button id="refreshMcpsBtn" class="icon-btn" title="Refresh MCP list"></button>
     </div>
     <div class="activity-settings">
       <span class="row-label">Model:</span>

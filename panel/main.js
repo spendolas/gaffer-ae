@@ -30,7 +30,6 @@
   var moreChevronEl = document.getElementById('moreChevron');
   var autoCheckEl = document.getElementById('autoCheckUpdates');
   var mcpListEl = document.getElementById('mcpList');
-  var refreshMcpsBtnEl = document.getElementById('refreshMcpsBtn');
   var checkNowBtnEl = document.getElementById('checkNowBtn');
   var versionTextEl = document.getElementById('versionText');
   var updateBannerEl = document.getElementById('updateBanner');
@@ -57,7 +56,6 @@
   var PASTE_PREFIX = 'gaffer-paste-';
   var MAX_PASTE_FILES = 10;
   var THUMB_MAX_EDGE = 512;
-  // mcpListEl + refreshMcpsBtnEl declared at top of file; do NOT redeclare here
 
   // AE host info — getHostEnvironment may return either a JSON string or
   // an already-parsed object depending on CEP version.
@@ -861,10 +859,58 @@
 
   // ── MCP server picker ──
 
-  function requestMcpList() {
+  function requestMcpList(silent) {
     if (!ws || ws.readyState !== 1) return;
-    if (mcpListEl) mcpListEl.innerHTML = '<span class="mcp-loading">loading…</span>';
+    // silent = background refresh: keep the current tiles on screen
+    if (mcpListEl && !(silent && availableMcps.length)) {
+      mcpListEl.innerHTML = '<span class="mcp-loading">loading…</span>';
+      mcpFreshLoad = true;
+    }
     ws.send(JSON.stringify({ type: 'list_mcps' }));
+  }
+
+  // Flat single-color glyphs: favicons with a transparent background can
+  // be used as a CSS mask (silhouette in the tile's glyph color). Solid
+  // favicons keep the <img> + monochrome filter fallback.
+  function detectMaskable(s) {
+    if (!s.icon || s.maskable !== undefined || s.icon.indexOf('image/svg') !== -1) return;
+    s.maskable = false; // pessimistic until proven
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var c = document.createElement('canvas');
+        c.width = 16; c.height = 16;
+        var ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 16, 16);
+        var d = ctx.getImageData(0, 0, 16, 16).data;
+        // sample the four corners — transparent corners = glyph-on-alpha
+        var corners = [3, (15 * 16 + 0) * 4 + 3, (0 * 16 + 15) * 4 + 3, (15 * 16 + 15) * 4 + 3];
+        var transparent = corners.every(function (i) { return d[i] < 40; });
+        if (transparent !== (s.maskable === true)) {
+          s.maskable = transparent;
+          renderMcpList();
+        }
+      } catch (e) { /* keep img fallback */ }
+    };
+    img.src = s.icon;
+  }
+
+  // Shared hover tooltip (CEF title tooltips are unreliable in panels)
+  var mcpTooltipEl = null;
+  function showMcpTooltip(tile, text) {
+    hideMcpTooltip();
+    mcpTooltipEl = document.createElement('div');
+    mcpTooltipEl.className = 'mcp-tooltip';
+    mcpTooltipEl.textContent = text;
+    document.body.appendChild(mcpTooltipEl);
+    var r = tile.getBoundingClientRect();
+    var tt = mcpTooltipEl.getBoundingClientRect();
+    var left = Math.max(4, Math.min(r.left + r.width / 2 - tt.width / 2, innerWidth - tt.width - 4));
+    mcpTooltipEl.style.left = left + 'px';
+    mcpTooltipEl.style.top = (r.top - tt.height - 4) + 'px';
+  }
+  function hideMcpTooltip() {
+    if (mcpTooltipEl) { mcpTooltipEl.remove(); mcpTooltipEl = null; }
   }
 
   // Tile state (audit §4.6): amber = needs auth, red = failed,
@@ -876,8 +922,11 @@
     return enabledMcps.indexOf(s.id) !== -1 ? 'enabled' : 'available';
   }
 
+  var mcpFreshLoad = true; // fade tiles in on first population only
+
   function renderMcpList() {
     if (!mcpListEl) return;
+    hideMcpTooltip();
     mcpListEl.innerHTML = '';
     if (!availableMcps.length) {
       var empty = document.createElement('span');
@@ -892,7 +941,16 @@
       var r = RANK[mcpTileState(a)] - RANK[mcpTileState(b)];
       return r !== 0 ? r : a.displayName.localeCompare(b.displayName);
     });
-    sorted.forEach(function (s) { mcpListEl.appendChild(buildMcpTile(s)); });
+    var fade = mcpFreshLoad;
+    mcpFreshLoad = false;
+    sorted.forEach(function (s, i) {
+      var tile = buildMcpTile(s);
+      if (fade) {
+        tile.classList.add('fade-in');
+        tile.style.animationDelay = Math.min(i * 20, 400) + 'ms';
+      }
+      mcpListEl.appendChild(tile);
+    });
   }
 
   function monogram(name) {
@@ -907,25 +965,32 @@
     var state = mcpTileState(s);
     var tile = document.createElement('button');
     tile.className = 'mcp-tile ' + state + (pendingAuthId === s.id ? ' authing' : '');
-    tile.title = s.displayName + ' — ' + (
+    var tip = s.displayName + ' — ' + (
       state === 'enabled' ? 'enabled (click to disable)'
       : state === 'available' ? 'available (click to enable)'
       : state === 'auth' ? (pendingAuthId === s.id ? 'authorizing… check browser' : 'needs auth (click to sign in)')
       : s.status
     );
-    if (s.icon) {
+    tile.addEventListener('mouseenter', function () { showMcpTooltip(tile, tip); });
+    tile.addEventListener('mouseleave', hideMcpTooltip);
+    if (s.icon && s.icon.indexOf('image/svg') !== -1) {
+      // bundled brand SVGs — currentColor strokes/fills
+      var span = document.createElement('span');
+      span.className = 'gicon';
+      span.innerHTML = atob(s.icon.split(',')[1]);
+      tile.appendChild(span);
+    } else if (s.icon && s.maskable) {
+      // alpha-bg favicon → flat glyph in the tile color via mask
+      var glyph = document.createElement('span');
+      glyph.className = 'mask-glyph';
+      glyph.style.setProperty('-webkit-mask-image', 'url(' + s.icon + ')');
+      tile.appendChild(glyph);
+    } else if (s.icon) {
+      detectMaskable(s); // async — upgrades to mask-glyph on re-render
       var img = document.createElement('img');
       img.src = s.icon;
       img.alt = s.displayName;
-      // bundled SVGs are currentColor; favicons get the monochrome filter
-      if (s.icon.indexOf('image/svg') !== -1) {
-        var span = document.createElement('span');
-        span.className = 'gicon';
-        span.innerHTML = atob(s.icon.split(',')[1]);
-        tile.appendChild(span);
-      } else {
-        tile.appendChild(img);
-      }
+      tile.appendChild(img);
     } else {
       var mono = document.createElement('span');
       mono.className = 'monogram';
@@ -1137,11 +1202,14 @@
     saveChat();
   });
   checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
-  if (refreshMcpsBtnEl) refreshMcpsBtnEl.addEventListener('click', requestMcpList);
   var activityEl = document.querySelector('.activity-log');
+  // No refresh button — the list refreshes under the hood: on open,
+  // then every 60s while the drawer stays open (silent, no flicker).
+  setInterval(function () {
+    if (activityEl && activityEl.open) requestMcpList(true);
+  }, 60000);
   if (activityEl) activityEl.addEventListener('toggle', function () {
-    // MCP status goes stale while the panel is collapsed — refresh on open
-    if (activityEl.open) requestMcpList();
+    if (activityEl.open) requestMcpList(availableMcps.length > 0);
     // More <-> Less, chevron flips (Figma summary affordance)
     if (moreLabelEl) moreLabelEl.textContent = activityEl.open ? 'Less' : 'More';
     if (moreChevronEl && typeof GafferIcons !== 'undefined') {
@@ -1170,7 +1238,6 @@
   // ── Start ──
   if (typeof GafferIcons !== 'undefined') {
     ledEl.innerHTML = GafferIcons.star;
-    if (refreshMcpsBtnEl) refreshMcpsBtnEl.appendChild(icon('refresh'));
     sendBtnEl.appendChild(icon('up'));
     stopBtnEl.appendChild(icon('stop'));
     clearBtnEl.appendChild(icon('brush'));
