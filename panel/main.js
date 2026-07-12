@@ -1,5 +1,13 @@
 (function () {
   var cs = new CSInterface();
+
+  // SVG icon helper — GafferIcons comes from icons.js (generated from Figma)
+  function icon(name, cls) {
+    var span = document.createElement('span');
+    span.className = 'gicon' + (cls ? ' ' + cls : '');
+    span.innerHTML = (typeof GafferIcons !== 'undefined' && GafferIcons[name]) || '';
+    return span;
+  }
   var ws = null;
   var reconnectDelay = 1000;
   var maxDelay = 30000;
@@ -278,9 +286,18 @@
     var escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
     var jsx = 'system.callSystem("echo \\"" + "' + escaped + '" + "\\" | pbcopy")';
     cs.evalScript(jsx, function () {
-      btn.textContent = 'Copied';
-      setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+      copyFeedback(btn);
     });
+  }
+
+  // Swap the copy icon for a check for 1.5s
+  function copyFeedback(btn) {
+    btn.innerHTML = '';
+    btn.appendChild(icon('check'));
+    setTimeout(function () {
+      btn.innerHTML = '';
+      btn.appendChild(icon('copy'));
+    }, 1500);
   }
 
   function evalScriptAsync(code) {
@@ -505,9 +522,7 @@
         var img = document.createElement('img');
         img.src = item.dataUrl;
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
-        var x = document.createElement('span');
-        x.className = 'paste-chip-x';
-        x.textContent = '×';
+        var x = icon('close', 'paste-chip-x');
         x.addEventListener('click', function (e) {
           e.stopPropagation();
           pendingImages.splice(idx, 1);
@@ -662,7 +677,8 @@
   function addCopyButton(div) {
     var copyBtn = document.createElement('button');
     copyBtn.className = 'copy-btn';
-    copyBtn.textContent = 'Copy';
+    copyBtn.title = 'Copy';
+    copyBtn.appendChild(icon('copy'));
     copyBtn.addEventListener('click', function () {
       var textEl = div.querySelector('.msg-text');
       // Prefer raw markdown source; fall back to rendered text
@@ -671,8 +687,7 @@
         : (textEl ? textEl.textContent.trim() : div.textContent.trim());
       try {
         navigator.clipboard.writeText(text).then(function () {
-          copyBtn.textContent = 'Copied';
-          setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500);
+          copyFeedback(copyBtn);
         }).catch(function () { copyViaPbcopy(text, copyBtn); });
       } catch (e) {
         copyViaPbcopy(text, copyBtn);
@@ -1101,6 +1116,10 @@
   // Copy is handled via Copy buttons on each message instead.
 
   // ── Start ──
+  if (typeof GafferIcons !== 'undefined') {
+    ledEl.innerHTML = GafferIcons.star;
+    if (refreshMcpsBtnEl) refreshMcpsBtnEl.appendChild(icon('refresh'));
+  }
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
   modelSelectEl.value = currentModel;
