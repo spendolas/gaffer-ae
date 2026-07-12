@@ -31,7 +31,7 @@
       --color-text-dimmest: #666666;
       --color-text-hint: #555555;
       --color-text-white: #ffffff;
-      --color-text-code: #ffbb4e;
+      --color-text-code: #efaa3c;
       --color-accent-blue: #4d9df7;
       --color-accent-red: #cc4444;
       --color-accent-green: #3dc17f;
@@ -134,7 +134,7 @@
       border-radius: 16px;
       max-width: 95%;
       font-size: 14px;
-      line-height: 16px;
+      line-height: 18px;
       white-space: pre-wrap;
       word-wrap: break-word;
       user-select: text;
@@ -199,18 +199,19 @@
     .msg-text strong { color: var(--color-text-strong); font-weight: 700; }
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
-    .msg-text li { margin: 0; font-size: 14px; line-height: 1.4; display: list-item; }
+    .msg-text li { margin: 0; font-size: 14px; line-height: 18px; display: list-item; }
     .msg-text li > p { margin: 0; display: inline; }
     .msg-text li + li { margin-top: 2px; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
     .msg-text ul + p, .msg-text ol + p { margin-top: 6px; }
-    /* CodeInline 185:1156 — exact: pad 4/8, r8, #D8B070@20 chip, 12/16 */
+    /* CodeInline 185:1156 — pad 1/4, r4, 18h chip: fits the 18px body
+       line exactly, no line growth */
     .msg-text code {
       display: inline-block;
       background: var(--color-code-inline-bg);
       border: none;
-      border-radius: 8px;
-      padding: 4px 8px;
+      border-radius: 4px;
+      padding: 1px 4px;
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 12px;
       line-height: 16px;
@@ -440,10 +441,10 @@
       color: var(--color-text-default);
       font-family: inherit;
       font-size: 14px;
-      line-height: 16px;
+      line-height: 18px;
       padding: 8px;
-      height: 32px;
-      max-height: 80px;
+      height: 34px;
+      max-height: 84px;
       resize: none;
       outline: none;
       overflow-y: auto;

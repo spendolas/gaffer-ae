@@ -633,7 +633,7 @@
       enabledMcps: enabledMcps,
     }));
     chatInputEl.value = '';
-    chatInputEl.style.height = '32px';
+    chatInputEl.style.height = '34px';
     sendBtnEl.classList.remove('typed');
     pendingImages = [];
     renderPendingImages();
@@ -1128,7 +1128,7 @@
   // Typed state + auto-grow (Figma InputRow mode=typed: field grows to 2+ lines)
   chatInputEl.addEventListener('input', function () {
     sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
-    chatInputEl.style.height = '32px';
+    chatInputEl.style.height = '34px';
     chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 80) + 'px';
   });
 
