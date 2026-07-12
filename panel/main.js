@@ -965,13 +965,7 @@
     var state = mcpTileState(s);
     var tile = document.createElement('button');
     tile.className = 'mcp-tile ' + state + (pendingAuthId === s.id ? ' authing' : '');
-    var tip = s.displayName + ' — ' + (
-      state === 'enabled' ? 'enabled (click to disable)'
-      : state === 'available' ? 'available (click to enable)'
-      : state === 'auth' ? (pendingAuthId === s.id ? 'authorizing… check browser' : 'needs auth (click to sign in)')
-      : s.status
-    );
-    tile.addEventListener('mouseenter', function () { showMcpTooltip(tile, tip); });
+    tile.addEventListener('mouseenter', function () { showMcpTooltip(tile, s.displayName); });
     tile.addEventListener('mouseleave', hideMcpTooltip);
     if (s.icon && s.icon.indexOf('image/svg') !== -1) {
       // bundled brand SVGs — currentColor strokes/fills
@@ -998,15 +992,19 @@
       tile.appendChild(mono);
     }
     tile.addEventListener('click', function () {
-      if (state === 'available' || state === 'enabled') {
-        if (state === 'available') enabledMcps.push(s.id);
+      // state changes animate in place (CSS background transition);
+      // sort order corrects on the next list refresh, not mid-click
+      var st = mcpTileState(s);
+      if (st === 'available' || st === 'enabled') {
+        if (st === 'available') enabledMcps.push(s.id);
         else enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
         saveChat();
-        renderMcpList();
-      } else if (state === 'auth' && !pendingAuthId && ws && ws.readyState === 1) {
+        tile.classList.remove('enabled', 'available');
+        tile.classList.add(mcpTileState(s));
+      } else if (st === 'auth' && !pendingAuthId && ws && ws.readyState === 1) {
         pendingAuthId = s.id;
         ws.send(JSON.stringify({ type: 'auth_mcp', id: s.id }));
-        renderMcpList();
+        tile.classList.add('authing');
       }
     });
     return tile;
