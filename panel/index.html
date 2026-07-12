@@ -47,8 +47,8 @@
       --color-btn-danger-bg: #ec4848;
       --color-btn-danger-hover: #9a4a4a;
       --color-btn-icon-bg: rgba(0, 0, 0, 0.7);
-      --color-overlay-drop: rgba(35, 60, 100, 0.85);
-      --color-overlay-lightbox: rgba(0, 0, 0, 0.85);
+      --color-overlay-drop: rgba(35, 60, 100, 0.95);
+      --color-overlay-lightbox: rgba(0, 0, 0, 0.95);
       --color-bg-table-row: rgba(0, 0, 0, 0.2);
       /* Unbound in Figma — proposed tokens (audit §3) */
       --color-bubble-error-bg: rgba(204, 68, 68, 0.5);
@@ -104,7 +104,10 @@
     .chat-messages {
       flex: 1;
       overflow-y: scroll;
-      padding: 8px 12px;
+      /* Chat runs behind the input area by half its height (--input-h is
+         kept live from JS); extra bottom padding lets content scroll clear */
+      margin-bottom: calc(var(--input-h, 52px) / -2);
+      padding: 8px 12px calc(var(--input-h, 52px) / 2 + 8px);
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -348,39 +351,39 @@
       border-radius: 24px;
       padding: 8px;
     }
+    /* PastePreviewRow 191:1237 — pad 0/16, gap 4; ImageChip 185:1121 56x56 r8,
+       CloseBtn 219:3708 16x16 r8 overhanging the corner by 6px */
     .paste-preview-row {
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
+      padding: 0 16px;
     }
     .paste-preview-row:empty { display: none; }
     .paste-chip {
       position: relative;
       width: 56px;
       height: 56px;
-      border-radius: 8px;
-      overflow: hidden;
       background: var(--color-bg-input);
-      border: 1px solid var(--color-border-input);
     }
     .paste-chip img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
+      border-radius: 8px;
       cursor: zoom-in;
     }
     .paste-chip-x {
       position: absolute;
-      top: 1px;
-      right: 1px;
+      top: -6px;
+      right: -6px;
       width: 16px;
       height: 16px;
-      padding: 3px;
-      border-radius: 50%;
+      padding: 2px;
+      border-radius: 8px;
       background: var(--color-btn-icon-bg);
       color: var(--color-text-light);
-      font-size: 12px;
       cursor: pointer;
       user-select: none;
     }
@@ -424,8 +427,6 @@
       height: auto;
       border-radius: 8px;
       object-fit: contain;
-      border-radius: 4px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
     .chat-input {
       flex: 1;
@@ -772,6 +773,17 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    /* Uniform state-change animation on every interactive control.
+       Late in the sheet so it wins same-specificity earlier transitions;
+       .mcp-tile keeps its own tuned timing. */
+    .send-btn, .stop-btn, .icon-btn, .text-btn, .model-select,
+    .select-popup .option, .toggle, .toggle .knob,
+    #updateBtn, .banner-dismiss, .paste-chip-x, .activity-log summary {
+      transition: background-color 0.15s ease, color 0.15s ease,
+                  border-color 0.15s ease, opacity 0.15s ease,
+                  transform 0.15s ease, filter 0.15s ease;
     }
   </style>
 </head>

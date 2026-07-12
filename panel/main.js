@@ -72,6 +72,33 @@
   var aeVersion = rawVer ? String(rawVer).split('x')[0] : 'unknown';
   console.log('Gaffer: AE version =', aeVersion, 'host =', hostEnv.appName);
 
+  // Panel bg follows the AE UI theme (brightness slider) instead of the
+  // fixed design token, so Gaffer matches native panels.
+  function applyHostSkin() {
+    try {
+      var raw = cs.getHostEnvironment();
+      var env = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      var c = env && env.appSkinInfo && env.appSkinInfo.panelBackgroundColor && env.appSkinInfo.panelBackgroundColor.color;
+      if (!c) return;
+      var rgb = 'rgb(' + Math.round(c.red) + ', ' + Math.round(c.green) + ', ' + Math.round(c.blue) + ')';
+      document.documentElement.style.setProperty('--color-bg-panel', rgb);
+    } catch (e) { /* keep token fallback */ }
+  }
+  applyHostSkin();
+  cs.addEventListener(CSInterface.THEME_COLOR_CHANGED_EVENT, applyHostSkin);
+
+  // Chat scrolls behind the input area by half its height — keep the
+  // --input-h var in sync as the textarea grows / paste row toggles.
+  (function () {
+    var area = document.querySelector('.chat-input-area');
+    if (!area) return;
+    function syncInputH() {
+      document.documentElement.style.setProperty('--input-h', area.offsetHeight + 'px');
+    }
+    syncInputH();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncInputH).observe(area);
+  })();
+
   // Daemon auto-start state
   var daemonStartAttempted = false;
   var wasConnected = false;
