@@ -214,6 +214,9 @@
       padding: 2px 4px;
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 12px;
+      /* pin below the body's 18px: SF Mono's baseline split at an
+         inherited 18px pushes mixed lines to ~19px */
+      line-height: 16px;
       color: var(--color-text-code);
     }
     .msg-text pre {
