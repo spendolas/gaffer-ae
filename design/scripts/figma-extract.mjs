@@ -76,6 +76,10 @@ async function main() {
   const client = new Client({ name: 'gaffer-audit', version: '1.0.0' });
   await client.connect(transport);
 
+  // Pin the Plugin Dev file — grip routes fresh sessions to the focused
+  // Figma tab, which may be a different file.
+  await call(client, 'set_active_file', { target: 'tc5ASMCGihXdPgtaMxub8t' });
+
   // Simple globals
   for (const [tool, file] of [
     ['get_variables', 'variables.json'],

@@ -184,6 +184,19 @@ Child order: **ChatMessages (grow) → UpdateBanner (hidden overlay, out of flow
 
 ## 7. Verification
 
+**Backlog status (2026-07-14): steps 1–8 all shipped.** Step 8 closed with
+`design/scripts/verify-parity.mjs` — 58/58 numeric assertions pass against the
+11 captured states (bubbles, markdown, pills, input row, chat bleed/fader
+geometry, banner, paste tray/chips, overlays, status) and all 35 color tokens
+in `design/tokens.json` match the `:root` literals exactly. Re-run after any
+design change: `figma-extract.mjs` (pins the Plugin Dev file) → `digest.mjs` →
+`panel-capture.mjs` (AE open) → `verify-parity.mjs`.
+
+Post-audit design deltas already implemented: input-section rework (in-flow →
+out-of-flow overlay stack, gradient Chat Fader 290:9686, banner 290:8929
+in-section, PastePreviewRow tray 185:1163, ImageChip 80px 176:940), host-driven
+panel bg (AppSkinInfo), chat-behind-input scroll.
+
 - Walks: zero truncation (manifest). Annotations: none. Measurements API: unsupported (spacing from autolayout — complete).
 - **Adversarial review completed**: 3 independent sweeps (States Board cells / Atoms+Molecules / Template+instance) against v1 found 30+ discrepancies; all folded into v2. Root cause (hidden-layer flattening in digests) fixed in `digest.mjs`; spec files regenerated (states-board 1890→986 visible nodes).
 - States Board ↔ code-state mapping complete; cell-by-cell verdicts in the review outputs.
