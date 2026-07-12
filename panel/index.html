@@ -314,15 +314,17 @@
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
-      margin-bottom: 4px;
     }
+    /* hasImages bubble variant: bottom pad grows to 12 (both roles) */
+    .chat-msg.has-images { padding-bottom: 12px; }
+    /* BubbleImage 185:1130 — 280x180 r8; row gap 4 */
     .bubble-image {
-      max-width: 320px;
-      max-height: 240px;
+      max-width: 280px;
+      max-height: 180px;
       width: auto;
       height: auto;
       object-fit: contain;
-      border-radius: 4px;
+      border-radius: 8px;
       cursor: zoom-in;
       display: block;
     }

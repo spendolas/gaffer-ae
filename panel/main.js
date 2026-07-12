@@ -683,6 +683,7 @@
     var div = document.createElement('div');
     div.className = 'chat-msg user';
     if (images && images.length) {
+      div.classList.add('has-images');
       var row = document.createElement('div');
       row.className = 'bubble-images-row';
       for (var i = 0; i < images.length; i++) {
