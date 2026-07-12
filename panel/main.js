@@ -357,6 +357,19 @@
         return;
       }
       if (msg.type === 'mcps') {
+        // carry icons + mask analysis over from the previous list so a
+        // refresh never regresses a tile to its monogram/img fallback
+        var prev = {};
+        availableMcps.forEach(function (s) { prev[s.id] = s; });
+        (msg.servers || []).forEach(function (s) {
+          var p = prev[s.id];
+          if (!p) return;
+          if (!s.icon && p.icon) s.icon = p.icon;
+          if (s.icon && p.icon === s.icon) {
+            s.maskable = p.maskable;
+            s.maskUrl = p.maskUrl;
+          }
+        });
         availableMcps = msg.servers || [];
         mcpListError = msg.error || null;
         renderMcpList();
@@ -885,8 +898,20 @@
   // directly; solid-background favicons get an alpha channel derived from
   // luminance (bright-on-dark or dark-on-bright, picked by corner tone),
   // so e.g. Uber's white-on-black wordmark becomes a clean silhouette.
+  // Session cache keyed by icon data — survives list refreshes so tiles
+  // never re-detect (and re-flicker) for an icon we've already analyzed.
+  var maskCache = {}; // icon dataUrl -> { maskable, maskUrl }
+  var renderQueued = false;
+  function queueRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    setTimeout(function () { renderQueued = false; renderMcpList(); }, 80);
+  }
+
   function detectMaskable(s) {
     if (!s.icon || s.maskable !== undefined || s.icon.indexOf('image/svg') !== -1) return;
+    var hit = maskCache[s.icon];
+    if (hit) { s.maskable = hit.maskable; s.maskUrl = hit.maskUrl; return; }
     s.maskable = false; // pessimistic until proven
     var img = new Image();
     img.onload = function () {
@@ -902,6 +927,7 @@
         if (transparentBg) {
           s.maskable = true;
           s.maskUrl = s.icon;
+          maskCache[s.icon] = { maskable: true, maskUrl: s.icon };
         } else {
           // luminance → alpha: glyph = pixels far from the bg tone
           var bgLum = corners.reduce(function (sum, i) {
@@ -918,8 +944,9 @@
           ctx.putImageData(out, 0, 0);
           s.maskable = true;
           s.maskUrl = c.toDataURL('image/png');
+          maskCache[s.icon] = { maskable: true, maskUrl: s.maskUrl };
         }
-        renderMcpList();
+        queueRender();
       } catch (e) { /* keep img fallback */ }
     };
     img.src = s.icon;
