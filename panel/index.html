@@ -112,6 +112,11 @@
       flex-direction: column;
       gap: 8px;
     }
+    /* Scrollbar stops at the input's top edge — inset the track by the
+       same half-height the chat box runs behind the input */
+    .chat-messages::-webkit-scrollbar-track {
+      margin-bottom: calc(var(--input-h, 52px) / 2);
+    }
     /* Global thin scrollbars (audit §1.5) — chat log, textarea, code
        blocks, MCP tiles row all inherit */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
