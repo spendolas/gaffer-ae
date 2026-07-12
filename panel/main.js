@@ -691,7 +691,7 @@
 
   function addCopyButton(div) {
     var copyBtn = document.createElement('button');
-    copyBtn.className = 'copy-btn';
+    copyBtn.className = 'icon-btn copy-btn';
     copyBtn.title = 'Copy';
     copyBtn.appendChild(icon('copy'));
     copyBtn.addEventListener('click', function () {
