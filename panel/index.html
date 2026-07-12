@@ -177,8 +177,10 @@
     .copy-btn:active { color: var(--color-text-muted); }
     .copy-btn .gicon { width: 16px; height: 16px; display: block; }
 
-    /* Markdown rendering inside chat messages */
-    .msg-text { display: block; }
+    /* Markdown rendering inside chat messages. white-space: normal —
+       the bubble's pre-wrap would render marked's inter-block newlines
+       as extra blank lines; <pre> keeps its own whitespace. */
+    .msg-text { display: block; white-space: normal; }
     .msg-text h1, .msg-text h2, .msg-text h3, .msg-text h4 {
       font-weight: 600;
       margin: 8px 0 4px 0;
@@ -189,7 +191,7 @@
     .msg-text h2 { font-size: 14px; }
     .msg-text h3 { font-size: 13px; }
     .msg-text h4 { font-size: 12px; color: var(--color-text-light); }
-    .msg-text p { margin: 6px 0; }
+    .msg-text p { margin: 3px 0; }
     .msg-text p:first-child { margin-top: 0; }
     .msg-text p:last-child { margin-bottom: 0; }
     .msg-text p:empty { display: none; }
