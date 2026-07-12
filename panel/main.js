@@ -15,7 +15,7 @@
 
   // DOM elements
   var ledEl = document.getElementById('led');
-  var statusTextEl = document.getElementById('statusText');
+  var statusWrapEl = document.getElementById('statusWrap');
   var lastJsxEl = document.getElementById('lastJsx');
   var lastResultEl = document.getElementById('lastResult');
   var chatMessagesEl = document.getElementById('chatMessages');
@@ -52,7 +52,6 @@
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
   var mcpListError = null; // daemon-reported error from last list_mcps
-  var mcpShowAll = false; // expand the collapsed needs-auth/failed group
   var pendingAuthId = null; // server id with an mcp login flow in flight
   var pendingImages = []; // [{path, dataUrl, name}] — staged for next send
   var PASTE_PREFIX = 'gaffer-paste-';
@@ -82,7 +81,7 @@
 
   function setStatus(state, text) {
     ledEl.className = 'led' + (state === 'connected' ? ' connected' : state === 'starting' ? ' starting' : '');
-    statusTextEl.textContent = text || state;
+    if (statusWrapEl) statusWrapEl.title = text || state; // star-only status: text is the tooltip
     chatInputEl.disabled = state !== 'connected';
     sendBtnEl.disabled = state !== 'connected' || chatBusy;
     // Figma InputRow state matrix: offline shows a bare panel-colored
@@ -364,6 +363,14 @@
         pendingAuthId = null;
         if (!msg.ok) showChatNotice('MCP auth failed: ' + (msg.error || 'unknown error'));
         requestMcpList(); // status may have changed either way
+        return;
+      }
+      if (msg.type === 'mcp_icons') {
+        // background favicon fetches — merge and re-render
+        availableMcps.forEach(function (s) {
+          if (msg.icons && msg.icons[s.id]) s.icon = msg.icons[s.id];
+        });
+        renderMcpList();
         return;
       }
 
@@ -856,8 +863,17 @@
 
   function requestMcpList() {
     if (!ws || ws.readyState !== 1) return;
-    if (mcpListEl) mcpListEl.innerHTML = '<span style="color:var(--color-text-dimmest);">loading…</span>';
+    if (mcpListEl) mcpListEl.innerHTML = '<span class="mcp-loading">loading…</span>';
     ws.send(JSON.stringify({ type: 'list_mcps' }));
+  }
+
+  // Tile state (audit §4.6): amber = needs auth, red = failed,
+  // blue = enabled (in the chat allowlist), no fill = available.
+  function mcpTileState(s) {
+    var connected = s.status.indexOf('Connected') !== -1;
+    if (!connected && s.status.indexOf('auth') !== -1) return 'auth';
+    if (!connected) return 'failed';
+    return enabledMcps.indexOf(s.id) !== -1 ? 'enabled' : 'available';
   }
 
   function renderMcpList() {
@@ -865,110 +881,70 @@
     mcpListEl.innerHTML = '';
     if (!availableMcps.length) {
       var empty = document.createElement('span');
-      if (mcpListError) {
-        empty.style.color = 'var(--color-accent-red)';
-        empty.textContent = mcpListError;
-        empty.title = mcpListError;
-      } else {
-        empty.style.color = 'var(--color-text-dimmest)';
-        empty.textContent = 'none registered';
-      }
+      empty.className = mcpListError ? 'mcp-error' : 'mcp-loading';
+      empty.textContent = mcpListError || 'none registered';
+      if (mcpListError) empty.title = mcpListError;
       mcpListEl.appendChild(empty);
       return;
     }
-    // enabled → connected → needs-auth → failed, alphabetical within rank
-    function mcpRank(s) {
-      if (enabledMcps.indexOf(s.id) !== -1) return 0;
-      if (s.status.indexOf('Connected') !== -1) return 1;
-      if (s.status.indexOf('auth') !== -1) return 2;
-      return 3;
-    }
+    var RANK = { enabled: 0, available: 1, auth: 2, failed: 3 };
     var sorted = availableMcps.slice().sort(function (a, b) {
-      var r = mcpRank(a) - mcpRank(b);
+      var r = RANK[mcpTileState(a)] - RANK[mcpTileState(b)];
       return r !== 0 ? r : a.displayName.localeCompare(b.displayName);
     });
-
-    var hidden = 0;
-    sorted.forEach(function (s) {
-      var rank = mcpRank(s);
-      if (rank >= 2 && !mcpShowAll) { hidden++; return; }
-      mcpListEl.appendChild(buildMcpEntry(s));
-    });
-
-    if (hidden > 0) {
-      var more = document.createElement('span');
-      more.style.color = 'var(--color-text-dimmer)';
-      more.style.cursor = 'pointer';
-      more.style.textDecoration = 'underline';
-      more.textContent = '+' + hidden + ' need auth';
-      more.addEventListener('click', function () { mcpShowAll = true; renderMcpList(); });
-      mcpListEl.appendChild(more);
-    } else if (mcpShowAll && sorted.some(function (s) { return mcpRank(s) >= 2; })) {
-      var less = document.createElement('span');
-      less.style.color = 'var(--color-text-dimmer)';
-      less.style.cursor = 'pointer';
-      less.style.textDecoration = 'underline';
-      less.textContent = 'hide';
-      less.addEventListener('click', function () { mcpShowAll = false; renderMcpList(); });
-      mcpListEl.appendChild(less);
-    }
+    sorted.forEach(function (s) { mcpListEl.appendChild(buildMcpTile(s)); });
   }
 
-  function buildMcpEntry(s) {
-    var label = document.createElement('label');
-    label.style.display = 'inline-flex';
-    label.style.alignItems = 'center';
-    label.style.gap = '3px';
-    var cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.dataset.mcpId = s.id;
-    cb.checked = enabledMcps.indexOf(s.id) !== -1;
-    cb.addEventListener('change', function () {
-      if (cb.checked) {
-        if (enabledMcps.indexOf(s.id) === -1) enabledMcps.push(s.id);
-      } else {
-        enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
-      }
-      saveChat();
-    });
-    label.appendChild(cb);
-    var dot = document.createElement('span');
-    dot.style.marginLeft = '3px';
-    dot.style.fontSize = '8px';
-    var connected = s.status.indexOf('Connected') !== -1;
-    var needsAuth = !connected && s.status.indexOf('auth') !== -1;
-    label.title = s.status;
-    if (connected) { dot.style.color = 'var(--color-accent-green)'; dot.textContent = '●'; }
-    else if (needsAuth) { dot.style.color = 'var(--color-accent-amber)'; dot.textContent = '●'; label.title = 'Needs auth — click "auth" to sign in'; }
-    else { dot.style.color = 'var(--color-accent-red)'; dot.textContent = '●'; }
-    label.appendChild(dot);
-    var name = document.createElement('span');
-    name.textContent = ' ' + s.displayName;
-    if (!connected) name.style.color = 'var(--color-text-dim)';
-    label.appendChild(name);
+  function monogram(name) {
+    var words = name.replace(/\(.*\)/, '').trim().split(/\s+/);
+    var text = words.length > 1
+      ? (words[0][0] + words[1][0])
+      : name.slice(0, 1);
+    return text.toUpperCase();
+  }
 
-    if (needsAuth) {
-      var authLink = document.createElement('span');
-      authLink.style.marginLeft = '2px';
-      if (pendingAuthId === s.id) {
-        authLink.style.color = 'var(--color-accent-amber)';
-        authLink.textContent = 'authorizing… check browser';
+  function buildMcpTile(s) {
+    var state = mcpTileState(s);
+    var tile = document.createElement('button');
+    tile.className = 'mcp-tile ' + state + (pendingAuthId === s.id ? ' authing' : '');
+    tile.title = s.displayName + ' — ' + (
+      state === 'enabled' ? 'enabled (click to disable)'
+      : state === 'available' ? 'available (click to enable)'
+      : state === 'auth' ? (pendingAuthId === s.id ? 'authorizing… check browser' : 'needs auth (click to sign in)')
+      : s.status
+    );
+    if (s.icon) {
+      var img = document.createElement('img');
+      img.src = s.icon;
+      img.alt = s.displayName;
+      // bundled SVGs are currentColor; favicons get the monochrome filter
+      if (s.icon.indexOf('image/svg') !== -1) {
+        var span = document.createElement('span');
+        span.className = 'gicon';
+        span.innerHTML = atob(s.icon.split(',')[1]);
+        tile.appendChild(span);
       } else {
-        authLink.style.color = 'var(--color-accent-blue)';
-        authLink.style.cursor = 'pointer';
-        authLink.style.textDecoration = 'underline';
-        authLink.textContent = 'auth';
-        authLink.addEventListener('click', function (e) {
-          e.preventDefault();
-          if (pendingAuthId || !ws || ws.readyState !== 1) return;
-          pendingAuthId = s.id;
-          ws.send(JSON.stringify({ type: 'auth_mcp', id: s.id }));
-          renderMcpList();
-        });
+        tile.appendChild(img);
       }
-      label.appendChild(authLink);
+    } else {
+      var mono = document.createElement('span');
+      mono.className = 'monogram';
+      mono.textContent = monogram(s.displayName);
+      tile.appendChild(mono);
     }
-    return label;
+    tile.addEventListener('click', function () {
+      if (state === 'available' || state === 'enabled') {
+        if (state === 'available') enabledMcps.push(s.id);
+        else enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
+        saveChat();
+        renderMcpList();
+      } else if (state === 'auth' && !pendingAuthId && ws && ws.readyState === 1) {
+        pendingAuthId = s.id;
+        ws.send(JSON.stringify({ type: 'auth_mcp', id: s.id }));
+        renderMcpList();
+      }
+    });
+    return tile;
   }
 
   // ── Version + update check ──

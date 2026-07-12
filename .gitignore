@@ -18,3 +18,6 @@ design/refs/
 
 # Licensed font files — local install only
 panel/fonts/
+panel/icons/mcp/*.svg
+!panel/icons/mcp/grip.svg
+panel/.gaffer-icons/

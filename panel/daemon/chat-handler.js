@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { findClaudeBinary } from './claude-binary.js';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,6 +54,109 @@ function shortToolLabel(name, input) {
 var COMPACT_THRESHOLD_TOKENS = 150000;
 
 var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
+
+// ── MCP tile icons ──────────────────────────────────────────────────
+// Resolution order (audit §4.6): bundled brand SVG → cached favicon →
+// background favicon fetch (vendor domain from the server URL) → the
+// panel falls back to a monogram tile.
+var PANEL_DIR = join(__dirname, '..');
+var BUNDLED_ICON_DIR = join(PANEL_DIR, 'icons', 'mcp');
+var ICON_CACHE_DIR = join(PANEL_DIR, '.gaffer-icons');
+
+function normName(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function iconSlug(id) {
+  return String(id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function toDataUrl(file, buf) {
+  var mime = /\.svg$/i.test(file) ? 'image/svg+xml'
+    : /\.png$/i.test(file) ? 'image/png'
+    : /\.(jpe?g)$/i.test(file) ? 'image/jpeg'
+    : 'image/x-icon';
+  return 'data:' + mime + ';base64,' + buf.toString('base64');
+}
+
+var bundledIcons = null; // normName → dataUrl, lazy
+function loadBundledIcons() {
+  if (bundledIcons) return bundledIcons;
+  bundledIcons = {};
+  try {
+    for (var f of readdirSync(BUNDLED_ICON_DIR)) {
+      if (!/\.svg$/i.test(f)) continue;
+      bundledIcons[normName(f.replace(/\.svg$/i, ''))] = toDataUrl(f, readFileSync(join(BUNDLED_ICON_DIR, f)));
+    }
+  } catch (e) { /* dir may not exist on end-user installs */ }
+  return bundledIcons;
+}
+
+function cachedIcon(id) {
+  try {
+    for (var ext of ['.svg', '.png', '.ico']) {
+      var p = join(ICON_CACHE_DIR, iconSlug(id) + ext);
+      var buf = readFileSync(p);
+      if (buf.length > 0) return toDataUrl(p, buf);
+    }
+  } catch (e) { /* miss */ }
+  return null;
+}
+
+async function fetchFavicon(id, target) {
+  var host;
+  try { host = new URL(target).hostname; } catch (e) { return null; }
+  var candidates = [host];
+  var apex = host.replace(/^[^.]+\./, '');
+  if (apex !== host && apex.indexOf('.') !== -1) candidates.push(apex);
+  for (var domain of candidates) {
+    try {
+      var res = await fetch('https://' + domain + '/favicon.ico', {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) continue;
+      var buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 32) continue; // empty/placeholder
+      mkdirSync(ICON_CACHE_DIR, { recursive: true });
+      var file = join(ICON_CACHE_DIR, iconSlug(id) + '.ico');
+      writeFileSync(file, buf);
+      return toDataUrl(file, buf);
+    } catch (e) { /* try next */ }
+  }
+  return null;
+}
+
+// Assign icons from bundled/cache synchronously; fetch the rest in the
+// background and report them via onIcons({ id: dataUrl }).
+function resolveIcons(servers, onIcons) {
+  var bundled = loadBundledIcons();
+  var misses = [];
+  for (var s of servers) {
+    var norm = normName(s.displayName);
+    var hit = null;
+    for (var key of Object.keys(bundled)) {
+      if (norm === key || norm.indexOf(key) === 0) { hit = bundled[key]; break; }
+    }
+    if (!hit) hit = cachedIcon(s.id);
+    s.icon = hit;
+    if (!hit && /^https?:\/\//.test(s.target || '')) misses.push(s);
+  }
+  if (!misses.length || typeof onIcons !== 'function') return;
+  Promise.allSettled(misses.map(function (s) {
+    return fetchFavicon(s.id, s.target).then(function (dataUrl) {
+      return dataUrl ? { id: s.id, icon: dataUrl } : null;
+    });
+  })).then(function (results) {
+    var icons = {};
+    var found = 0;
+    for (var r of results) {
+      if (r.status === 'fulfilled' && r.value) { icons[r.value.id] = r.value.icon; found++; }
+    }
+    console.log('Gaffer: favicon fetch — ' + found + '/' + misses.length + ' resolved');
+    if (found) onIcons(icons);
+  });
+}
 
 // CEP launches the daemon with a stripped PATH. Augment it so claude can
 // find node/npm and spawn stdio MCP servers (e.g. grip uses bare `node`).
@@ -350,10 +453,12 @@ export class ChatHandler {
   }
 
   /**
-   * List registered MCP servers. Returns array of { id, displayName, status }
-   * for servers that are Connected. gaffer is filtered out (built-in).
+   * List registered MCP servers. Returns array of
+   * { id, displayName, status, target, icon } — icon is a data URL from the
+   * bundled brand set or the favicon cache; misses are fetched in the
+   * background and delivered via the onIcons callback.
    */
-  async listMcps() {
+  async listMcps(onIcons) {
     var claudeBin;
     try {
       claudeBin = await findClaudeBinary();
@@ -387,13 +492,15 @@ export class ChatHandler {
           if (lastDash === -1) continue;
           var status = rest.substring(lastDash + 3).trim();
           if (id === 'gaffer') continue;
+          var target = rest.substring(0, lastDash).trim(); // url or command
           var displayName = id.replace(/^claude\.ai /, '');
           // "plugin:telegram:telegram" → "telegram (plugin)"
           if (displayName.indexOf('plugin:') === 0) {
             displayName = displayName.split(':')[1] + ' (plugin)';
           }
-          servers.push({ id: id, displayName: displayName, status: status });
+          servers.push({ id: id, displayName: displayName, status: status, target: target });
         }
+        resolveIcons(servers, onIcons);
         resolve({ servers: servers });
       });
     });

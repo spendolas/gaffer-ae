@@ -118,8 +118,9 @@ window.__audit = (function () {
     },
     'disconnected': function () {
       reset();
-      document.getElementById('led').className = 'led error';
-      document.getElementById('statusText').textContent = 'Disconnected';
+      document.getElementById('led').className = 'led';
+      var wrap = document.getElementById('statusWrap');
+      if (wrap) wrap.title = 'Disconnected';
     },
   };
   function metrics(props) {

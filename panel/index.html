@@ -487,15 +487,20 @@
       padding: 4px 8px;
       line-height: 10px;
     }
-    /* Status frame 241:2282 — pad [6,4,6,4], gap 4, 8px LED slot;
-       text carries the design's 1px baseline compensation */
+    /* Status 241:2282 (updated): bare 24x24 square, star only — status
+       reads from the star color; text lives in the tooltip */
     .activity-status {
       display: flex;
       align-items: center;
       gap: 4px;
     }
-    .activity-status .led { margin-left: 4px; }
-    .activity-status #statusText { padding: 0 4px 1px 0; }
+    .status-square {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
     .activity-more {
       display: inline-flex;
       align-items: center;
@@ -523,7 +528,53 @@
       color: var(--color-text-muted);
     }
     .activity-settings label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-    .activity-mcps { padding: 4px 8px; min-height: 48px; }
+    /* MCP tiles row (audit §4.6): 40h tiles, min 45w, equal-fill when few,
+       horizontal scroll when many. Fill = state: blue enabled, none
+       available, amber needs-auth, red failed. */
+    .activity-mcps { padding: 4px 0 4px 0; min-height: 48px; gap: 4px; }
+    .activity-mcps .icon-btn { margin-right: 8px; flex-shrink: 0; }
+    .mcp-tiles {
+      flex: 1;
+      display: flex;
+      overflow-x: auto;
+      align-items: stretch;
+      min-width: 0;
+    }
+    .mcp-loading { color: var(--color-text-dimmest); align-self: center; padding-left: 8px; }
+    .mcp-error { color: var(--color-accent-red); align-self: center; padding-left: 8px; }
+    .mcp-tile {
+      flex: 1 0 45px;
+      min-width: 45px;
+      height: 40px;
+      border: none;
+      padding: 0;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--color-mcp-tile-glyph);
+    }
+    .mcp-tile.enabled { background: var(--color-accent-blue); }
+    .mcp-tile.auth { background: var(--color-accent-amber); }
+    .mcp-tile.failed { background: var(--color-accent-red); cursor: default; }
+    .mcp-tile.enabled:hover, .mcp-tile.auth:hover { filter: brightness(1.15); }
+    .mcp-tile.available:hover { background: var(--color-border-default); }
+    .mcp-tile.authing { animation: pillPulse 1.5s ease-in-out infinite; }
+    .mcp-tile img {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+      /* brand favicons are colored; design glyphs are monochrome light */
+      filter: grayscale(1) brightness(1.9);
+    }
+    .mcp-tile .gicon { width: 20px; height: 20px; }
+    .mcp-tile .monogram {
+      font-family: "Adobe Clean SemiCondensed", "Adobe Clean", sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      line-height: 16px;
+    }
     .row-label { color: var(--color-text-dimmer); }
     .spacer { flex: 1; }
     #versionText { color: var(--color-text-dimmest); }
@@ -682,8 +733,9 @@
   <details class="activity-log">
     <summary>
       <span class="activity-status">
-        <span id="led" class="led"></span>
-        <span id="statusText">Starting...</span>
+        <span id="statusWrap" class="status-square" title="Starting...">
+          <span id="led" class="led"></span>
+        </span>
         <button id="clearBtn" class="icon-btn" title="Clear chat"></button>
         <button id="reloadBtn" class="icon-btn" title="Reload panel"></button>
       </span>
@@ -693,11 +745,10 @@
       </span>
     </summary>
     <div class="activity-settings activity-mcps">
-      <span class="row-label">MCP:</span>
-      <span id="mcpList" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-        <span style="color:var(--color-text-dimmest);">loading…</span>
-      </span>
-      <button id="refreshMcpsBtn" class="icon-btn" style="margin-left:auto;" title="Refresh MCP list"></button>
+      <div id="mcpList" class="mcp-tiles">
+        <span class="mcp-loading">loading…</span>
+      </div>
+      <button id="refreshMcpsBtn" class="icon-btn" title="Refresh MCP list"></button>
     </div>
     <div class="activity-settings">
       <span class="row-label">Model:</span>

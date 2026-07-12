@@ -22,7 +22,12 @@ var chatHandler = new ChatHandler();
 bridge.onChat = (msg, socket) => chatHandler.handleChat(msg, socket);
 bridge.onChatCancel = () => chatHandler.cancel();
 bridge.onListMcps = async (socket) => {
-  var result = await chatHandler.listMcps();
+  var result = await chatHandler.listMcps(function (icons) {
+    // background favicon fetches finished — push them to the panel
+    if (socket && socket.readyState === 1) {
+      socket.send(JSON.stringify({ type: 'mcp_icons', icons: icons }));
+    }
+  });
   if (socket && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'mcps', servers: result.servers || [], error: result.error }));
   }
