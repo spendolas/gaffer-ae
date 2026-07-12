@@ -881,27 +881,45 @@
     ws.send(JSON.stringify({ type: 'list_mcps' }));
   }
 
-  // Flat single-color glyphs: favicons with a transparent background can
-  // be used as a CSS mask (silhouette in the tile's glyph color). Solid
-  // favicons keep the <img> + monochrome filter fallback.
+  // Flat single-color glyphs: favicons with a transparent background mask
+  // directly; solid-background favicons get an alpha channel derived from
+  // luminance (bright-on-dark or dark-on-bright, picked by corner tone),
+  // so e.g. Uber's white-on-black wordmark becomes a clean silhouette.
   function detectMaskable(s) {
     if (!s.icon || s.maskable !== undefined || s.icon.indexOf('image/svg') !== -1) return;
     s.maskable = false; // pessimistic until proven
     var img = new Image();
     img.onload = function () {
       try {
+        var N = 32;
         var c = document.createElement('canvas');
-        c.width = 16; c.height = 16;
+        c.width = N; c.height = N;
         var ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0, 16, 16);
-        var d = ctx.getImageData(0, 0, 16, 16).data;
-        // sample the four corners — transparent corners = glyph-on-alpha
-        var corners = [3, (15 * 16 + 0) * 4 + 3, (0 * 16 + 15) * 4 + 3, (15 * 16 + 15) * 4 + 3];
-        var transparent = corners.every(function (i) { return d[i] < 40; });
-        if (transparent !== (s.maskable === true)) {
-          s.maskable = transparent;
-          renderMcpList();
+        ctx.drawImage(img, 0, 0, N, N);
+        var d = ctx.getImageData(0, 0, N, N).data;
+        var corners = [0, (N - 1) * 4, (N - 1) * N * 4, ((N - 1) * N + N - 1) * 4];
+        var transparentBg = corners.every(function (i) { return d[i + 3] < 40; });
+        if (transparentBg) {
+          s.maskable = true;
+          s.maskUrl = s.icon;
+        } else {
+          // luminance → alpha: glyph = pixels far from the bg tone
+          var bgLum = corners.reduce(function (sum, i) {
+            return sum + (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+          }, 0) / 4;
+          var darkBg = bgLum < 128;
+          var out = ctx.createImageData(N, N);
+          for (var p = 0; p < d.length; p += 4) {
+            var lum = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+            var a = darkBg ? lum : 255 - lum;
+            out.data[p] = 255; out.data[p + 1] = 255; out.data[p + 2] = 255;
+            out.data[p + 3] = Math.max(0, Math.min(255, (a - 40) * 1.6));
+          }
+          ctx.putImageData(out, 0, 0);
+          s.maskable = true;
+          s.maskUrl = c.toDataURL('image/png');
         }
+        renderMcpList();
       } catch (e) { /* keep img fallback */ }
     };
     img.src = s.icon;
@@ -992,10 +1010,11 @@
       span.innerHTML = atob(s.icon.split(',')[1]);
       tile.appendChild(span);
     } else if (s.icon && s.maskable) {
-      // alpha-bg favicon → flat glyph in the tile color via mask
+      // favicon → flat glyph in the tile color via mask (direct alpha or
+      // the luminance-derived alpha built in detectMaskable)
       var glyph = document.createElement('span');
       glyph.className = 'mask-glyph';
-      glyph.style.setProperty('-webkit-mask-image', 'url(' + s.icon + ')');
+      glyph.style.setProperty('-webkit-mask-image', 'url(' + (s.maskUrl || s.icon) + ')');
       tile.appendChild(glyph);
     } else if (s.icon) {
       detectMaskable(s); // async — upgrades to mask-glyph on re-render
