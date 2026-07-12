@@ -23,7 +23,11 @@
   var sendBtnEl = document.getElementById('sendBtn');
   var stopBtnEl = document.getElementById('stopBtn');
   var clearBtnEl = document.getElementById('clearBtn');
-  var modelSelectEl = document.getElementById('modelSelect');
+  var modelSelectBtnEl = document.getElementById('modelSelectBtn');
+  var modelSelectLabelEl = document.getElementById('modelSelectLabel');
+  var modelSelectPopupEl = document.getElementById('modelSelectPopup');
+  var moreLabelEl = document.getElementById('moreLabel');
+  var moreChevronEl = document.getElementById('moreChevron');
   var autoCheckEl = document.getElementById('autoCheckUpdates');
   var mcpListEl = document.getElementById('mcpList');
   var refreshMcpsBtnEl = document.getElementById('refreshMcpsBtn');
@@ -202,7 +206,7 @@
         chatHistory = data.messages;
         if (data.model) {
           currentModel = data.model;
-          modelSelectEl.value = currentModel;
+          updateModelSelect();
         }
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
@@ -365,12 +369,16 @@
 
       // ── Legacy: JSX execution request (no type field) ──
       if (!msg.id || !msg.code) return;
+      // Debug rows hidden by default (user decision) — enable with
+      // localStorage.setItem('gafferDebug', '1') in the panel console.
+      var debugRows = false;
+      try { debugRows = localStorage.getItem('gafferDebug') === '1'; } catch (e) {}
       lastJsxEl.textContent = truncate(msg.code, 80);
-      lastJsxEl.hidden = false;
+      lastJsxEl.hidden = !debugRows;
 
       evalScriptAsync(msg.code).then(function (result) {
         lastResultEl.textContent = truncate(typeof result === 'string' ? result : JSON.stringify(result), 80);
-        lastResultEl.hidden = false;
+        lastResultEl.hidden = !debugRows;
         var response;
         if (typeof result === 'object' && result.ok === false) {
           response = JSON.stringify({ id: msg.id, ok: false, error: result.error, line: result.line });
@@ -1098,13 +1106,55 @@
 
   sendBtnEl.addEventListener('click', sendChatMessage);
   stopBtnEl.addEventListener('click', stopChat);
-  clearBtnEl.addEventListener('click', clearChat);
-  document.getElementById('reloadBtn').addEventListener('click', function () {
+  // Clear/Reload live inside <summary> — preventDefault stops the click
+  // from also toggling the details element.
+  clearBtnEl.addEventListener('click', function (e) {
+    e.preventDefault();
+    clearChat();
+  });
+  document.getElementById('reloadBtn').addEventListener('click', function (e) {
+    e.preventDefault();
     location.reload();
   });
-  modelSelectEl.addEventListener('change', function () {
-    currentModel = modelSelectEl.value;
-    saveChat();
+
+  // ── Custom ModelSelect (Figma atom — options incl. Fable) ──
+  var MODELS = [
+    { value: 'fable', label: 'Fable' },
+    { value: 'opus', label: 'Opus' },
+    { value: 'sonnet', label: 'Sonnet' },
+    { value: 'haiku', label: 'Haiku' },
+  ];
+  function updateModelSelect() {
+    var m = null;
+    for (var i = 0; i < MODELS.length; i++) if (MODELS[i].value === currentModel) m = MODELS[i];
+    modelSelectLabelEl.textContent = m ? m.label : currentModel;
+    var opts = modelSelectPopupEl.querySelectorAll('.option');
+    for (var j = 0; j < opts.length; j++) {
+      opts[j].classList.toggle('selected', opts[j].dataset.value === currentModel);
+    }
+  }
+  MODELS.forEach(function (m) {
+    var opt = document.createElement('span');
+    opt.className = 'option';
+    opt.dataset.value = m.value;
+    opt.textContent = m.label;
+    opt.addEventListener('click', function () {
+      currentModel = m.value;
+      modelSelectPopupEl.hidden = true;
+      updateModelSelect();
+      saveChat();
+    });
+    modelSelectPopupEl.appendChild(opt);
+  });
+  modelSelectBtnEl.addEventListener('click', function (e) {
+    e.preventDefault();
+    modelSelectPopupEl.hidden = !modelSelectPopupEl.hidden;
+    updateModelSelect();
+  });
+  document.addEventListener('click', function (e) {
+    if (!modelSelectPopupEl.hidden && !modelSelectBtnEl.contains(e.target) && !modelSelectPopupEl.contains(e.target)) {
+      modelSelectPopupEl.hidden = true;
+    }
   });
   autoCheckEl.addEventListener('change', function () {
     autoCheckUpdates = autoCheckEl.checked;
@@ -1116,6 +1166,11 @@
   if (activityEl) activityEl.addEventListener('toggle', function () {
     // MCP status goes stale while the panel is collapsed — refresh on open
     if (activityEl.open) requestMcpList();
+    // More <-> Less, chevron flips (Figma summary affordance)
+    if (moreLabelEl) moreLabelEl.textContent = activityEl.open ? 'Less' : 'More';
+    if (moreChevronEl && typeof GafferIcons !== 'undefined') {
+      moreChevronEl.innerHTML = GafferIcons[activityEl.open ? 'chevronUp' : 'chevronDown'];
+    }
   });
   updateBtnEl.addEventListener('click', runUpdate);
   dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
@@ -1142,10 +1197,13 @@
     if (refreshMcpsBtnEl) refreshMcpsBtnEl.appendChild(icon('refresh'));
     sendBtnEl.appendChild(icon('up'));
     stopBtnEl.appendChild(icon('stop'));
+    clearBtnEl.appendChild(icon('brush'));
+    document.getElementById('reloadBtn').appendChild(icon('refresh'));
+    if (moreChevronEl) moreChevronEl.innerHTML = GafferIcons.chevronDown;
   }
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
-  modelSelectEl.value = currentModel;
+  updateModelSelect();
   restoreChat();
   loadVersion();
   if (autoCheckUpdates) {

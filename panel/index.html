@@ -479,37 +479,146 @@
     .stop-btn:hover { background: var(--color-btn-danger-hover); }
 
     /* Activity log */
+    /* ActivityLog — Figma set 191:1343: collapsed 40h / expanded 144h.
+       Status+Clear+Reload sit LEFT, More/Less pinned RIGHT. */
     .activity-log {
       border-top: 1px solid var(--color-border-default);
-      padding: 4px 12px;
+      padding: 4px 0;
       flex-shrink: 0;
       font-size: 10px;
     }
     .activity-log summary {
-      color: var(--color-text-dim);
+      color: var(--color-text-dimmer);
       cursor: pointer;
       user-select: none;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      padding: 4px 8px;
+      line-height: 10px;
     }
-    .activity-right {
+    .activity-status {
       display: flex;
       align-items: center;
-      gap: 5px;
-      font-size: 10px;
+      gap: 4px;
     }
+    .activity-status #statusText { padding: 0 6px 0 2px; }
+    .activity-more {
+      display: inline-flex;
+      align-items: center;
+      color: var(--color-text-dimmer);
+    }
+    .icon-btn {
+      width: 24px;
+      height: 24px;
+      padding: 4px;
+      border: none;
+      border-radius: 8px;
+      background: var(--color-border-default);
+      color: var(--color-text-dimmer);
+      cursor: pointer;
+    }
+    .icon-btn .gicon { width: 16px; height: 16px; display: block; }
+    .icon-btn:hover { color: var(--color-text-light-2); }
     .activity-settings {
-      padding: 6px 0 4px 0;
+      padding: 6px 8px 4px 8px;
       display: flex;
       gap: 12px;
       align-items: center;
       font-size: 10px;
+      line-height: 15px;
       color: var(--color-text-muted);
-      border-bottom: 1px solid #2a2a2a;
-      margin-bottom: 4px;
     }
     .activity-settings label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .activity-mcps { padding: 4px 8px; min-height: 48px; }
+    .row-label { color: var(--color-text-dimmer); }
+    .spacer { flex: 1; }
+    #versionText { color: var(--color-text-dimmest); }
+    /* ModelSelect atom — closed 20h r8 on border/input; popup r8 pad 2,
+       options 20h, selected on btn/primary r6 */
+    .select-wrap { position: relative; display: flex; flex: 1; }
+    .select-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
+      height: 20px;
+      padding: 2px 4px 2px 8px;
+      border: none;
+      border-radius: 8px;
+      background: var(--color-border-input);
+      color: var(--color-text-light-2);
+      font-size: 10px;
+      line-height: 10px;
+      cursor: pointer;
+    }
+    .select-btn:disabled { opacity: 0.4; cursor: default; }
+    .select-btn::after {
+      content: "";
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      background: currentColor;
+      -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M5 6.5l3 3 3-3" stroke="black" stroke-linecap="round" stroke-linejoin="round"/></svg>') center / contain no-repeat;
+    }
+    .select-popup {
+      position: absolute;
+      bottom: calc(100% + 2px);
+      left: 0;
+      min-width: 100%;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--color-border-input);
+      z-index: 50;
+    }
+    .select-popup .option {
+      display: block;
+      padding: 5px 6px;
+      border-radius: 6px;
+      color: var(--color-text-light-2);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .select-popup .option:hover { background: var(--color-btn-primary-hover); }
+    .select-popup .option.selected { background: var(--color-btn-primary-bg); }
+    /* Toggle atom — 24x12 r16 track, 12x8 r4 knob */
+    .toggle-label { color: var(--color-text-dimmer); }
+    .toggle-label input { display: none; }
+    .toggle {
+      display: inline-block;
+      width: 24px;
+      height: 12px;
+      padding: 2px;
+      border-radius: 16px;
+      background: var(--color-bg-input);
+      transition: background 0.15s;
+    }
+    .toggle .knob {
+      display: block;
+      width: 12px;
+      height: 8px;
+      border-radius: 4px;
+      background: var(--color-text-dimmest);
+      transition: transform 0.15s, background 0.15s;
+    }
+    .toggle-label input:checked + .toggle { background: var(--color-accent-blue); }
+    .toggle-label input:checked + .toggle .knob {
+      background: var(--color-text-light);
+      transform: translateX(8px);
+    }
+    .text-btn {
+      height: 20px;
+      padding: 2px 8px;
+      border: none;
+      border-radius: 8px;
+      background: var(--color-border-input);
+      color: var(--color-text-light-2);
+      font-size: 10px;
+      line-height: 10px;
+      cursor: pointer;
+    }
     .model-select {
       background: var(--color-bg-input);
       border: 1px solid var(--color-border-input);
@@ -579,33 +688,42 @@
 
   <details class="activity-log">
     <summary>
-      <span class="activity-left">Activity</span>
-      <span class="activity-right">
-        <button id="clearBtn" class="clear-btn">Clear chat</button>
-        <button id="reloadBtn" class="clear-btn">Reload</button>
+      <span class="activity-status">
         <span id="led" class="led"></span>
         <span id="statusText">Starting...</span>
+        <button id="clearBtn" class="icon-btn" title="Clear chat"></button>
+        <button id="reloadBtn" class="icon-btn" title="Reload panel"></button>
+      </span>
+      <span class="activity-more">
+        <span id="moreLabel">More</span>
+        <span id="moreChevron" class="gicon"></span>
       </span>
     </summary>
-    <div class="activity-settings">
-      <label>Model:
-        <select id="modelSelect" class="model-select">
-          <option value="fable">Fable</option>
-          <option value="opus">Opus</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="haiku">Haiku</option>
-        </select>
-      </label>
-      <label><input type="checkbox" id="autoCheckUpdates"> Auto-check updates</label>
-      <button id="checkNowBtn" class="clear-btn">Check now</button>
-      <span id="versionText" style="margin-left:auto; color:var(--color-text-dimmest);">v—</span>
-    </div>
     <div class="activity-settings activity-mcps">
-      <span style="color:var(--color-text-dimmer);">MCP:</span>
+      <span class="row-label">MCP:</span>
       <span id="mcpList" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
         <span style="color:var(--color-text-dimmest);">loading…</span>
       </span>
-      <button id="refreshMcpsBtn" class="clear-btn" style="margin-left:auto;" title="Refresh MCP list"></button>
+      <button id="refreshMcpsBtn" class="icon-btn" style="margin-left:auto;" title="Refresh MCP list"></button>
+    </div>
+    <div class="activity-settings">
+      <span class="row-label">Model:</span>
+      <span class="select-wrap">
+        <button id="modelSelectBtn" class="select-btn"><span id="modelSelectLabel">Opus</span></button>
+        <div id="modelSelectPopup" class="select-popup" hidden></div>
+      </span>
+      <button class="select-btn" disabled title="Model variant — plumbing pending"><span>Latest • 1M</span></button>
+      <button class="select-btn" disabled title="Effort — plumbing pending"><span>High</span></button>
+    </div>
+    <div class="activity-settings">
+      <span id="versionText">v—</span>
+      <span class="spacer"></span>
+      <label class="toggle-label">
+        <input type="checkbox" id="autoCheckUpdates">
+        <span class="toggle"><span class="knob"></span></span>
+        Auto-check updates
+      </label>
+      <button id="checkNowBtn" class="text-btn">Check now</button>
     </div>
     <div id="lastJsx" class="value" hidden></div>
     <div id="lastResult" class="value" hidden></div>
