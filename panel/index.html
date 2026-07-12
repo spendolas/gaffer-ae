@@ -204,18 +204,16 @@
     .msg-text li + li { margin-top: 2px; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
     .msg-text ul + p, .msg-text ol + p { margin-top: 6px; }
-    /* CodeInline 185:1156 — pad 1/4, r4, 18h chip: fits the 18px body
-       line exactly, no line growth */
+    /* CodeInline 185:1156 — pad 2/4, r4, 20h chip. display:inline so the
+       vertical padding paints outside the line box: the 18px body line
+       rhythm stays untouched (the chip bleeds 1px past the line, by design). */
     .msg-text code {
-      display: inline-block;
       background: var(--color-code-inline-bg);
       border: none;
       border-radius: 4px;
-      padding: 1px 4px;
+      padding: 2px 4px;
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 12px;
-      line-height: 16px;
-      vertical-align: middle;
       color: var(--color-text-code);
     }
     .msg-text pre {
