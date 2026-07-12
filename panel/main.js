@@ -818,7 +818,7 @@
 
   function requestMcpList() {
     if (!ws || ws.readyState !== 1) return;
-    if (mcpListEl) mcpListEl.innerHTML = '<span style="color:#666;">loading…</span>';
+    if (mcpListEl) mcpListEl.innerHTML = '<span style="color:var(--color-text-dimmest);">loading…</span>';
     ws.send(JSON.stringify({ type: 'list_mcps' }));
   }
 
@@ -828,11 +828,11 @@
     if (!availableMcps.length) {
       var empty = document.createElement('span');
       if (mcpListError) {
-        empty.style.color = '#c44';
+        empty.style.color = 'var(--color-accent-red)';
         empty.textContent = mcpListError;
         empty.title = mcpListError;
       } else {
-        empty.style.color = '#666';
+        empty.style.color = 'var(--color-text-dimmest)';
         empty.textContent = 'none registered';
       }
       mcpListEl.appendChild(empty);
@@ -859,7 +859,7 @@
 
     if (hidden > 0) {
       var more = document.createElement('span');
-      more.style.color = '#888';
+      more.style.color = 'var(--color-text-dimmer)';
       more.style.cursor = 'pointer';
       more.style.textDecoration = 'underline';
       more.textContent = '+' + hidden + ' need auth';
@@ -867,7 +867,7 @@
       mcpListEl.appendChild(more);
     } else if (mcpShowAll && sorted.some(function (s) { return mcpRank(s) >= 2; })) {
       var less = document.createElement('span');
-      less.style.color = '#888';
+      less.style.color = 'var(--color-text-dimmer)';
       less.style.cursor = 'pointer';
       less.style.textDecoration = 'underline';
       less.textContent = 'hide';
@@ -900,23 +900,23 @@
     var connected = s.status.indexOf('Connected') !== -1;
     var needsAuth = !connected && s.status.indexOf('auth') !== -1;
     label.title = s.status;
-    if (connected) { dot.style.color = '#4c8'; dot.textContent = '●'; }
-    else if (needsAuth) { dot.style.color = '#da3'; dot.textContent = '●'; label.title = 'Needs auth — click "auth" to sign in'; }
-    else { dot.style.color = '#c44'; dot.textContent = '●'; }
+    if (connected) { dot.style.color = 'var(--color-accent-green)'; dot.textContent = '●'; }
+    else if (needsAuth) { dot.style.color = 'var(--color-accent-amber)'; dot.textContent = '●'; label.title = 'Needs auth — click "auth" to sign in'; }
+    else { dot.style.color = 'var(--color-accent-red)'; dot.textContent = '●'; }
     label.appendChild(dot);
     var name = document.createElement('span');
     name.textContent = ' ' + s.displayName;
-    if (!connected) name.style.color = '#777';
+    if (!connected) name.style.color = 'var(--color-text-dim)';
     label.appendChild(name);
 
     if (needsAuth) {
       var authLink = document.createElement('span');
       authLink.style.marginLeft = '2px';
       if (pendingAuthId === s.id) {
-        authLink.style.color = '#da3';
+        authLink.style.color = 'var(--color-accent-amber)';
         authLink.textContent = 'authorizing… check browser';
       } else {
-        authLink.style.color = '#7ab';
+        authLink.style.color = 'var(--color-accent-blue)';
         authLink.style.cursor = 'pointer';
         authLink.style.textDecoration = 'underline';
         authLink.textContent = 'auth';

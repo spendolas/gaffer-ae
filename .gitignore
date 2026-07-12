@@ -15,3 +15,6 @@ Knowledge/
 
 # Design reference exports (local working material, repo is public)
 design/refs/
+
+# Licensed font files — local install only
+panel/fonts/
