@@ -152,8 +152,9 @@
     .chat-msg.assistant {
       background: transparent;
       border-radius: 16px 16px 16px 2px;
-      align-self: flex-start;
-      max-width: min(300px, 95%);
+      /* row-assistant fills with 80px reserved on the right (Figma update) */
+      align-self: stretch;
+      margin-right: 80px;
       color: var(--color-text-light-2);
     }
     .chat-msg.error {
@@ -293,11 +294,14 @@
       height: 4px;
       border-radius: 50%;
       background: currentColor;
-      animation: typingPulse 1.2s ease-in-out infinite;
+      animation: typingBounce 1.2s ease-in-out infinite;
     }
-    .typing-indicator i:nth-child(2) { animation-delay: 0.2s; }
-    .typing-indicator i:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes typingPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+    .typing-indicator i:nth-child(2) { animation-delay: 0.15s; }
+    .typing-indicator i:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes typingBounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+      30% { transform: translateY(-3px); opacity: 1; }
+    }
     .chat-notice {
       align-self: center;
       color: var(--color-text-dimmer);
