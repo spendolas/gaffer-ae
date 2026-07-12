@@ -45,7 +45,7 @@ window.__audit = (function () {
     document.getElementById('dropOverlay').classList.remove('visible');
     var lb = document.getElementById('imgLightbox'); lb.hidden = true;
     document.getElementById('pastePreviewRow').innerHTML = '';
-    document.querySelector('.activity-log').open = false;
+    document.querySelector('.activity-log').classList.remove('expanded');
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('sendBtn').style.display = '';
   }
@@ -96,7 +96,7 @@ window.__audit = (function () {
     },
     'activity-open': function () {
       reset();
-      document.querySelector('.activity-log').open = true;
+      document.querySelector('.activity-log').classList.add('expanded');
     },
     'paste-preview': function () {
       reset();

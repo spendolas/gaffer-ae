@@ -331,6 +331,7 @@
     /* InputArea — Figma 191:1273 / InputRow set 195:1429: pill field r24
        with the send/stop button embedded, bottom-anchored */
     .chat-input-area {
+      position: relative; /* anchors the update-banner overlay */
       display: flex;
       gap: 6px;
       padding: 2px 6px;
@@ -384,18 +385,19 @@
     .paste-chip-x:hover { background: var(--color-accent-red); color: var(--color-text-white); }
 
     /* Drag-over hint and lightbox */
+    /* DropOverlay 191:1275 — flat, no border; 'Drop here' above the icon */
     .drop-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
       background: var(--color-overlay-drop);
-      border: 2px dashed var(--color-accent-blue);
       display: flex;
+      flex-direction: column;
+      gap: 8px;
       align-items: center;
       justify-content: center;
-      color: var(--color-text-white);
-      font-size: 16px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
+      color: var(--color-border-banner);
+      font-size: 10px;
+      line-height: 15px;
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.15s;
@@ -418,6 +420,7 @@
       max-height: 90vh;
       width: auto;
       height: auto;
+      border-radius: 8px;
       object-fit: contain;
       border-radius: 4px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
@@ -434,7 +437,7 @@
          row's pad 8, keeping the pill at the designed 48px */
       padding: 0 8px;
       height: 18px;
-      max-height: 72px;
+      max-height: 144px; /* 8 lines x 18px */
       align-self: center;
       resize: none;
       outline: none;
@@ -518,6 +521,15 @@
     }
     .icon-btn .gicon { width: 16px; height: 16px; display: block; }
     .icon-btn:hover { color: var(--color-text-light-2); }
+    /* Animated expand/collapse — native <details> can't transition, so
+       the element stays open and .expanded drives the body height */
+    .activity-body {
+      overflow: hidden;
+      max-height: 0;
+      opacity: 0;
+      transition: max-height 0.28s ease, opacity 0.2s ease;
+    }
+    .activity-log.expanded .activity-body { max-height: 240px; opacity: 1; }
     .activity-settings {
       padding: 6px 8px 4px 8px;
       display: flex;
@@ -699,33 +711,57 @@
       border-radius: 3px;
       cursor: pointer;
     }
+    /* UpdateBanner 191:1271 — hidden overlay pill docked flush above the
+       input area, overlapping the chat bottom; no shadow (flat design) */
     .update-banner {
-      background: var(--color-bg-banner);
-      border-bottom: 1px solid var(--color-border-banner);
-      padding: 6px 12px;
-      font-size: 11px;
-      color: var(--color-text-light);
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      right: 0;
       display: none;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      flex-shrink: 0;
+      justify-content: center;
+      padding: 4px 6px 0 6px;
+      pointer-events: none;
     }
     .update-banner.visible { display: flex; }
-    .update-banner .actions { display: flex; gap: 4px; }
-    .update-banner button {
-      background: var(--color-btn-primary-bg);
+    .banner-pill {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 40px;
+      padding: 6px 6px 6px 12px;
+      background: var(--color-bg-banner);
+      border-radius: 16px 16px 0 0;
+    }
+    .banner-text {
+      font-size: 12px;
+      line-height: 16px;
+      color: var(--color-accent-blue);
+    }
+    .update-banner .actions { display: flex; align-items: center; gap: 4px; }
+    #updateBtn {
+      height: 20px;
+      padding: 2px 8px;
       border: none;
-      color: var(--color-text-white);
-      padding: 3px 8px;
-      border-radius: 3px;
+      border-radius: 8px;
+      background: var(--color-btn-primary-bg);
+      color: var(--color-bg-panel);
       font-size: 10px;
+      line-height: 10px;
       cursor: pointer;
     }
-    .update-banner button.dismiss {
+    #updateBtn:hover { background: var(--color-btn-primary-hover); }
+    .banner-dismiss {
+      width: 20px;
+      height: 20px;
+      padding: 2px;
+      border: none;
+      border-radius: 8px;
       background: transparent;
-      color: var(--color-text-muted);
+      color: var(--color-btn-primary-bg);
+      cursor: pointer;
     }
+    .banner-dismiss .gicon { width: 16px; height: 16px; display: block; }
     .activity-log .value {
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 10px;
@@ -738,17 +774,18 @@
   </style>
 </head>
 <body>
-  <div id="updateBanner" class="update-banner">
-    <span id="updateText">Update available</span>
-    <span class="actions">
-      <button id="updateBtn">Update now</button>
-      <button id="dismissUpdateBtn" class="dismiss">Dismiss</button>
-    </span>
-  </div>
-
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
+    <div id="updateBanner" class="update-banner">
+      <div class="banner-pill">
+        <span id="updateText" class="banner-text">Update available</span>
+        <span class="actions">
+          <button id="updateBtn">Update</button>
+          <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss"></button>
+        </span>
+      </div>
+    </div>
     <div class="paste-preview-row" id="pastePreviewRow"></div>
     <div class="chat-input-row">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
@@ -757,7 +794,7 @@
     </div>
   </div>
 
-  <details class="activity-log">
+  <details class="activity-log" open>
     <summary>
       <span class="activity-status">
         <span id="statusWrap" class="status-square" title="Starting...">
@@ -771,6 +808,7 @@
         <span id="moreChevron" class="gicon"></span>
       </span>
     </summary>
+    <div class="activity-body">
     <div class="activity-settings activity-mcps">
       <div id="mcpList" class="mcp-tiles">
         <span class="mcp-loading">loading…</span>
@@ -797,9 +835,10 @@
     </div>
     <div id="lastJsx" class="value" hidden></div>
     <div id="lastResult" class="value" hidden></div>
+    </div>
   </details>
 
-  <div class="drop-overlay" id="dropOverlay"><span>Drop image here</span></div>
+  <div class="drop-overlay" id="dropOverlay"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
   <div class="img-lightbox" id="imgLightbox" hidden><img></div>
 
   <script src="lib/CSInterface.js"></script>

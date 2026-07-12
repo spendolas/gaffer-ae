@@ -1144,7 +1144,7 @@
           return;
         }
         if (remote.commit === dismissedUpdateCommit) return;
-        updateTextEl.textContent = '⬆ Update available: ' + remote.commit.substring(0, 7) + ' (current: ' + versionData.commit.substring(0, 7) + ')';
+        updateTextEl.textContent = 'Update available — ' + remote.commit.substring(0, 7);
         updateBannerEl.classList.add('visible');
         updateBannerEl._latestCommit = remote.commit;
       }).catch(function (e) {
@@ -1271,18 +1271,27 @@
     saveChat();
   });
   checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
+  // Drawer expand/collapse is class-driven with a height transition —
+  // native <details> toggling can't animate, so it stays `open` and the
+  // .expanded class shows/hides the animated .activity-body.
   var activityEl = document.querySelector('.activity-log');
-  // No refresh button — the list refreshes under the hood: on open,
+  function activityExpanded() {
+    return activityEl && activityEl.classList.contains('expanded');
+  }
+  // No refresh button — the list refreshes under the hood: on expand,
   // then every 60s while the drawer stays open (silent, no flicker).
   setInterval(function () {
-    if (activityEl && activityEl.open) requestMcpList(true);
+    if (activityExpanded()) requestMcpList(true);
   }, 60000);
-  if (activityEl) activityEl.addEventListener('toggle', function () {
-    if (activityEl.open) requestMcpList(availableMcps.length > 0);
+  if (activityEl) activityEl.querySelector('summary').addEventListener('click', function (e) {
+    if (e.defaultPrevented) return; // Clear/Reload buttons handled their own click
+    e.preventDefault(); // keep the native details from toggling
+    var expanded = activityEl.classList.toggle('expanded');
+    if (expanded) requestMcpList(availableMcps.length > 0);
     // More <-> Less, chevron flips (Figma summary affordance)
-    if (moreLabelEl) moreLabelEl.textContent = activityEl.open ? 'Less' : 'More';
+    if (moreLabelEl) moreLabelEl.textContent = expanded ? 'Less' : 'More';
     if (moreChevronEl && typeof GafferIcons !== 'undefined') {
-      moreChevronEl.innerHTML = GafferIcons[activityEl.open ? 'chevronUp' : 'chevronDown'];
+      moreChevronEl.innerHTML = GafferIcons[expanded ? 'chevronUp' : 'chevronDown'];
     }
   });
   updateBtnEl.addEventListener('click', runUpdate);
@@ -1297,7 +1306,7 @@
   chatInputEl.addEventListener('input', function () {
     sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
     chatInputEl.style.height = '18px';
-    chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 72) + 'px';
+    chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 144) + 'px';
   });
 
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching
@@ -1312,6 +1321,9 @@
     clearBtnEl.appendChild(icon('brush'));
     document.getElementById('reloadBtn').appendChild(icon('refresh'));
     if (moreChevronEl) moreChevronEl.innerHTML = GafferIcons.chevronDown;
+    dismissUpdateBtnEl.appendChild(icon('close'));
+    var dropIconEl = document.getElementById('dropIcon');
+    if (dropIconEl) dropIconEl.innerHTML = GafferIcons.drop;
   }
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
