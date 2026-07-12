@@ -18,6 +18,9 @@
       --color-bg-panel: #232323;
       --color-bg-input: #121212;
       --color-bg-banner: #173658;
+      /* fader's transparent knot — always the same hex as bg-panel at
+         alpha 0; both re-derived together from AppSkinInfo in JS */
+      --color-bg-panel-0: rgba(35, 35, 35, 0);
       --color-border-default: #333333;
       --color-border-input: #444444;
       --color-border-banner: #5876b2;
@@ -104,18 +107,19 @@
     .chat-messages {
       flex: 1;
       overflow-y: scroll;
-      /* Chat runs behind the input area by half its height (--input-h is
-         kept live from JS); extra bottom padding lets content scroll clear */
-      margin-bottom: calc(var(--input-h, 52px) / -2);
-      padding: 8px 12px calc(var(--input-h, 52px) / 2 + 8px);
+      /* Chat runs behind the input section down to the fader's solid
+         edge (26px into the input row); extra bottom padding lets
+         content scroll clear. --input-h/--row-h kept live from JS. */
+      margin-bottom: calc(-1 * (var(--input-h, 52px) - var(--row-h, 48px) + 24px));
+      padding: 8px 12px calc(var(--input-h, 52px) - var(--row-h, 48px) + 32px);
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
-    /* Scrollbar stops at the input's top edge — inset the track by the
-       same half-height the chat box runs behind the input */
+    /* Scrollbar stops at the input section's top edge — inset the track
+       by the full bleed the chat box runs behind it */
     .chat-messages::-webkit-scrollbar-track {
-      margin-bottom: calc(var(--input-h, 52px) / 2);
+      margin-bottom: calc(var(--input-h, 52px) - var(--row-h, 48px) + 24px);
     }
     /* Global thin scrollbars (audit §1.5) — chat log, textarea, code
        blocks, MCP tiles row all inherit */
@@ -348,17 +352,19 @@
       flex-shrink: 0;
       flex-direction: column;
     }
-    /* Chat Fader 290:8501 — solid panel-bg block masking the chat bleed
-       behind the input area, reaching 14px above it (master geometry:
-       14 + half the area height) */
+    /* Chat Fader 290:9686 — gradient anchored to the input row: solid
+       panel-bg from 26px into the row, fading out over the 24px above
+       its top (48px box at row-top -22). Sits above the banner (washing
+       the pill bottom, per Figma) and below the row/tray (positioned). */
     .chat-input-area::before {
       content: '';
       position: absolute;
-      left: 0;
-      right: 0;
-      top: -14px;
-      height: calc(var(--input-h, 52px) / 2 + 14px);
-      background: var(--color-bg-panel);
+      left: 6px;
+      right: 6px;
+      bottom: calc(var(--row-h, 48px) - 24px);
+      height: 48px;
+      background: linear-gradient(to top, var(--color-bg-panel) 50%, var(--color-bg-panel-0) 100%);
+      pointer-events: none;
     }
     .chat-input-row {
       position: relative; /* paints above the chat fader */
@@ -379,9 +385,10 @@
       flex-wrap: wrap;
       gap: 4px;
       padding: 4px;
+      margin: 4px 0; /* Preview Row Wrapper 290:9365 pad */
       align-self: center;
       background: var(--color-bg-input);
-      border-radius: 12px 12px 0 0;
+      border-radius: 12px; /* floats now — all corners */
     }
     .paste-preview-row:empty { display: none; }
     .paste-chip {
@@ -740,19 +747,16 @@
     }
     /* UpdateBanner 191:1271 — hidden overlay pill docked flush above the
        input area, overlapping the chat bottom; no shadow (flat design) */
+    /* UpdateBanner 290:8929 — in-flow between the preview tray and the
+       input row; pill docks flush on the pill row (r 16/16/0/0), its
+       bottom washed by the chat fader per the Figma render */
     .update-banner {
-      position: absolute;
-      bottom: 100%;
-      left: 0;
-      right: 0;
       display: none;
       justify-content: center;
-      padding: 4px 6px 0 6px;
-      pointer-events: none;
+      padding: 0 6px;
     }
     .update-banner.visible { display: flex; }
     .banner-pill {
-      pointer-events: auto;
       display: flex;
       align-items: center;
       gap: 40px;
@@ -763,6 +767,7 @@
     .banner-text {
       font-size: 12px;
       line-height: 16px;
+      padding-bottom: 2px; /* Text Wrapper compensate */
       color: var(--color-accent-blue);
     }
     .update-banner .actions { display: flex; align-items: center; gap: 4px; }
@@ -815,6 +820,7 @@
   <div id="chatMessages" class="chat-messages"></div>
 
   <div class="chat-input-area">
+    <div class="paste-preview-row" id="pastePreviewRow"></div>
     <div id="updateBanner" class="update-banner">
       <div class="banner-pill">
         <span id="updateText" class="banner-text">Update available</span>
@@ -824,7 +830,6 @@
         </span>
       </div>
     </div>
-    <div class="paste-preview-row" id="pastePreviewRow"></div>
     <div class="chat-input-row">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
       <button id="sendBtn" class="send-btn" title="Send" disabled></button>

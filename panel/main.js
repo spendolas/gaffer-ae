@@ -80,8 +80,10 @@
       var env = typeof raw === 'string' ? JSON.parse(raw) : raw;
       var c = env && env.appSkinInfo && env.appSkinInfo.panelBackgroundColor && env.appSkinInfo.panelBackgroundColor.color;
       if (!c) return;
-      var rgb = 'rgb(' + Math.round(c.red) + ', ' + Math.round(c.green) + ', ' + Math.round(c.blue) + ')';
-      document.documentElement.style.setProperty('--color-bg-panel', rgb);
+      var triplet = Math.round(c.red) + ', ' + Math.round(c.green) + ', ' + Math.round(c.blue);
+      document.documentElement.style.setProperty('--color-bg-panel', 'rgb(' + triplet + ')');
+      // fader's transparent knot tracks the same color at alpha 0
+      document.documentElement.style.setProperty('--color-bg-panel-0', 'rgba(' + triplet + ', 0)');
     } catch (e) { /* keep token fallback */ }
   }
   applyHostSkin();
@@ -91,12 +93,18 @@
   // --input-h var in sync as the textarea grows / paste row toggles.
   (function () {
     var area = document.querySelector('.chat-input-area');
-    if (!area) return;
+    var row = document.querySelector('.chat-input-row');
+    if (!area || !row) return;
     function syncInputH() {
       document.documentElement.style.setProperty('--input-h', area.offsetHeight + 'px');
+      document.documentElement.style.setProperty('--row-h', row.offsetHeight + 'px');
     }
     syncInputH();
-    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncInputH).observe(area);
+    if (typeof ResizeObserver !== 'undefined') {
+      var ro = new ResizeObserver(syncInputH);
+      ro.observe(area);
+      ro.observe(row);
+    }
   })();
 
   // Daemon auto-start state
@@ -1175,7 +1183,7 @@
           return;
         }
         if (remote.commit === dismissedUpdateCommit) return;
-        updateTextEl.textContent = 'Update available — ' + remote.commit.substring(0, 7);
+        updateTextEl.textContent = 'Update available — v' + remote.version;
         updateBannerEl.classList.add('visible');
         updateBannerEl._latestCommit = remote.commit;
       }).catch(function (e) {
