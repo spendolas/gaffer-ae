@@ -12,6 +12,14 @@ LOG="${TMPDIR:-/tmp}/gaffer-update.log"
 exec >> "$LOG" 2>&1
 echo "=== Update started: $(date) ==="
 
+# Never overwrite a development checkout — a dev install symlinks the panel
+# out of a git repo; rsync --delete would clobber uncommitted work.
+if [ -d "$PANEL_DIR/../.git" ] || [ -d "$PANEL_DIR/.git" ]; then
+  echo "ERROR: panel dir is inside a git repo (dev install) — refusing to update. Use git pull instead."
+  echo "err:dev-install"
+  exit 1
+fi
+
 # Get latest version info from raw version.json
 REMOTE_VERSION=$(curl -s "https://raw.githubusercontent.com/$REPO/main/panel/version.json")
 LATEST_COMMIT=$(echo "$REMOTE_VERSION" | grep -o '"commit": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
@@ -72,10 +80,13 @@ if [ -n "${NODE:-}" ]; then
   PATH="$NPM_DIR:$PATH" npm install --production
 fi
 
-# Write new version.json
+# Write new version.json — version comes from the downloaded tarball,
+# only the commit is stamped (rsync already copied the tarball's file,
+# but stamp explicitly in case the tarball's commit field is stale).
+LATEST_VERSION=$(grep -o '"version": *"[^"]*"' "$EXTRACTED/panel/version.json" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
 cat > "$PANEL_DIR/version.json" << EOF
 {
-  "version": "0.2.0",
+  "version": "${LATEST_VERSION:-0.0.0}",
   "commit": "$LATEST_COMMIT"
 }
 EOF

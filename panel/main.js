@@ -39,6 +39,9 @@
   var dismissedUpdateCommit = null;
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
+  var mcpListError = null; // daemon-reported error from last list_mcps
+  var mcpShowAll = false; // expand the collapsed needs-auth/failed group
+  var pendingAuthId = null; // server id with an mcp login flow in flight
   var pendingImages = []; // [{path, dataUrl, name}] — staged for next send
   var PASTE_PREFIX = 'gaffer-paste-';
   var MAX_PASTE_FILES = 10;
@@ -327,7 +330,14 @@
       }
       if (msg.type === 'mcps') {
         availableMcps = msg.servers || [];
+        mcpListError = msg.error || null;
         renderMcpList();
+        return;
+      }
+      if (msg.type === 'mcp_auth_done') {
+        pendingAuthId = null;
+        if (!msg.ok) showChatNotice('MCP auth failed: ' + (msg.error || 'unknown error'));
+        requestMcpList(); // status may have changed either way
         return;
       }
 
@@ -817,44 +827,136 @@
     mcpListEl.innerHTML = '';
     if (!availableMcps.length) {
       var empty = document.createElement('span');
-      empty.style.color = '#666';
-      empty.textContent = 'none registered';
+      if (mcpListError) {
+        empty.style.color = '#c44';
+        empty.textContent = mcpListError;
+        empty.title = mcpListError;
+      } else {
+        empty.style.color = '#666';
+        empty.textContent = 'none registered';
+      }
       mcpListEl.appendChild(empty);
       return;
     }
-    availableMcps.forEach(function (s) {
-      var label = document.createElement('label');
-      label.style.display = 'inline-flex';
-      label.style.alignItems = 'center';
-      label.style.gap = '3px';
-      var cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset.mcpId = s.id;
-      cb.checked = enabledMcps.indexOf(s.id) !== -1;
-      cb.addEventListener('change', function () {
-        if (cb.checked) {
-          if (enabledMcps.indexOf(s.id) === -1) enabledMcps.push(s.id);
-        } else {
-          enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
-        }
-        saveChat();
-      });
-      label.appendChild(cb);
-      var dot = document.createElement('span');
-      dot.style.marginLeft = '3px';
-      dot.style.fontSize = '8px';
-      if (s.status.indexOf('Connected') !== -1) { dot.style.color = '#4c8'; dot.textContent = '●'; }
-      else if (s.status.indexOf('auth') !== -1) { dot.style.color = '#da3'; dot.textContent = '●'; label.title = 'Needs auth'; }
-      else { dot.style.color = '#c44'; dot.textContent = '●'; label.title = s.status; }
-      label.appendChild(dot);
-      label.appendChild(document.createTextNode(' ' + s.displayName));
-      mcpListEl.appendChild(label);
+    // enabled → connected → needs-auth → failed, alphabetical within rank
+    function mcpRank(s) {
+      if (enabledMcps.indexOf(s.id) !== -1) return 0;
+      if (s.status.indexOf('Connected') !== -1) return 1;
+      if (s.status.indexOf('auth') !== -1) return 2;
+      return 3;
+    }
+    var sorted = availableMcps.slice().sort(function (a, b) {
+      var r = mcpRank(a) - mcpRank(b);
+      return r !== 0 ? r : a.displayName.localeCompare(b.displayName);
     });
+
+    var hidden = 0;
+    sorted.forEach(function (s) {
+      var rank = mcpRank(s);
+      if (rank >= 2 && !mcpShowAll) { hidden++; return; }
+      mcpListEl.appendChild(buildMcpEntry(s));
+    });
+
+    if (hidden > 0) {
+      var more = document.createElement('span');
+      more.style.color = '#888';
+      more.style.cursor = 'pointer';
+      more.style.textDecoration = 'underline';
+      more.textContent = '+' + hidden + ' need auth';
+      more.addEventListener('click', function () { mcpShowAll = true; renderMcpList(); });
+      mcpListEl.appendChild(more);
+    } else if (mcpShowAll && sorted.some(function (s) { return mcpRank(s) >= 2; })) {
+      var less = document.createElement('span');
+      less.style.color = '#888';
+      less.style.cursor = 'pointer';
+      less.style.textDecoration = 'underline';
+      less.textContent = 'hide';
+      less.addEventListener('click', function () { mcpShowAll = false; renderMcpList(); });
+      mcpListEl.appendChild(less);
+    }
+  }
+
+  function buildMcpEntry(s) {
+    var label = document.createElement('label');
+    label.style.display = 'inline-flex';
+    label.style.alignItems = 'center';
+    label.style.gap = '3px';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.mcpId = s.id;
+    cb.checked = enabledMcps.indexOf(s.id) !== -1;
+    cb.addEventListener('change', function () {
+      if (cb.checked) {
+        if (enabledMcps.indexOf(s.id) === -1) enabledMcps.push(s.id);
+      } else {
+        enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
+      }
+      saveChat();
+    });
+    label.appendChild(cb);
+    var dot = document.createElement('span');
+    dot.style.marginLeft = '3px';
+    dot.style.fontSize = '8px';
+    var connected = s.status.indexOf('Connected') !== -1;
+    var needsAuth = !connected && s.status.indexOf('auth') !== -1;
+    label.title = s.status;
+    if (connected) { dot.style.color = '#4c8'; dot.textContent = '●'; }
+    else if (needsAuth) { dot.style.color = '#da3'; dot.textContent = '●'; label.title = 'Needs auth — click "auth" to sign in'; }
+    else { dot.style.color = '#c44'; dot.textContent = '●'; }
+    label.appendChild(dot);
+    var name = document.createElement('span');
+    name.textContent = ' ' + s.displayName;
+    if (!connected) name.style.color = '#777';
+    label.appendChild(name);
+
+    if (needsAuth) {
+      var authLink = document.createElement('span');
+      authLink.style.marginLeft = '2px';
+      if (pendingAuthId === s.id) {
+        authLink.style.color = '#da3';
+        authLink.textContent = 'authorizing… check browser';
+      } else {
+        authLink.style.color = '#7ab';
+        authLink.style.cursor = 'pointer';
+        authLink.style.textDecoration = 'underline';
+        authLink.textContent = 'auth';
+        authLink.addEventListener('click', function (e) {
+          e.preventDefault();
+          if (pendingAuthId || !ws || ws.readyState !== 1) return;
+          pendingAuthId = s.id;
+          ws.send(JSON.stringify({ type: 'auth_mcp', id: s.id }));
+          renderMcpList();
+        });
+      }
+      label.appendChild(authLink);
+    }
+    return label;
   }
 
   // ── Version + update check ──
 
   var versionData = { version: 'dev', commit: null };
+  var isDevInstall = false; // panel dir lives inside a git checkout
+
+  // A dev install symlinks the panel out of a git repo — tarball updates
+  // would clobber uncommitted work (update.sh refuses too; this is the UX
+  // half). Kernel path resolution follows the symlink, so <ext>/../.git
+  // hits the repo's .git. ExtendScript File objects collapse ".." textually,
+  // hence callSystem instead.
+  function detectDevInstall() {
+    var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    var jsx = '(function(){'
+      + 'if ($.os.indexOf("Windows") !== -1) return "prod";'
+      + 'return system.callSystem("bash -c \'test -d \\"' + extPath.replace(/'/g, "\\'") + '/../.git\\" && echo dev || echo prod\'");'
+      + '})()';
+    cs.evalScript(jsx, function (result) {
+      isDevInstall = String(result).indexOf('dev') !== -1;
+      if (isDevInstall) {
+        versionTextEl.textContent = versionTextEl.textContent + ' · dev';
+        versionTextEl.title = 'Dev install (git checkout) — update with git pull, not the panel updater';
+      }
+    });
+  }
 
   function loadVersion() {
     var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
@@ -870,10 +972,15 @@
       } else {
         versionTextEl.textContent = 'v(dev)';
       }
+      detectDevInstall(); // after label is set — it appends to it
     });
   }
 
   function checkForUpdate(silent) {
+    if (isDevInstall) {
+      if (!silent) alert('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      return;
+    }
     // Fetch remote version.json directly — content match means same release.
     // Avoids commit-hash chicken-and-egg from amend hooks.
     fetch('https://raw.githubusercontent.com/spendolas/gaffer-ae/main/panel/version.json?t=' + Date.now())
@@ -898,6 +1005,11 @@
   }
 
   function runUpdate() {
+    if (isDevInstall) {
+      alert('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      updateBannerEl.classList.remove('visible');
+      return;
+    }
     if (chatBusy) {
       alert('Please wait for current response to finish before updating.');
       return;
@@ -970,6 +1082,11 @@
   });
   checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
   if (refreshMcpsBtnEl) refreshMcpsBtnEl.addEventListener('click', requestMcpList);
+  var activityEl = document.querySelector('.activity-log');
+  if (activityEl) activityEl.addEventListener('toggle', function () {
+    // MCP status goes stale while the panel is collapsed — refresh on open
+    if (activityEl.open) requestMcpList();
+  });
   updateBtnEl.addEventListener('click', runUpdate);
   dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
   chatInputEl.addEventListener('keydown', function (e) {

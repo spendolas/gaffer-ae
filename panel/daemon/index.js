@@ -27,6 +27,12 @@ bridge.onListMcps = async (socket) => {
     socket.send(JSON.stringify({ type: 'mcps', servers: result.servers || [], error: result.error }));
   }
 };
+bridge.onAuthMcp = async (msg, socket) => {
+  var result = await chatHandler.authMcp(msg.id);
+  if (socket && socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: 'mcp_auth_done', id: msg.id, ok: result.ok, error: result.error }));
+  }
+};
 
 var queue = new Queue(bridge);
 

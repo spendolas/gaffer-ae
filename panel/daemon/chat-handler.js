@@ -55,6 +55,17 @@ var COMPACT_THRESHOLD_TOKENS = 150000;
 
 var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
 
+// CEP launches the daemon with a stripped PATH. Augment it so claude can
+// find node/npm and spawn stdio MCP servers (e.g. grip uses bare `node`).
+function augmentedEnv() {
+  var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+  var pathParts = (process.env.PATH || '').split(':');
+  for (var p of extraPaths) {
+    if (pathParts.indexOf(p) === -1) pathParts.push(p);
+  }
+  return { ...process.env, PATH: pathParts.join(':') };
+}
+
 export class ChatHandler {
   constructor() {
     this.activeProcess = null;
@@ -99,8 +110,8 @@ export class ChatHandler {
     // immediately, even on resumed sessions.
     var enabled = Array.isArray(msg.enabledMcps) ? msg.enabledMcps.filter(Boolean) : [];
     var extra = enabled.map(function (id) {
-      // Claude transforms server names to tool prefixes: spaces/dots/dashes → underscores
-      return 'mcp__' + id.replace(/[\s.\-]/g, '_') + '__*';
+      // Claude transforms server names to tool prefixes: spaces/dots/dashes/colons → underscores
+      return 'mcp__' + id.replace(/[\s.\-:]/g, '_') + '__*';
     });
     var allowed = GAFFER_TOOLS.concat(extra).join(',');
     args.push('--allowedTools', allowed);
@@ -115,20 +126,12 @@ export class ChatHandler {
       args.push('--append-system-prompt', systemPrompt);
     }
 
-    // Augment PATH so claude can spawn stdio MCP servers (e.g. grip uses
-    // bare `node`). Daemon launched from CEP panel may have minimal PATH.
-    var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
-    var currentPath = process.env.PATH || '';
-    var pathParts = currentPath.split(':');
-    for (var p of extraPaths) {
-      if (pathParts.indexOf(p) === -1) pathParts.push(p);
-    }
-    var augmentedEnv = { ...process.env, PATH: pathParts.join(':') };
-    console.log('Gaffer chat PATH: ' + augmentedEnv.PATH);
+    var env = augmentedEnv();
+    console.log('Gaffer chat PATH: ' + env.PATH);
 
     // Cache for the background compaction call.
     this.claudeBin = claudeBin;
-    this.envForSpawn = augmentedEnv;
+    this.envForSpawn = env;
 
     // Prepend a continuity briefing if we just compacted the previous session.
     var userMessage = msg.message;
@@ -139,7 +142,7 @@ export class ChatHandler {
 
     var child = spawn(claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: augmentedEnv,
+      env: env,
     });
     this.activeProcess = child;
 
@@ -358,36 +361,72 @@ export class ChatHandler {
       return { error: e.message, servers: [] };
     }
 
-    var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
-    var pathParts = (process.env.PATH || '').split(':');
-    for (var p of extraPaths) {
-      if (pathParts.indexOf(p) === -1) pathParts.push(p);
-    }
-    var augmentedEnv = { ...process.env, PATH: pathParts.join(':') };
+    var env = augmentedEnv();
 
     return new Promise(function (resolve) {
-      execFile(claudeBin, ['mcp', 'list'], { timeout: 8000, env: augmentedEnv }, function (err, stdout) {
+      // Health check runs per registered server — with many claude.ai
+      // connectors the full list takes 10s+, so give generous headroom.
+      execFile(claudeBin, ['mcp', 'list'], { timeout: 45000, env: env }, function (err, stdout) {
         if (err) {
-          resolve({ error: err.message, servers: [] });
+          var reason = err.killed ? 'timed out listing MCP servers (45s)' : err.message;
+          console.error('Gaffer listMcps failed: ' + reason);
+          resolve({ error: reason, servers: [] });
           return;
         }
         var servers = [];
         var lines = stdout.split('\n');
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i].trim();
-          if (!line || line.indexOf(':') === -1) continue;
-          // "<id>: <url-or-cmd> - <status>"
-          var firstColon = line.indexOf(':');
-          var id = line.substring(0, firstColon).trim();
-          var rest = line.substring(firstColon + 1);
+          // "<id>: <url-or-cmd> - <status>" — split on colon-space, not the
+          // first colon: plugin-scoped ids contain colons (plugin:foo:bar).
+          var sep = line.indexOf(': ');
+          if (!line || sep === -1) continue;
+          var id = line.substring(0, sep).trim();
+          var rest = line.substring(sep + 2);
           var lastDash = rest.lastIndexOf(' - ');
           if (lastDash === -1) continue;
           var status = rest.substring(lastDash + 3).trim();
           if (id === 'gaffer') continue;
           var displayName = id.replace(/^claude\.ai /, '');
+          // "plugin:telegram:telegram" → "telegram (plugin)"
+          if (displayName.indexOf('plugin:') === 0) {
+            displayName = displayName.split(':')[1] + ' (plugin)';
+          }
           servers.push({ id: id, displayName: displayName, status: status });
         }
         resolve({ servers: servers });
+      });
+    });
+  }
+
+  /**
+   * Authenticate an MCP server via `claude mcp login <id>` — opens the
+   * user's browser for the OAuth flow. Resolves { ok } or { ok, error }.
+   */
+  async authMcp(id) {
+    if (!id) return { ok: false, error: 'no server id' };
+    var claudeBin;
+    try {
+      claudeBin = await findClaudeBinary();
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+
+    var env = augmentedEnv();
+    console.log('Gaffer: mcp login "' + id + '"');
+
+    return new Promise(function (resolve) {
+      // 5 min: covers the user completing browser OAuth; abandoned flows die.
+      execFile(claudeBin, ['mcp', 'login', id], { timeout: 300000, env: env }, function (err, stdout, stderr) {
+        if (err) {
+          var reason = err.killed
+            ? 'login timed out (5 min) — browser flow not completed'
+            : ((stderr || '').trim() || err.message);
+          console.error('Gaffer: mcp login failed for "' + id + '": ' + reason);
+          resolve({ ok: false, error: reason });
+          return;
+        }
+        resolve({ ok: true });
       });
     });
   }

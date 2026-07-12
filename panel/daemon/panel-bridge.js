@@ -90,6 +90,10 @@ export class PanelBridge {
             if (this.onListMcps) this.onListMcps(socket);
             return;
           }
+          if (msg.type === 'auth_mcp') {
+            if (this.onAuthMcp) this.onAuthMcp(msg, socket);
+            return;
+          }
 
           // Legacy: JSX response (no type field)
           var entry = this.pending.get(msg.id);

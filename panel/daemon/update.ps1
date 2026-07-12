@@ -11,6 +11,15 @@ $logPath = Join-Path $env:TEMP "gaffer-update.log"
 Start-Transcript -Path $logPath -Append
 Write-Host "=== Update started: $(Get-Date) ==="
 
+# Never overwrite a development checkout — a dev install points the panel
+# at a git repo; /PURGE would clobber uncommitted work.
+if ((Test-Path (Join-Path (Split-Path -Parent $panelDir) ".git")) -or (Test-Path "$panelDir\.git")) {
+    Write-Error "panel dir is inside a git repo (dev install) - refusing to update. Use git pull instead."
+    Write-Output "err:dev-install"
+    Stop-Transcript
+    exit 1
+}
+
 # Get latest version info from raw version.json
 $remoteVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/main/panel/version.json"
 $latestCommit = $remoteVersion.commit
@@ -63,9 +72,11 @@ Push-Location $daemonDir
 & npm install --production
 Pop-Location
 
-# Write new version.json
+# Write new version.json — version comes from the downloaded tarball
+$latestVersion = (Get-Content "$extracted\panel\version.json" | ConvertFrom-Json).version
+if (-not $latestVersion) { $latestVersion = "0.0.0" }
 @{
-    version = "0.2.0"
+    version = $latestVersion
     commit = $latestCommit
 } | ConvertTo-Json | Set-Content "$panelDir\version.json"
 
