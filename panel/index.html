@@ -443,9 +443,12 @@
       font-family: inherit;
       font-size: 14px;
       line-height: 18px;
-      padding: 8px;
-      height: 34px;
-      max-height: 84px;
+      /* horizontal pad only + centered — vertical rhythm comes from the
+         row's pad 8, keeping the pill at the designed 48px */
+      padding: 0 8px;
+      height: 18px;
+      max-height: 72px;
+      align-self: center;
       resize: none;
       outline: none;
       overflow-y: auto;

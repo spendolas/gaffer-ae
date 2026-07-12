@@ -154,7 +154,7 @@ Child order: **ChatMessages (grow) → UpdateBanner (hidden overlay, out of flow
 3. Error-role bubble (exact spec now in §4.1)
 4. Icon-button system (Clear/Reload/CheckNow/Dismiss/Copy)
 5. ModelSelect custom dropdown with open popup (options incl. Fable — designed, contra v1)
-6. **Model row extra selects**: "Latest • 1M" variant + "Medium" effort — needs daemon plumbing (`chat-handler.js` pass-through)
+6. **Model row extra selects** — scoped 2026-07-10, both CLI flags verified live (`--effort low|medium|high|xhigh|max`; `--model "opus[1m]"`): panel enables the two disabled selects (reuse the ModelSelect popup), persists `effort`/`variant` in chat-history, sends `effort` in the ws chat message; daemon whitelists and appends `--effort` (~5 lines in `chat-handler.js`); variant composes into the model string panel-side (no daemon change). No flag sent unless user picks — behavior unchanged by default. ~40 lines total + one daemon restart; bundle with step 6's daemon work.
 7. "More/Less" chevron summary affordance
 8. Markdown table striping + column dividers, borderless
 9. Update banner as bottom-docked centered pill
