@@ -50,6 +50,7 @@
   var dismissedUpdateCommit = null;
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
+  var mcpUsage = {}; // { id: { count, last } } — sends count, enables stamp recency
   var mcpListError = null; // daemon-reported error from last list_mcps
   var pendingAuthId = null; // server id with an mcp login flow in flight
   var pendingImages = []; // [{path, dataUrl, name}] — staged for next send
@@ -178,6 +179,7 @@
       autoCheckUpdates: autoCheckUpdates,
       dismissedUpdateCommit: dismissedUpdateCommit,
       enabledMcps: enabledMcps,
+      mcpUsage: mcpUsage,
     });
     // Prefer Node fs — handles large payloads (image dataUrls) reliably.
     // Fall back to ExtendScript File I/O for legacy CEP without mixed-context.
@@ -214,6 +216,9 @@
         }
         if (Array.isArray(data.enabledMcps)) {
           enabledMcps = data.enabledMcps.slice();
+        }
+        if (data.mcpUsage && typeof data.mcpUsage === 'object') {
+          mcpUsage = data.mcpUsage;
         }
         for (var i = 0; i < chatHistory.length; i++) {
           var msg = chatHistory[i];
@@ -636,6 +641,13 @@
     var imgPrefix = imgs.map(function (p) { return '[image: ' + p.path + ']'; }).join('\n');
     var fullMessage = imgPrefix ? (imgPrefix + (text ? '\n' + text : '')) : text;
 
+    // every send counts one use for each enabled server (drives tile order)
+    enabledMcps.forEach(function (id) {
+      var u = mcpUsage[id] || { count: 0, last: 0 };
+      u.count++;
+      u.last = Date.now();
+      mcpUsage[id] = u;
+    });
     appendUserMessage(text, imgs);
     ws.send(JSON.stringify({
       type: 'chat',
@@ -939,7 +951,13 @@
     var RANK = { enabled: 0, available: 1, auth: 2, failed: 3 };
     var sorted = availableMcps.slice().sort(function (a, b) {
       var r = RANK[mcpTileState(a)] - RANK[mcpTileState(b)];
-      return r !== 0 ? r : a.displayName.localeCompare(b.displayName);
+      if (r !== 0) return r;
+      // within a state: most used, then most recent, then name
+      var ua = mcpUsage[a.id] || { count: 0, last: 0 };
+      var ub = mcpUsage[b.id] || { count: 0, last: 0 };
+      if (ub.count !== ua.count) return ub.count - ua.count;
+      if (ub.last !== ua.last) return ub.last - ua.last;
+      return a.displayName.localeCompare(b.displayName);
     });
     var fade = mcpFreshLoad;
     mcpFreshLoad = false;
@@ -996,8 +1014,15 @@
       // sort order corrects on the next list refresh, not mid-click
       var st = mcpTileState(s);
       if (st === 'available' || st === 'enabled') {
-        if (st === 'available') enabledMcps.push(s.id);
-        else enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
+        if (st === 'available') {
+          enabledMcps.push(s.id);
+          // enabling stamps recency so fresh picks pin left next refresh
+          var u = mcpUsage[s.id] || { count: 0, last: 0 };
+          u.last = Date.now();
+          mcpUsage[s.id] = u;
+        } else {
+          enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
+        }
         saveChat();
         tile.classList.remove('enabled', 'available');
         tile.classList.add(mcpTileState(s));
