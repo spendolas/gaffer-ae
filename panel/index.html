@@ -485,7 +485,7 @@
     /* ActivityLog — Figma set 191:1343: collapsed 40h / expanded 144h.
        Status+Clear+Reload sit LEFT, More/Less pinned RIGHT. */
     .activity-log {
-      border-top: 1px solid var(--color-border-default);
+      /* no divider — the design has zero strokes; separation is spatial */
       padding: 4px 0;
       flex-shrink: 0;
       font-size: 10px;
@@ -500,12 +500,15 @@
       padding: 4px 8px;
       line-height: 10px;
     }
+    /* Status frame 64x20: pad [6,4,6,4] gap 4 — star inset 4 inside the
+       summary's 8, text→button distance 4(pad)+4(gap) = 8 */
     .activity-status {
       display: flex;
       align-items: center;
       gap: 4px;
     }
-    .activity-status #statusText { padding: 0 6px 0 2px; }
+    .activity-status .led { margin-left: 4px; }
+    .activity-status #statusText { padding-right: 4px; }
     .activity-more {
       display: inline-flex;
       align-items: center;
