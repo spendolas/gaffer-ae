@@ -181,10 +181,8 @@
        the bubble's pre-wrap would render marked's inter-block newlines
        as extra blank lines; <pre> keeps its own whitespace. */
     .msg-text { display: block; white-space: normal; }
-    /* No Bold in chat — the design builds hierarchy from size + color
-       (Adobe Clean Bold appears nowhere in the panel UI) */
     .msg-text h1, .msg-text h2, .msg-text h3, .msg-text h4 {
-      font-weight: 400;
+      font-weight: 700; /* real Bold face — 600 doesn't exist in Adobe Clean */
       margin: 8px 0 4px 0;
       color: var(--color-text-strong);
       line-height: 1.3;
@@ -198,7 +196,7 @@
     .msg-text p:last-child { margin-bottom: 0; }
     .msg-text p:empty { display: none; }
     .msg-text br + br { display: none; }
-    .msg-text strong { color: var(--color-text-strong); font-weight: 400; }
+    .msg-text strong { color: var(--color-text-strong); font-weight: 700; }
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
     .msg-text li { margin: 0; font-size: 14px; line-height: 1.4; display: list-item; }
