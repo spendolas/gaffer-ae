@@ -204,13 +204,17 @@
     .msg-text li + li { margin-top: 2px; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
     .msg-text ul + p, .msg-text ol + p { margin-top: 6px; }
+    /* CodeInline 185:1156 — exact: pad 4/8, r8, #D8B070@20 chip, 12/16 */
     .msg-text code {
+      display: inline-block;
       background: var(--color-code-inline-bg);
       border: none;
       border-radius: 8px;
-      padding: 1px 6px;
+      padding: 4px 8px;
       font-family: "SF Mono", "Consolas", monospace;
       font-size: 12px;
+      line-height: 16px;
+      vertical-align: middle;
       color: var(--color-text-code);
     }
     .msg-text pre {
