@@ -46,7 +46,7 @@
   var chatBusy = false;
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
   var currentModel = 'opus';
-  var currentVariant = 'latest'; // 'latest' | '1m' (context-window variant)
+  var currentVariant = 'standard'; // 'standard' | '1m' (context-window variant)
   var currentEffort = 'high'; // low | medium | high | xhigh | max
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
@@ -247,7 +247,8 @@
           updateModelSelect();
         }
         if (data.variant) {
-          currentVariant = data.variant;
+          // migrate the short-lived 'latest' naming
+          currentVariant = data.variant === 'latest' ? 'standard' : data.variant;
           updateVariantSelect();
         }
         if (data.effort) {
@@ -1296,7 +1297,7 @@
   }
   var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
   var VARIANTS = [
-    { value: 'latest', label: 'Latest' },
+    { value: 'standard', label: 'Standard' },
     { value: '1m', label: '1M' },
   ];
   var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'].map(function (v) { return { value: v, label: labelize(v) }; });
