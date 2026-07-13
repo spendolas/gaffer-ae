@@ -6,8 +6,6 @@ panel/daemon/dist/
 panel/chat-history.json
 
 # Local-only — licensed Adobe material, never publish
-AdobeClean.zip
-AdobeClean/
 Knowledge/
 
 # Session history (local tooling)
@@ -21,3 +19,6 @@ panel/fonts/
 panel/icons/mcp/*.svg
 !panel/icons/mcp/grip.svg
 panel/.gaffer-icons/
+
+# Local asset store (licensed fonts etc.) — never ship
+assets/
