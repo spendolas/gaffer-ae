@@ -982,30 +982,49 @@
         var ctx = c.getContext('2d');
         ctx.drawImage(img, 0, 0, N, N);
         var d = ctx.getImageData(0, 0, N, N).data;
+        // A believable glyph covers 3–62% of the box; a solid circle is
+        // ~78%, a rounded square more — those are icon TILES, not glyphs
+        // (the Miro/Vercel filled-blob bug).
+        function coverage(data) {
+          var on = 0;
+          for (var p = 3; p < data.length; p += 4) if (data[p] > 128) on++;
+          return on / (data.length / 4);
+        }
+        function glyphish(cov) { return cov > 0.03 && cov < 0.62; }
         var corners = [0, (N - 1) * 4, (N - 1) * N * 4, ((N - 1) * N + N - 1) * 4];
         var transparentBg = corners.every(function (i) { return d[i + 3] < 40; });
-        if (transparentBg) {
-          s.maskable = true;
-          s.maskUrl = s.icon;
-          maskCache[s.icon] = { maskable: true, maskUrl: s.icon };
+        var result = null; // maskUrl or null
+        if (transparentBg && glyphish(coverage(d))) {
+          // alpha channel is a real glyph — use the icon directly
+          result = s.icon;
         } else {
-          // luminance → alpha: glyph = pixels far from the bg tone
-          var bgLum = corners.reduce(function (sum, i) {
-            return sum + (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-          }, 0) / 4;
-          var darkBg = bgLum < 128;
-          var out = ctx.createImageData(N, N);
-          for (var p = 0; p < d.length; p += 4) {
-            var lum = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
-            var a = darkBg ? lum : 255 - lum;
-            out.data[p] = 255; out.data[p + 1] = 255; out.data[p + 2] = 255;
-            out.data[p + 3] = Math.max(0, Math.min(255, (a - 40) * 1.6));
+          // Solid bg, or a solid tile shape on transparency: derive the
+          // glyph from luminance DISTANCE to the dominant tone (handles
+          // both polarities), gated by original alpha.
+          var lums = [], p;
+          for (p = 0; p < d.length; p += 4) {
+            if (d[p + 3] > 128) lums.push(0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]);
           }
-          ctx.putImageData(out, 0, 0);
-          s.maskable = true;
-          s.maskUrl = c.toDataURL('image/png');
-          maskCache[s.icon] = { maskable: true, maskUrl: s.maskUrl };
+          lums.sort(function (a, b) { return a - b; });
+          var bgLum = lums.length ? lums[Math.floor(lums.length / 2)] : 255; // median = tile fill
+          var out = ctx.createImageData(N, N);
+          for (p = 0; p < d.length; p += 4) {
+            var lum = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+            var a = Math.max(0, Math.min(255, (Math.abs(lum - bgLum) - 25) * 2.2));
+            out.data[p] = 255; out.data[p + 1] = 255; out.data[p + 2] = 255;
+            out.data[p + 3] = Math.round(a * (d[p + 3] / 255));
+          }
+          if (glyphish(coverage(out.data))) {
+            ctx.putImageData(out, 0, 0);
+            result = c.toDataURL('image/png');
+          }
+          // else: no readable glyph — keep the colored favicon (img)
         }
+        if (result) {
+          s.maskable = true;
+          s.maskUrl = result;
+        }
+        maskCache[s.icon] = { maskable: s.maskable, maskUrl: s.maskUrl };
         queueRender();
       } catch (e) { /* keep img fallback */ }
     };
@@ -1078,16 +1097,17 @@
 
   function monogram(name) {
     var words = name.replace(/\(.*\)/, '').trim().split(/\s+/);
-    var text = words.length > 1
-      ? (words[0][0] + words[1][0])
-      : name.slice(0, 1);
-    return text.toUpperCase();
+    if (words.length > 1) return (words[0][0] + words[1][0]).toUpperCase();
+    // one word: two letters, 'Ab' style
+    var w = words[0] || name;
+    return w.slice(0, 1).toUpperCase() + w.slice(1, 2).toLowerCase();
   }
 
   function buildMcpTile(s) {
     var state = mcpTileState(s);
     var tile = document.createElement('button');
     tile.className = 'mcp-tile ' + state + (pendingAuthId === s.id ? ' authing' : '');
+    tile.dataset.mcpId = s.id;
     tile.addEventListener('mouseenter', function () { showMcpTooltip(tile, s.displayName); });
     tile.addEventListener('mouseleave', hideMcpTooltip);
     if (s.icon && s.icon.indexOf('image/svg') !== -1) {
