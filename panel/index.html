@@ -667,6 +667,19 @@
     @keyframes tipIn {
       from { opacity: 0; }
     }
+    /* Action spell 291:11938 — hover description for the left-cluster
+       controls (status star, clear, reload); Adobe Clean 10/15 dimmest */
+    .action-spell {
+      padding: 0 2px;
+      font-size: 10px;
+      line-height: 15px;
+      color: var(--color-text-dimmest);
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.15s var(--ease-state);
+      pointer-events: none;
+    }
+    .action-spell.visible { opacity: 1; }
     .mcp-tile .monogram {
       font-family: "Adobe Clean SemiCondensed", "Adobe Clean", sans-serif;
       font-weight: 700;
@@ -891,6 +904,7 @@
         </span>
         <button id="clearBtn" class="icon-btn" title="Clear chat"></button>
         <button id="reloadBtn" class="icon-btn" title="Reload panel"></button>
+        <span id="actionSpell" class="action-spell"></span>
       </span>
       <span class="activity-more">
         <span id="moreLabel">More</span>

@@ -1326,6 +1326,27 @@
   stopBtnEl.addEventListener('click', stopChat);
   // Clear/Reload live inside <summary> — preventDefault stops the click
   // from also toggling the details element.
+  // Action spell (291:11938) — hover description in the summary row for
+  // the left-cluster controls. Fades with the shared 0.15s state ease.
+  var actionSpellEl = document.getElementById('actionSpell');
+  function wireSpell(el, getText) {
+    if (!el || !actionSpellEl) return;
+    el.addEventListener('mouseenter', function () {
+      actionSpellEl.textContent = getText();
+      actionSpellEl.classList.add('visible');
+    });
+    el.addEventListener('mouseleave', function () {
+      actionSpellEl.classList.remove('visible');
+    });
+  }
+  wireSpell(statusWrapEl, function () {
+    return 'Gaffer ' + (statusWrapEl.title || 'starting').toLowerCase();
+  });
+  wireSpell(clearBtnEl, function () { return clearBtnEl.title || 'Clear chat'; });
+  wireSpell(document.getElementById('reloadBtn'), function () {
+    return document.getElementById('reloadBtn').title || 'Reload panel';
+  });
+
   clearBtnEl.addEventListener('click', function (e) {
     e.preventDefault();
     clearChat();
