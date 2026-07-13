@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.1 — 2026-07-14
+
+Clean-install simulation fixes (Windows focus):
+
+- **npm-installed CLI shims can't be spawned** — binary discovery now only accepts a real `claude.exe` on Windows and otherwise fails with an actionable error (native installer command + `.gaffer-config.json` override)
+- **Chat no longer depends on the installer's MCP registration** — the gaffer server is passed inline on every chat call, so chat works even if `claude mcp add` never ran (e.g. CLI installed after the panel)
+- Installer's missing-CLI error now shows the actual install command
+
 ## v0.5.0 — 2026-07-14
 
 - **Typography ships to everyone** — Source Sans 3 + Source Code Pro (both open-license) are now bundled, so end users get the designed type instead of system-font fallbacks. Adobe Clean is retired from the stack; dev and user machines render identically.

@@ -285,6 +285,10 @@ export class ChatHandler {
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (msg.effort && EFFORTS.indexOf(msg.effort) !== -1) args.push('--effort', msg.effort);
+    // Register the gaffer MCP server inline — chat must work even when the
+    // installer's `claude mcp add` step never ran (e.g. CLI installed after
+    // the panel). Merges with any user-scope registration of the same name.
+    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: 'http://127.0.0.1:9824/mcp' } } }));
 
     // Build allowedTools for every call so MCP toggle changes apply
     // immediately, even on resumed sessions.

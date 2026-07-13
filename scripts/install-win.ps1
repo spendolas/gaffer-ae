@@ -22,7 +22,9 @@ if (-not $claudeBin) {
     $claudeBin = (Get-Command claude -ErrorAction SilentlyContinue).Source
 }
 if (-not $claudeBin) {
-    Write-Host "ERROR: Claude Code CLI not found. Install from https://claude.ai/code"
+    Write-Host "ERROR: Claude Code CLI not found."
+    Write-Host "Install the native build first:  irm https://claude.ai/install.ps1 | iex"
+    Write-Host "(the npm package's shims cannot be launched by the Gaffer daemon)"
     exit 1
 }
 Write-Host "  Claude CLI: $claudeBin"

@@ -49,10 +49,18 @@ export async function findClaudeBinary() {
     var augmented = process.platform === 'win32'
       ? process.env.PATH || ''
       : ['/opt/homebrew/bin', '/usr/local/bin', join(process.env.HOME || '', '.local', 'bin'), process.env.PATH || ''].filter(Boolean).join(':');
-    var result = execSync(cmd, {
+    var lines = execSync(cmd, {
       encoding: 'utf-8',
       env: Object.assign({}, process.env, { PATH: augmented }),
-    }).trim().split('\n')[0];
+    }).trim().split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    var result;
+    if (process.platform === 'win32') {
+      // npm-installed CLIs surface as shims (bare sh script, .cmd, .ps1) that
+      // Node's spawn() can't execute — only a real .exe is usable here
+      result = lines.filter(function (l) { return /\.exe$/i.test(l); })[0];
+    } else {
+      result = lines[0];
+    }
     if (result) {
       cached = result;
       return cached;
@@ -75,5 +83,9 @@ export async function findClaudeBinary() {
     } catch (e) { /* shell didn't find it either */ }
   }
 
-  throw new Error('Claude CLI not found. Install from https://claude.ai/code');
+  throw new Error(
+    'Claude CLI not found (or only an npm shim, which cannot be spawned on Windows). '
+    + 'Install the native build from https://claude.ai/code, or point Gaffer at your binary via '
+    + '<extension-dir>/.gaffer-config.json: {"claudeBin": "C:/full/path/claude.exe"}'
+  );
 }
