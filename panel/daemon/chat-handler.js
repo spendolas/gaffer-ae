@@ -100,13 +100,13 @@ function loadBundledIcons() {
 }
 
 function cachedIcon(id) {
-  try {
-    for (var ext of ['.svg', '.png', '.ico']) {
+  for (var ext of ['.svg', '.png', '.ico']) {
+    try {
       var p = join(ICON_CACHE_DIR, iconSlug(id) + ext);
       var buf = readFileSync(p);
       if (buf.length > 0) return toDataUrl(p, buf);
-    }
-  } catch (e) { /* miss */ }
+    } catch (e) { /* try next ext */ }
+  }
   return null;
 }
 
@@ -151,8 +151,13 @@ function resolveIcons(servers, onIcons) {
   }
   if (!misses.length || typeof onIcons !== 'function') return;
   Promise.allSettled(misses.map(function (s) {
-    return fetchFavicon(s.id, s.target).then(function (dataUrl) {
-      return dataUrl ? { id: s.id, icon: dataUrl } : null;
+    // brand vector first (simple-icons CDN — flat, single-color, identical
+    // on every install; nothing redistributed by this repo), favicon second
+    return fetchSimpleIcon(s.id, s.displayName).then(function (svg) {
+      if (svg) return { id: s.id, icon: svg };
+      return fetchFavicon(s.id, s.target).then(function (dataUrl) {
+        return dataUrl ? { id: s.id, icon: dataUrl } : null;
+      });
     });
   })).then(function (results) {
     var icons = {};
@@ -160,9 +165,32 @@ function resolveIcons(servers, onIcons) {
     for (var r of results) {
       if (r.status === 'fulfilled' && r.value) { icons[r.value.id] = r.value.icon; found++; }
     }
-    console.log('Gaffer: favicon fetch — ' + found + '/' + misses.length + ' resolved');
+    console.log('Gaffer: icon fetch — ' + found + '/' + misses.length + ' resolved');
     if (found) onIcons(icons);
   });
+}
+
+// simple-icons CDN: monochrome brand vectors by slug (normName happens to
+// match their slug scheme for most brands). 404 = brand unknown -> favicon.
+async function fetchSimpleIcon(id, displayName) {
+  var slug = normName(String(displayName).replace(/^claude\.ai\s+/i, '').replace(/\(.*\)/, ''));
+  if (!slug) return null;
+  try {
+    var res = await fetch('https://cdn.simpleicons.org/' + slug, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    var text = await res.text();
+    if (text.indexOf('<svg') === -1) return null;
+    // fill with currentColor so the panel's tile color drives the glyph
+    text = text.replace('<svg', '<svg fill="currentColor"');
+    var buf = Buffer.from(text);
+    mkdirSync(ICON_CACHE_DIR, { recursive: true });
+    var file = join(ICON_CACHE_DIR, iconSlug(id) + '.svg');
+    writeFileSync(file, buf);
+    return toDataUrl(file, buf);
+  } catch (e) { return null; }
 }
 
 // CEP launches the daemon with a stripped PATH. Augment it so claude can
@@ -341,6 +369,9 @@ export class ChatHandler {
 
     var buffer = '';
     var lastText = '';
+    var stderrBuf = '';
+    var sawOutput = false;
+    var self = this;
 
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString();
@@ -351,12 +382,14 @@ export class ChatHandler {
         if (!line.trim()) continue;
         try {
           var event = JSON.parse(line);
+          sawOutput = true;
           this._processEvent(event, socket);
         } catch (e) { /* not JSON, skip */ }
       }
     });
 
     child.stderr.on('data', (chunk) => {
+      stderrBuf += chunk.toString();
       console.error('Gaffer chat stderr:', chunk.toString().substring(0, 200));
     });
 
@@ -366,8 +399,35 @@ export class ChatHandler {
       if (buffer.trim()) {
         try {
           var event = JSON.parse(buffer);
+          sawOutput = true;
           this._processEvent(event, socket);
         } catch (e) { /* ignore */ }
+      }
+      // Self-heal a dead --resume: the CLI's session storage can be wiped
+      // by CLI updates or re-auth, leaving our persisted sessionId pointing
+      // nowhere. The CLI then errors on stderr and exits with NO stream
+      // output — which used to look like a silent empty reply. Retry once
+      // on a fresh session (history text is preserved panel-side).
+      if (!sawOutput && sessionId && !msg.__retriedFreshSession
+          && /no conversation found/i.test(stderrBuf)) {
+        console.log('Gaffer: stale session ' + sessionId + ' — retrying fresh');
+        self.sessionId = null;
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ type: 'chat_event', message: 'Previous session expired — starting a fresh one.' }));
+        }
+        var retryMsg = Object.assign({}, msg, { sessionId: null, __retriedFreshSession: true });
+        self.handleChat(retryMsg, socket);
+        return; // the retry emits its own chat_done/chat_error
+      }
+      // Never end a turn silently: no output + non-zero exit = surfaced error
+      if (!sawOutput && code !== 0 && !child._userCancelled) {
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({
+            type: 'chat_error',
+            error: (stderrBuf.trim() || ('claude exited with code ' + code)).slice(0, 300),
+          }));
+        }
+        return;
       }
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_done', sessionId: this.sessionId }));
@@ -534,6 +594,7 @@ export class ChatHandler {
 
   cancel() {
     if (this.activeProcess) {
+      this.activeProcess._userCancelled = true; // close handler: not an error
       this.activeProcess.kill('SIGTERM');
       this.activeProcess = null;
     }

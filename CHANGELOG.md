@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.3 — 2026-07-14
+
+- **Stale-session self-heal** — when the Claude CLI's session storage is wiped (CLI updates, re-auth), the panel's saved session ID pointed nowhere and chats silently hung. The daemon now detects the dead `--resume`, notifies the panel, and retries once on a fresh session automatically — history text is preserved. Failed chats can no longer end silently: any zero-output error surfaces in the chat.
+- **Brand-vector icons for everyone** — MCP tiles fetch flat single-color brand icons from the simple-icons CDN first (favicon fallback stays), so end-user installs get the same crisp glyphs as dev machines
+- Icon cache probe no longer aborts on the first missing extension (icons were re-fetched every daemon start)
+
 ## v0.5.2 — 2026-07-14
 
 Windows MCP tile rendering fixes:
