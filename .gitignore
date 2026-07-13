@@ -11,8 +11,10 @@ panel/chat-history.json
 # Design reference exports (local working material, repo is public)
 design/refs/
 
-# Licensed font files — local install only
-panel/fonts/
+# Fonts: Adobe Clean OTFs are licensed (local only); the OFL WOFF2 set ships
+panel/fonts/*
+!panel/fonts/SourceSans3-*.woff2
+!panel/fonts/SourceCodePro-*.woff2
 panel/icons/mcp/*.svg
 !panel/icons/mcp/grip.svg
 panel/.gaffer-icons/

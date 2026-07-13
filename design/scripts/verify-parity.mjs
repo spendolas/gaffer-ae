@@ -45,7 +45,7 @@ const px = (v) => parseFloat(v);
   const txt = find('conversation', (e) => e.cls === 'msg-text' && e.tag === 'div');
   check('body text 14px', txt.style['font-size'], '14px');
   check('body line-height 18px', txt.style['line-height'], '18px');
-  check('body font Adobe Clean', txt.style['font-family'], /Adobe Clean/);
+  check('body font Source Sans 3 (bundled OFL baseline)', txt.style['font-family'], /Source Sans 3/);
   check('body weight regular', txt.style['font-weight'], '400');
 }
 

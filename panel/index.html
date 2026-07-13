@@ -4,13 +4,14 @@
   <meta charset="UTF-8">
   <title>Gaffer</title>
   <style>
-    /* Adobe Clean — licensed, local-only (panel/fonts/ is gitignored).
-       Missing files fall back silently to the stack on body. */
-    @font-face { font-family: "Adobe Clean"; src: url("fonts/AdobeClean-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; }
-    @font-face { font-family: "Adobe Clean"; src: url("fonts/AdobeClean-It.otf") format("opentype"); font-weight: 400; font-style: italic; }
-    @font-face { font-family: "Adobe Clean"; src: url("fonts/AdobeClean-Bold.otf") format("opentype"); font-weight: 700; font-style: normal; }
-    @font-face { font-family: "Adobe Clean"; src: url("fonts/AdobeClean-ExtraBold.otf") format("opentype"); font-weight: 800; font-style: normal; }
-    @font-face { font-family: "Adobe Clean SemiCondensed"; src: url("fonts/AdobeClean-BoldSemiCn.otf") format("opentype"); font-weight: 700; font-style: normal; }
+    /* Source Sans 3 + Source Code Pro (OFL, bundled) — the design baseline
+       as of the 2026-07 typography migration. Weight cap is SemiBold (600);
+       nothing bolder ships. */
+    @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; }
+    @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-It.woff2") format("woff2"); font-weight: 400; font-style: italic; }
+    @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-Semibold.woff2") format("woff2"); font-weight: 600; font-style: normal; }
+    @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-SemiboldIt.woff2") format("woff2"); font-weight: 600; font-style: italic; }
+    @font-face { font-family: "Source Code Pro"; src: url("fonts/SourceCodePro-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; }
 
     /* Design tokens — generated from design/tokens.json (Figma "Gaffer"
        collection). Edit there, not here; see docs/figma-parity-audit.md §3. */
@@ -73,7 +74,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; }
     body {
-      font-family: "Adobe Clean", "Segoe UI", sans-serif;
+      font-family: "Source Sans 3", "Segoe UI", sans-serif;
       font-size: 14px;
       background: var(--color-bg-panel);
       color: var(--color-text-default);
@@ -189,7 +190,7 @@
     .msg-text { display: block; white-space: normal; }
     .msg-text h1, .msg-text h2, .msg-text h3, .msg-text h4,
     .msg-text h5, .msg-text h6 {
-      font-weight: 700; /* real Bold face — 600 doesn't exist in Adobe Clean */
+      font-weight: 600; /* SemiBold cap — nothing bolder ships */
       margin: 8px 0 4px 0;
       color: var(--color-text-strong);
       line-height: 1.3;
@@ -205,7 +206,7 @@
     .msg-text p:last-child { margin-bottom: 0; }
     .msg-text p:empty { display: none; }
     .msg-text br + br { display: none; }
-    .msg-text strong { color: var(--color-text-strong); font-weight: 700; }
+    .msg-text strong { color: var(--color-text-strong); font-weight: 600; }
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
     .msg-text li { margin: 0; font-size: 14px; line-height: 18px; display: list-item; }
@@ -221,11 +222,12 @@
       border: none;
       border-radius: 4px;
       padding: 2px 4px;
-      font-family: "SF Mono", "Consolas", monospace;
+      font-family: "Source Code Pro", "SF Mono", "Consolas", monospace;
       font-size: 12px;
-      /* pin below the body's 18px: SF Mono's baseline split at an
-         inherited 18px pushes mixed lines to ~19px */
+      /* pin below the body's 18px: a mono's baseline split at an
+         inherited 18px pushes mixed lines past 18 */
       line-height: 16px;
+      letter-spacing: -0.02em; /* Mono/* styles carry -2% tracking */
       color: var(--color-text-code);
     }
     .msg-text pre {
@@ -273,7 +275,7 @@
       color: var(--color-text-strong);
     }
     .msg-text th:last-child, .msg-text td:last-child { border-right: none; }
-    .msg-text th { font-weight: 800; }
+    .msg-text th { font-weight: 600; }
     .msg-text tbody tr:nth-child(odd) td { background: var(--color-bg-table-row); }
     .msg-text hr { border: 0; border-top: 1px solid var(--color-border-default); margin: 8px 0; }
 
@@ -673,7 +675,7 @@
       from { opacity: 0; }
     }
     /* Action spell 291:11938 — hover description for the left-cluster
-       controls (status star, clear, reload); Adobe Clean 10/15 dimmest */
+       controls (status star, clear, reload); Hint/Dim-10 (10/15) dimmest */
     .action-spell {
       padding: 0 2px;
       font-size: 10px;
@@ -685,11 +687,14 @@
       pointer-events: none;
     }
     .action-spell.visible { opacity: 1; }
+    /* Monogram/16 — SS3 has no condensed cut; SemiBold + -4% tracking
+       approximates the old Adobe Clean SemiCn Bold */
     .mcp-tile .monogram {
-      font-family: "Adobe Clean SemiCondensed", "Adobe Clean", sans-serif;
-      font-weight: 700;
+      font-family: "Source Sans 3", sans-serif;
+      font-weight: 600;
       font-size: 16px;
       line-height: 16px;
+      letter-spacing: -0.04em;
     }
     .row-label { color: var(--color-text-dimmer); }
     .spacer { flex: 1; }
@@ -857,8 +862,9 @@
     }
     .banner-dismiss .gicon { width: 16px; height: 16px; display: block; }
     .activity-log .value {
-      font-family: "SF Mono", "Consolas", monospace;
+      font-family: "Source Code Pro", "SF Mono", "Consolas", monospace;
       font-size: 10px;
+      letter-spacing: -0.02em;
       color: var(--color-text-dimmer);
       padding: 2px 0;
       white-space: nowrap;
