@@ -821,7 +821,7 @@
     var div = document.createElement('div');
     div.className = 'chat-msg assistant';
     div.id = 'currentResponse';
-    addCopyButton(div);
+    // copy CTA arrives with the first text — nothing to copy before that
     var typing = document.createElement('span');
     typing.className = 'typing-indicator';
     typing.innerHTML = '<i></i><i></i><i></i>';
@@ -868,9 +868,8 @@
       textNode = document.createElement('span');
       textNode.className = 'msg-text';
       textNode.dataset.raw = '';
-      var copyBtn = el.querySelector('.copy-btn');
-      if (copyBtn) el.insertBefore(textNode, copyBtn);
-      else el.appendChild(textNode);
+      el.appendChild(textNode);
+      if (!el.querySelector('.copy-btn')) addCopyButton(el);
     }
     // Accumulate raw markdown, re-render on each chunk
     textNode.dataset.raw = (textNode.dataset.raw || '') + text;
