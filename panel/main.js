@@ -867,6 +867,9 @@
     if (!pill) {
       pill = document.createElement('span');
       if (id) pill.dataset.toolId = id;
+      // dash carries no visible label — tool name lives in the tooltip
+      pill.addEventListener('mouseenter', function () { showMcpTooltip(pill, pill.textContent); });
+      pill.addEventListener('mouseleave', hideMcpTooltip);
       row.appendChild(pill);
     }
     pill.className = 'tool-pill ' + status;

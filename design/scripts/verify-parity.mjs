@@ -65,19 +65,16 @@ const px = (v) => parseFloat(v);
   check('table header strong #fafafa', th.style['color'], 'rgb(250, 250, 250)');
 }
 
-// ── Tool pills (Pill 185:1107/1109/1111) ──
+// ── Tool status dashes (chips reduced per 2026-07-14 direction) ──
 {
   const run = byCls('busy-pills', 'running');
   const done = byCls('busy-pills', 'done');
   const err = byCls('busy-pills', 'error');
-  check('pill running bg #3a3520', run.style['background-color'], 'rgb(58, 53, 32)');
-  check('pill running fg amber #d09726', run.style['color'], 'rgb(208, 151, 38)');
-  check('pill done bg #1a3520', done.style['background-color'], 'rgb(26, 53, 32)');
-  check('pill done fg green #3dc17f', done.style['color'], 'rgb(61, 193, 127)');
-  check('pill error bg #3a2020', err.style['background-color'], 'rgb(58, 32, 32)');
-  check('pill error fg red #cc4444', err.style['color'], 'rgb(204, 68, 68)');
-  check('pill 9px SF Mono', run.style['font-size'], '9px');
-  check('pill r8', run.style['border-radius'], '8px');
+  check('dash running amber #d09726', run.style['color'], 'rgb(208, 151, 38)');
+  check('dash done green #3dc17f', done.style['color'], 'rgb(61, 193, 127)');
+  check('dash error red #cc4444', err.style['color'], 'rgb(204, 68, 68)');
+  check('dash 16x8 hit area', [Math.round(run.rect.w), Math.round(run.rect.h)].join('x'), '16x8');
+  check('dash label hidden', run.style['font-size'], '0px');
 }
 
 // ── Input row (InputField 185:1132, Button 240:1324) ──

@@ -274,27 +274,39 @@
     .msg-text tbody tr:nth-child(odd) td { background: var(--color-bg-table-row); }
     .msg-text hr { border: 0; border-top: 1px solid var(--color-border-default); margin: 8px 0; }
 
+    /* Tool activity as a line of status dashes — one 16x2 segment per
+       tool call, name in the hover tooltip. 8px hit area, line via
+       ::after so the hover target stays usable. */
     .tool-pills-row {
       order: 2;
       display: flex;
       flex-wrap: wrap;
+      align-items: center;
       gap: 2px;
       padding: 0 4px;
     }
     .tool-pill {
-      display: inline-block;
-      font-size: 9px;
-      line-height: 13.5px;
-      padding: 1px 6px;
-      border-radius: 8px;
-      font-family: "SF Mono", "Consolas", monospace;
-      background: var(--color-border-default);
-      color: var(--color-text-muted);
+      display: block;
+      position: relative;
+      width: 16px;
+      height: 8px;
+      font-size: 0; /* label text hidden — surfaced via tooltip */
+      color: var(--color-text-hint);
+    }
+    .tool-pill::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      border-radius: 1px;
+      background: currentColor;
     }
     @keyframes pillPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-    .tool-pill.running { background: var(--color-pill-running); color: var(--color-accent-amber); animation: pillPulse 1.5s ease-in-out infinite; }
-    .tool-pill.done { background: var(--color-pill-done); color: var(--color-accent-green); }
-    .tool-pill.error { background: var(--color-pill-error); color: var(--color-accent-red); }
+    .tool-pill.running { color: var(--color-accent-amber); animation: pillPulse 1.5s ease-in-out infinite; }
+    .tool-pill.done { color: var(--color-accent-green); }
+    .tool-pill.error { color: var(--color-accent-red); }
     /* Three-dot typing indicator (Figma TypingIndicator 215:2620) */
     .typing-indicator {
       order: 8;
