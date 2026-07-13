@@ -15,6 +15,7 @@ design/refs/
 panel/fonts/*
 !panel/fonts/SourceSans3-*.woff2
 !panel/fonts/SourceCodePro-*.woff2
+!panel/fonts/OFL-LICENSE.txt
 panel/icons/mcp/*.svg
 !panel/icons/mcp/grip.svg
 panel/.gaffer-icons/
