@@ -52,7 +52,10 @@ if (Test-Path "$panelDir\chat-history.json") {
 # Kill daemon
 Write-Host "Stopping daemon..."
 Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*daemon\index.js*" } | Stop-Process -Force
+# match by COMMAND LINE — Get-Process .Path is node.exe and never matches the script
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 
 # Replace files (preserve user data)

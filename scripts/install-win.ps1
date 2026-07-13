@@ -40,7 +40,10 @@ Write-Host "  Node.js: $nodeVersion"
 # install (blocks Remove-Item) and would keep serving stale code after update
 Write-Host "Stopping any running daemon..."
 Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*daemon\index.js*" } | Stop-Process -Force
+# match by COMMAND LINE — Get-Process .Path is node.exe and never matches the script
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 
 # 3. Symlink extension (or copy on systems without symlink support),

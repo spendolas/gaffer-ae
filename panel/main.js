@@ -1258,6 +1258,21 @@
         versionTextEl.textContent = 'v(dev)';
       }
       detectDevInstall(); // after label is set — it appends to it
+      // Post-update verdict: if we attempted an update just before this
+      // reload and the commit didn't move, the script failed — say so.
+      try {
+        var attempt = JSON.parse(localStorage.getItem('gafferUpdateAttempt') || 'null');
+        if (attempt && attempt.target && Date.now() - attempt.at < 10 * 60 * 1000) {
+          localStorage.removeItem('gafferUpdateAttempt');
+          if (versionData.commit !== attempt.target) {
+            showChatNotice('Update did not complete — the updater log has details: '
+              + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS). '
+              + 'You can also run the update script manually from the daemon folder.');
+          }
+        } else if (attempt) {
+          localStorage.removeItem('gafferUpdateAttempt');
+        }
+      } catch (e) { /* ignore */ }
     });
   }
 
@@ -1303,6 +1318,15 @@
     var daemonDir = extPath + '/daemon';
 
     function reloadAfterUpdate() {
+      // remember what we attempted — after reload, an unchanged commit
+      // means the script died; surface that instead of silently re-baiting
+      // the user with the same banner
+      try {
+        localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
+          target: updateBannerEl._latestCommit || null,
+          at: Date.now(),
+        }));
+      } catch (e) { /* ignore */ }
       setTimeout(function () { location.reload(); }, 2000);
     }
 
@@ -1314,7 +1338,7 @@
         var cmd, args;
         if (isWin) {
           cmd = 'powershell';
-          args = ['-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
+          args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
         } else {
           cmd = 'bash';
           args = [daemonDir + '/update.sh'];
@@ -1332,7 +1356,7 @@
     var jsx = '(function(){'
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
-      + 'if (isWin) return system.callSystem("powershell -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
+      + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
       + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
       + '})()';
     cs.evalScript(jsx, function (result) {

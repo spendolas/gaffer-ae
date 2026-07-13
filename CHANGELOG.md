@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.4 — 2026-07-14
+
+Windows update-flow fixes:
+
+- **Old daemon survived updates on Windows** — the process filter matched executable paths (always `node.exe`), so the stale daemon kept running and the reloaded panel reconnected to old code. Both the updater and installer now match by command line.
+- **Failed updates are no longer silent** — if the updater dies before finishing, the panel says so after reload (with the log location) instead of just re-showing the update banner
+- PowerShell runs with `-NoProfile` (user profiles can break or slow the updater)
+
 ## v0.5.3 — 2026-07-14
 
 - **Stale-session self-heal** — when the Claude CLI's session storage is wiped (CLI updates, re-auth), the panel's saved session ID pointed nowhere and chats silently hung. The daemon now detects the dead `--resume`, notifies the panel, and retries once on a fresh session automatically — history text is preserved. Failed chats can no longer end silently: any zero-output error surfaces in the chat.
