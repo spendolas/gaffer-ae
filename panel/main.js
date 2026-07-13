@@ -1001,14 +1001,16 @@
     var hit = maskCache[s.icon];
     if (hit) { s.maskable = hit.maskable; s.maskUrl = hit.maskUrl; return; }
     s.maskable = false; // pessimistic until proven
-    var img = new Image();
-    img.onload = function () {
+    // Decode via fetch -> ImageBitmap: origin-clean, so getImageData can't
+    // throw SecurityError on CEF builds that taint file:// canvases drawn
+    // from <img> (seen on Windows); falls back to <img> decode elsewhere.
+    function analyze(source) {
       try {
         var N = 32;
         var c = document.createElement('canvas');
         c.width = N; c.height = N;
         var ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0, N, N);
+        ctx.drawImage(source, 0, 0, N, N);
         var d = ctx.getImageData(0, 0, N, N).data;
         // A believable glyph covers 3–62% of the box; a solid circle is
         // ~78%, a rounded square more — those are icon TILES, not glyphs
@@ -1054,9 +1056,28 @@
         }
         maskCache[s.icon] = { maskable: s.maskable, maskUrl: s.maskUrl };
         queueRender();
-      } catch (e) { /* keep img fallback */ }
-    };
-    img.src = s.icon;
+      } catch (e) {
+        console.log('Gaffer: mask analysis failed for', s.id, '-', e.name || e);
+        /* keep img fallback */
+      }
+    }
+    // primary decode path: origin-clean bitmap; fall back to <img>, and if
+    // even that can't decode the icon, flag it broken -> monogram
+    fetch(s.icon)
+      .then(function (r) { return r.blob(); })
+      .then(function (b) { return createImageBitmap(b); })
+      .then(function (bmp) { analyze(bmp); if (bmp.close) bmp.close(); })
+      .catch(function () {
+        var img = new Image();
+        img.onload = function () { analyze(img); };
+        img.onerror = function () {
+          console.log('Gaffer: icon undecodable for', s.id, '- falling back to monogram');
+          s.iconBroken = true;
+          maskCache[s.icon] = { maskable: false, maskUrl: undefined };
+          queueRender();
+        };
+        img.src = s.icon;
+      });
   }
 
   // Shared hover tooltip (CEF title tooltips are unreliable in panels)
@@ -1151,11 +1172,19 @@
       glyph.className = 'mask-glyph';
       glyph.style.setProperty('-webkit-mask-image', 'url(' + (s.maskUrl || s.icon) + ')');
       tile.appendChild(glyph);
-    } else if (s.icon) {
+    } else if (s.icon && !s.iconBroken) {
       detectMaskable(s); // async — upgrades to mask-glyph on re-render
       var img = document.createElement('img');
       img.src = s.icon;
-      img.alt = s.displayName;
+      img.alt = ''; // never bleed text into the tile — monogram covers failure
+      img.addEventListener('error', function () {
+        // undecodable icon (bad bytes, unsupported format) — swap in place
+        s.iconBroken = true;
+        var mono = document.createElement('span');
+        mono.className = 'monogram';
+        mono.textContent = monogram(s.displayName);
+        tile.replaceChild(mono, img);
+      });
       tile.appendChild(img);
     } else {
       var mono = document.createElement('span');

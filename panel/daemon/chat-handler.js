@@ -73,10 +73,16 @@ function iconSlug(id) {
 }
 
 function toDataUrl(file, buf) {
-  var mime = /\.svg$/i.test(file) ? 'image/svg+xml'
-    : /\.png$/i.test(file) ? 'image/png'
-    : /\.(jpe?g)$/i.test(file) ? 'image/jpeg'
-    : 'image/x-icon';
+  // sniff magic bytes — /favicon.ico very often serves PNG, and a wrong
+  // declared mime on a data: URL breaks decoding in some CEF builds
+  var mime;
+  if (buf.length > 4 && buf[0] === 0x89 && buf[1] === 0x50) mime = 'image/png';
+  else if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
+  else if (buf.length > 6 && buf.slice(0, 4).toString() === 'GIF8') mime = 'image/gif';
+  else if (buf.length > 12 && buf.slice(8, 12).toString() === 'WEBP') mime = 'image/webp';
+  else if (buf.length > 4 && buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0) mime = 'image/x-icon';
+  else if (/\.svg$/i.test(file) || /^\s*<(\?xml|svg)/i.test(buf.slice(0, 100).toString())) mime = 'image/svg+xml';
+  else mime = /\.png$/i.test(file) ? 'image/png' : /\.(jpe?g)$/i.test(file) ? 'image/jpeg' : 'image/x-icon';
   return 'data:' + mime + ';base64,' + buf.toString('base64');
 }
 

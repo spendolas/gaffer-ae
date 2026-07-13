@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.2 — 2026-07-14
+
+Windows MCP tile rendering fixes:
+
+- **Flat-glyph masking on Windows** — mask analysis now decodes icons via an origin-clean bitmap path, dodging the CEF builds that taint `file://` canvases (masks silently never computed there, leaving raw colored favicons)
+- **Correct image types** — favicons are content-sniffed (many `/favicon.ico` files are really PNG); wrong declared types could break decoding
+- **No more broken-image tiles** — undecodable icons fall back to the two-letter monogram instead of a broken image with alt text
+
 ## v0.5.1 — 2026-07-14
 
 Clean-install simulation fixes (Windows focus):
