@@ -62,7 +62,6 @@
       --color-bubble-error-text: #ee8888;
       --color-code-inline-bg: rgba(216, 176, 112, 0.2);
       --color-code-block-text: #d8d8d8;
-      --color-mcp-tile-glyph: #e8eefa;
       --color-text-placeholder: rgba(119, 119, 119, 0.5);
       /* Space + radius scale */
       --space-2: 2px; --space-4: 4px; --space-6: 6px; --space-8: 8px;
@@ -608,6 +607,7 @@
     .mcp-tiles {
       flex: 1;
       display: flex;
+      gap: 2px;
       overflow-x: auto;
       align-items: stretch;
       min-width: 0;
@@ -620,42 +620,31 @@
       animation: tileFade 0.35s ease-out forwards;
     }
     @keyframes tileFade { to { opacity: 1; } }
+    /* MCPs Tiles 248:4677 — fixed 48x40 r16 tiles, gap 2.
+       enabled: bg/input + blue glyph · available: bare + muted glyph ·
+       auth/error: accent fill + dark panel glyph */
     .mcp-tile {
-      flex: 1 0 45px;
-      min-width: 45px;
+      flex: 0 0 48px;
+      width: 48px;
       height: 40px;
       border: none;
+      border-radius: 16px;
       padding: 0;
       background: transparent;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      color: var(--color-mcp-tile-glyph);
-      transition: background-color 0.25s ease, filter 0.15s ease;
+      color: var(--color-text-muted);
+      transition: background-color 0.25s ease, color 0.25s ease, filter 0.15s ease;
     }
-    .mcp-tile.enabled { background: var(--color-accent-blue); }
-    .mcp-tile.auth { background: var(--color-accent-amber); }
-    .mcp-tile.failed { background: var(--color-accent-red); cursor: default; }
+    .mcp-tile.enabled { background: var(--color-bg-input); color: var(--color-accent-blue); }
+    .mcp-tile.auth { background: var(--color-accent-amber); color: var(--color-bg-panel); }
+    .mcp-tile.failed { background: var(--color-accent-red); color: var(--color-bg-panel); cursor: default; }
     .mcp-tile.enabled:hover, .mcp-tile.auth:hover { filter: brightness(1.15); }
     .mcp-tile.available:hover { background: var(--color-border-default); }
     .mcp-tile.authing { animation: pillPulse 1.5s ease-in-out infinite; }
-    .mcp-tile img {
-      width: 18px;
-      height: 18px;
-      object-fit: contain;
-      /* fallback for favicons without alpha (can't be masked) */
-      filter: grayscale(1) brightness(1.9);
-    }
-    /* alpha-bg favicons render as flat single-color glyphs via mask */
-    .mcp-tile .mask-glyph {
-      width: 18px;
-      height: 18px;
-      background: currentColor;
-      -webkit-mask-position: center;
-      -webkit-mask-size: contain;
-      -webkit-mask-repeat: no-repeat;
-    }
+    /* tiles are vector-or-monogram — favicon/mask rendering removed */
     .mcp-tile .gicon { width: 20px; height: 20px; }
     .mcp-tooltip {
       position: fixed;
@@ -671,6 +660,7 @@
       pointer-events: none;
       white-space: nowrap;
     }
+    .mcp-tooltip .tip-detail { color: var(--color-text-dimmer); }
     @keyframes tipIn {
       from { opacity: 0; }
     }

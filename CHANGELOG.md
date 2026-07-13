@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.5 — 2026-07-14
+
+- **MCP tiles redesigned (final form)** — fixed 48×40 rounded tiles: enabled = dark inset with blue glyph, available = bare with muted glyph, needs-auth/error = amber/red with dark glyph. Attention colors only where action is needed.
+- **Vector-or-monogram icons** — the favicon pipeline is gone (inconsistent, platform-fragile); tiles show flat brand vectors from the simple-icons CDN (smarter name matching recovers e.g. Zoom) or a two-letter monogram. Trademark-removed brands (Slack, Adobe) intentionally wear monograms.
+- **Tooltips carry state detail** — second line shows Connected / Available / Click to authorise / Authorising… / Error with the actual error title.
+- **Windows: the Update button works** — spawn failures were silent (async error event never handled) so the updater never launched; now falls back properly and uses an absolute PowerShell path.
+
 ## v0.5.4 — 2026-07-14
 
 Windows update-flow fixes:

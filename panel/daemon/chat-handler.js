@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { findClaudeBinary } from './claude-binary.js';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -57,9 +57,9 @@ var COMPACT_THRESHOLD_TOKENS = 150000;
 var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
 
 // ── MCP tile icons ──────────────────────────────────────────────────
-// Resolution order (audit §4.6): bundled brand SVG → cached favicon →
-// background favicon fetch (vendor domain from the server URL) → the
-// panel falls back to a monogram tile.
+// Resolution order: bundled brand SVG → cached vector → background
+// simple-icons CDN fetch → the panel falls back to a monogram tile.
+// Vectors only — favicons were removed (inconsistent, bad experience).
 var PANEL_DIR = join(__dirname, '..');
 var BUNDLED_ICON_DIR = join(PANEL_DIR, 'icons', 'mcp');
 var ICON_CACHE_DIR = join(PANEL_DIR, '.gaffer-icons');
@@ -100,39 +100,27 @@ function loadBundledIcons() {
 }
 
 function cachedIcon(id) {
-  for (var ext of ['.svg', '.png', '.ico']) {
-    try {
-      var p = join(ICON_CACHE_DIR, iconSlug(id) + ext);
-      var buf = readFileSync(p);
-      if (buf.length > 0) return toDataUrl(p, buf);
-    } catch (e) { /* try next ext */ }
-  }
+  // vectors only — favicon caching removed (bad tile experience)
+  try {
+    var p = join(ICON_CACHE_DIR, iconSlug(id) + '.svg');
+    var buf = readFileSync(p);
+    if (buf.length > 0) return toDataUrl(p, buf);
+  } catch (e) { /* miss */ }
   return null;
 }
 
-async function fetchFavicon(id, target) {
-  var host;
-  try { host = new URL(target).hostname; } catch (e) { return null; }
-  var candidates = [host];
-  var apex = host.replace(/^[^.]+\./, '');
-  if (apex !== host && apex.indexOf('.') !== -1) candidates.push(apex);
-  for (var domain of candidates) {
-    try {
-      var res = await fetch('https://' + domain + '/favicon.ico', {
-        redirect: 'follow',
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) continue;
-      var buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length < 32) continue; // empty/placeholder
-      mkdirSync(ICON_CACHE_DIR, { recursive: true });
-      var file = join(ICON_CACHE_DIR, iconSlug(id) + '.ico');
-      writeFileSync(file, buf);
-      return toDataUrl(file, buf);
-    } catch (e) { /* try next */ }
-  }
-  return null;
+// one-time hygiene: drop legacy favicon cache files from pre-vector installs
+var prunedLegacyIcons = false;
+function pruneLegacyIcons() {
+  if (prunedLegacyIcons) return;
+  prunedLegacyIcons = true;
+  try {
+    for (var f of readdirSync(ICON_CACHE_DIR)) {
+      if (/\.(ico|png)$/i.test(f)) unlinkSync(join(ICON_CACHE_DIR, f));
+    }
+  } catch (e) { /* cache dir may not exist */ }
 }
+
 
 // Assign icons from bundled/cache synchronously; fetch the rest in the
 // background and report them via onIcons({ id: dataUrl }).
@@ -147,17 +135,16 @@ function resolveIcons(servers, onIcons) {
     }
     if (!hit) hit = cachedIcon(s.id);
     s.icon = hit;
-    if (!hit && /^https?:\/\//.test(s.target || '')) misses.push(s);
+    if (!hit) misses.push(s);
   }
+  pruneLegacyIcons();
   if (!misses.length || typeof onIcons !== 'function') return;
   Promise.allSettled(misses.map(function (s) {
-    // brand vector first (simple-icons CDN — flat, single-color, identical
-    // on every install; nothing redistributed by this repo), favicon second
+    // brand vectors only (simple-icons CDN — flat, single-color, identical
+    // on every install; nothing redistributed by this repo); no vector ->
+    // the panel shows the two-letter monogram
     return fetchSimpleIcon(s.id, s.displayName).then(function (svg) {
-      if (svg) return { id: s.id, icon: svg };
-      return fetchFavicon(s.id, s.target).then(function (dataUrl) {
-        return dataUrl ? { id: s.id, icon: dataUrl } : null;
-      });
+      return svg ? { id: s.id, icon: svg } : null;
     });
   })).then(function (results) {
     var icons = {};
@@ -171,26 +158,36 @@ function resolveIcons(servers, onIcons) {
 }
 
 // simple-icons CDN: monochrome brand vectors by slug (normName happens to
-// match their slug scheme for most brands). 404 = brand unknown -> favicon.
+// match their slug scheme for most brands). Slug ladder recovers names
+// with decorative suffixes — "Zoom for Claude" isn't a brand, "zoom" is.
+// All candidates 404 = brand unknown -> the panel's monogram.
 async function fetchSimpleIcon(id, displayName) {
-  var slug = normName(String(displayName).replace(/^claude\.ai\s+/i, '').replace(/\(.*\)/, ''));
-  if (!slug) return null;
-  try {
-    var res = await fetch('https://cdn.simpleicons.org/' + slug, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) return null;
-    var text = await res.text();
-    if (text.indexOf('<svg') === -1) return null;
-    // fill with currentColor so the panel's tile color drives the glyph
-    text = text.replace('<svg', '<svg fill="currentColor"');
-    var buf = Buffer.from(text);
-    mkdirSync(ICON_CACHE_DIR, { recursive: true });
-    var file = join(ICON_CACHE_DIR, iconSlug(id) + '.svg');
-    writeFileSync(file, buf);
-    return toDataUrl(file, buf);
-  } catch (e) { return null; }
+  var base = String(displayName).replace(/^claude\.ai\s+/i, '').replace(/\(.*\)/, '').trim();
+  var firstWord = normName(base.split(/\s+/)[0]);
+  var candidates = [
+    normName(base),
+    normName(base.replace(/\s+for\s+.*$/i, '')), // "Zoom for Claude" -> zoom
+    firstWord.length >= 3 ? firstWord : '',      // last resort; short tokens risk wrong brands
+  ].filter(function (s, i, arr) { return s && arr.indexOf(s) === i; });
+  for (var slug of candidates) {
+    try {
+      var res = await fetch('https://cdn.simpleicons.org/' + slug, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) continue;
+      var text = await res.text();
+      if (text.indexOf('<svg') === -1) continue;
+      // fill with currentColor so the panel's tile color drives the glyph
+      text = text.replace('<svg', '<svg fill="currentColor"');
+      var buf = Buffer.from(text);
+      mkdirSync(ICON_CACHE_DIR, { recursive: true });
+      var file = join(ICON_CACHE_DIR, iconSlug(id) + '.svg');
+      writeFileSync(file, buf);
+      return toDataUrl(file, buf);
+    } catch (e) { /* try next candidate */ }
+  }
+  return null;
 }
 
 // CEP launches the daemon with a stripped PATH. Augment it so claude can

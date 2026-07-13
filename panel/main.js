@@ -410,18 +410,13 @@
         return;
       }
       if (msg.type === 'mcps') {
-        // carry icons + mask analysis over from the previous list so a
-        // refresh never regresses a tile to its monogram/img fallback
+        // carry icons over from the previous list so a refresh never
+        // regresses a tile to its monogram fallback
         var prev = {};
         availableMcps.forEach(function (s) { prev[s.id] = s; });
         (msg.servers || []).forEach(function (s) {
           var p = prev[s.id];
-          if (!p) return;
-          if (!s.icon && p.icon) s.icon = p.icon;
-          if (s.icon && p.icon === s.icon) {
-            s.maskable = p.maskable;
-            s.maskUrl = p.maskUrl;
-          }
+          if (p && !s.icon && p.icon) s.icon = p.icon;
         });
         availableMcps = msg.servers || [];
         mcpListError = msg.error || null;
@@ -982,111 +977,23 @@
     ws.send(JSON.stringify({ type: 'list_mcps' }));
   }
 
-  // Flat single-color glyphs: favicons with a transparent background mask
-  // directly; solid-background favicons get an alpha channel derived from
-  // luminance (bright-on-dark or dark-on-bright, picked by corner tone),
-  // so e.g. Uber's white-on-black wordmark becomes a clean silhouette.
-  // Session cache keyed by icon data — survives list refreshes so tiles
-  // never re-detect (and re-flicker) for an icon we've already analyzed.
-  var maskCache = {}; // icon dataUrl -> { maskable, maskUrl }
-  var renderQueued = false;
-  function queueRender() {
-    if (renderQueued) return;
-    renderQueued = true;
-    setTimeout(function () { renderQueued = false; renderMcpList(); }, 80);
-  }
-
-  function detectMaskable(s) {
-    if (!s.icon || s.maskable !== undefined || s.icon.indexOf('image/svg') !== -1) return;
-    var hit = maskCache[s.icon];
-    if (hit) { s.maskable = hit.maskable; s.maskUrl = hit.maskUrl; return; }
-    s.maskable = false; // pessimistic until proven
-    // Decode via fetch -> ImageBitmap: origin-clean, so getImageData can't
-    // throw SecurityError on CEF builds that taint file:// canvases drawn
-    // from <img> (seen on Windows); falls back to <img> decode elsewhere.
-    function analyze(source) {
-      try {
-        var N = 32;
-        var c = document.createElement('canvas');
-        c.width = N; c.height = N;
-        var ctx = c.getContext('2d');
-        ctx.drawImage(source, 0, 0, N, N);
-        var d = ctx.getImageData(0, 0, N, N).data;
-        // A believable glyph covers 3–62% of the box; a solid circle is
-        // ~78%, a rounded square more — those are icon TILES, not glyphs
-        // (the Miro/Vercel filled-blob bug).
-        function coverage(data) {
-          var on = 0;
-          for (var p = 3; p < data.length; p += 4) if (data[p] > 128) on++;
-          return on / (data.length / 4);
-        }
-        function glyphish(cov) { return cov > 0.03 && cov < 0.62; }
-        var corners = [0, (N - 1) * 4, (N - 1) * N * 4, ((N - 1) * N + N - 1) * 4];
-        var transparentBg = corners.every(function (i) { return d[i + 3] < 40; });
-        var result = null; // maskUrl or null
-        if (transparentBg && glyphish(coverage(d))) {
-          // alpha channel is a real glyph — use the icon directly
-          result = s.icon;
-        } else {
-          // Solid bg, or a solid tile shape on transparency: derive the
-          // glyph from luminance DISTANCE to the dominant tone (handles
-          // both polarities), gated by original alpha.
-          var lums = [], p;
-          for (p = 0; p < d.length; p += 4) {
-            if (d[p + 3] > 128) lums.push(0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]);
-          }
-          lums.sort(function (a, b) { return a - b; });
-          var bgLum = lums.length ? lums[Math.floor(lums.length / 2)] : 255; // median = tile fill
-          var out = ctx.createImageData(N, N);
-          for (p = 0; p < d.length; p += 4) {
-            var lum = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
-            var a = Math.max(0, Math.min(255, (Math.abs(lum - bgLum) - 25) * 2.2));
-            out.data[p] = 255; out.data[p + 1] = 255; out.data[p + 2] = 255;
-            out.data[p + 3] = Math.round(a * (d[p + 3] / 255));
-          }
-          if (glyphish(coverage(out.data))) {
-            ctx.putImageData(out, 0, 0);
-            result = c.toDataURL('image/png');
-          }
-          // else: no readable glyph — keep the colored favicon (img)
-        }
-        if (result) {
-          s.maskable = true;
-          s.maskUrl = result;
-        }
-        maskCache[s.icon] = { maskable: s.maskable, maskUrl: s.maskUrl };
-        queueRender();
-      } catch (e) {
-        console.log('Gaffer: mask analysis failed for', s.id, '-', e.name || e);
-        /* keep img fallback */
-      }
-    }
-    // primary decode path: origin-clean bitmap; fall back to <img>, and if
-    // even that can't decode the icon, flag it broken -> monogram
-    fetch(s.icon)
-      .then(function (r) { return r.blob(); })
-      .then(function (b) { return createImageBitmap(b); })
-      .then(function (bmp) { analyze(bmp); if (bmp.close) bmp.close(); })
-      .catch(function () {
-        var img = new Image();
-        img.onload = function () { analyze(img); };
-        img.onerror = function () {
-          console.log('Gaffer: icon undecodable for', s.id, '- falling back to monogram');
-          s.iconBroken = true;
-          maskCache[s.icon] = { maskable: false, maskUrl: undefined };
-          queueRender();
-        };
-        img.src = s.icon;
-      });
-  }
-
-  // Shared hover tooltip (CEF title tooltips are unreliable in panels)
+  // Shared hover tooltip (CEF title tooltips are unreliable in panels).
+  // Optional second line carries state detail (Connected / Click to
+  // authorise / Error: <title> ...).
   var mcpTooltipEl = null;
-  function showMcpTooltip(tile, text) {
+  function showMcpTooltip(tile, text, detail) {
     hideMcpTooltip();
     mcpTooltipEl = document.createElement('div');
     mcpTooltipEl.className = 'mcp-tooltip';
-    mcpTooltipEl.textContent = text;
+    var title = document.createElement('div');
+    title.textContent = text;
+    mcpTooltipEl.appendChild(title);
+    if (detail) {
+      var d = document.createElement('div');
+      d.className = 'tip-detail';
+      d.textContent = detail;
+      mcpTooltipEl.appendChild(d);
+    }
     document.body.appendChild(mcpTooltipEl);
     var r = tile.getBoundingClientRect();
     var tt = mcpTooltipEl.getBoundingClientRect();
@@ -1157,35 +1064,25 @@
     var tile = document.createElement('button');
     tile.className = 'mcp-tile ' + state + (pendingAuthId === s.id ? ' authing' : '');
     tile.dataset.mcpId = s.id;
-    tile.addEventListener('mouseenter', function () { showMcpTooltip(tile, s.displayName); });
+    tile.addEventListener('mouseenter', function () {
+      var st = mcpTileState(s);
+      var detail;
+      if (pendingAuthId === s.id) detail = 'Authorising…';
+      else if (st === 'enabled') detail = 'Connected';
+      else if (st === 'available') detail = 'Available';
+      else if (st === 'auth') detail = 'Click to authorise';
+      else detail = 'Error: ' + String(s.status || 'unknown').replace(/^[^a-zA-Z]+/, '');
+      showMcpTooltip(tile, s.displayName, detail);
+    });
     tile.addEventListener('mouseleave', hideMcpTooltip);
+    // Tiles are vector-or-monogram, nothing else: bundled/CDN brand SVGs
+    // render via currentColor; anything without a vector gets the
+    // two-letter monogram. (Favicon masking removed — bad experience.)
     if (s.icon && s.icon.indexOf('image/svg') !== -1) {
-      // bundled brand SVGs — currentColor strokes/fills
       var span = document.createElement('span');
       span.className = 'gicon';
       span.innerHTML = atob(s.icon.split(',')[1]);
       tile.appendChild(span);
-    } else if (s.icon && s.maskable) {
-      // favicon → flat glyph in the tile color via mask (direct alpha or
-      // the luminance-derived alpha built in detectMaskable)
-      var glyph = document.createElement('span');
-      glyph.className = 'mask-glyph';
-      glyph.style.setProperty('-webkit-mask-image', 'url(' + (s.maskUrl || s.icon) + ')');
-      tile.appendChild(glyph);
-    } else if (s.icon && !s.iconBroken) {
-      detectMaskable(s); // async — upgrades to mask-glyph on re-render
-      var img = document.createElement('img');
-      img.src = s.icon;
-      img.alt = ''; // never bleed text into the tile — monogram covers failure
-      img.addEventListener('error', function () {
-        // undecodable icon (bad bytes, unsupported format) — swap in place
-        s.iconBroken = true;
-        var mono = document.createElement('span');
-        mono.className = 'monogram';
-        mono.textContent = monogram(s.displayName);
-        tile.replaceChild(mono, img);
-      });
-      tile.appendChild(img);
     } else {
       var mono = document.createElement('span');
       mono.className = 'monogram';
@@ -1330,6 +1227,19 @@
       setTimeout(function () { location.reload(); }, 2000);
     }
 
+    function runViaExtendScript() {
+      var jsx = '(function(){'
+        + 'var isWin = $.os.indexOf("Windows") !== -1;'
+        + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
+        + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
+        + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
+        + '})()';
+      cs.evalScript(jsx, function (result) {
+        console.log('Gaffer: update result (ExtendScript):', result);
+        reloadAfterUpdate();
+      });
+    }
+
     // Prefer Node spawn (Apple Silicon-safe), fall back to ExtendScript.
     if (typeof require !== 'undefined') {
       try {
@@ -1337,32 +1247,38 @@
         var isWin = process.platform === 'win32';
         var cmd, args;
         if (isWin) {
-          cmd = 'powershell';
+          // absolute path — CEP's stripped PATH may not resolve bare
+          // 'powershell', and spawn failures are ASYNC (error event), so a
+          // bad resolution used to look like a successful no-op
+          cmd = (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
           args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
         } else {
           cmd = 'bash';
           args = [daemonDir + '/update.sh'];
         }
-        var child = cp.spawn(cmd, args, { detached: true, stdio: 'ignore' });
+        var child = cp.spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+        var spawnFailed = false;
+        child.on('error', function (e) {
+          spawnFailed = true;
+          console.error('Gaffer: Node spawn of updater failed — ExtendScript fallback', e);
+          runViaExtendScript();
+        });
         child.unref();
-        console.log('Gaffer: update spawned via Node');
-        reloadAfterUpdate();
+        // spawn errors surface asynchronously — give them a beat before
+        // declaring victory and reloading
+        setTimeout(function () {
+          if (!spawnFailed) {
+            console.log('Gaffer: update spawned via Node');
+            reloadAfterUpdate();
+          }
+        }, 400);
         return;
       } catch (e) {
         console.error('Gaffer: update spawn (Node) failed, falling back', e);
       }
     }
 
-    var jsx = '(function(){'
-      + 'var isWin = $.os.indexOf("Windows") !== -1;'
-      + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
-      + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
-      + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
-      + '})()';
-    cs.evalScript(jsx, function (result) {
-      console.log('Gaffer: update result (ExtendScript):', result);
-      reloadAfterUpdate();
-    });
+    runViaExtendScript();
   }
 
   function dismissUpdate() {
