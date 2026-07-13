@@ -722,8 +722,9 @@
       type: 'chat',
       message: fullMessage,
       sessionId: currentSessionId,
-      model: currentModel,
-      variant: currentVariant,
+      // pinned version = full model id (may embed [1m]); alias otherwise
+      model: currentVariant.indexOf('id:') === 0 ? currentVariant.slice(3) : currentModel,
+      variant: currentVariant === '1m' ? '1m' : 'standard',
       effort: currentEffort,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
@@ -1296,10 +1297,25 @@
     return v.charAt(0).toUpperCase() + v.slice(1);
   }
   var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
-  var VARIANTS = [
-    { value: 'standard', label: 'Standard' },
-    { value: '1m', label: '1M' },
-  ];
+  // Variant = version x context (ref: "Latest", "Latest · 1M", "4.6",
+  // "4.6 · 1M"...). Latest pair is always offered (alias + [1m] suffix);
+  // pinned versions come from the daemon's CLI-state discovery and are
+  // full model ids carried in the value as 'id:<full-id>'.
+  var modelVersions = {}; // family -> [full ids], daemon-pushed
+  function versionLabel(id) {
+    return id.replace(/^claude-[a-z]+-/, '').replace(/-\d{8}$/, '').replace(/-/g, '.');
+  }
+  function variantOptionsFor(family) {
+    var opts = [
+      { value: 'standard', label: 'Latest' },
+      { value: '1m', label: 'Latest · 1M' },
+    ];
+    (modelVersions[family] || []).forEach(function (id) {
+      opts.push({ value: 'id:' + id, label: versionLabel(id) });
+      opts.push({ value: 'id:' + id + '[1m]', label: versionLabel(id) + ' · 1M' });
+    });
+    return opts;
+  }
   var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'].map(function (v) { return { value: v, label: labelize(v) }; });
   // Generic popup select: options is [{value,label}], get/set close over the
   // state var. Popup goes position:fixed on open so the drawer's
@@ -1357,13 +1373,24 @@
   }
   var modelSelect = makeSelect(
     modelSelectBtnEl, modelSelectPopupEl, modelSelectLabelEl, MODELS,
-    function () { return currentModel; }, function (v) { currentModel = v; }
+    function () { return currentModel; },
+    function (v) {
+      currentModel = v;
+      rebuildVariantSelect(); // versions are family-specific
+    }
   );
   var variantSelect = makeSelect(
     document.getElementById('variantSelectBtn'), document.getElementById('variantSelectPopup'),
-    document.getElementById('variantSelectLabel'), VARIANTS,
+    document.getElementById('variantSelectLabel'), variantOptionsFor(currentModel),
     function () { return currentVariant; }, function (v) { currentVariant = v; }
   );
+  function rebuildVariantSelect() {
+    var opts = variantOptionsFor(currentModel);
+    var valid = false;
+    for (var i = 0; i < opts.length; i++) if (opts[i].value === currentVariant) valid = true;
+    if (!valid) currentVariant = 'standard'; // pinned version orphaned by model switch
+    variantSelect.setOptions(opts);
+  }
   var effortSelect = makeSelect(
     document.getElementById('effortSelectBtn'), document.getElementById('effortSelectPopup'),
     document.getElementById('effortSelectLabel'), EFFORTS,
@@ -1378,6 +1405,10 @@
     }
     if (Array.isArray(data.efforts) && data.efforts.length) {
       effortSelect.setOptions(data.efforts.map(function (v) { return { value: v, label: labelize(v) }; }));
+    }
+    if (data.versions && typeof data.versions === 'object') {
+      modelVersions = data.versions;
+      rebuildVariantSelect();
     }
   }
   autoCheckEl.addEventListener('change', function () {

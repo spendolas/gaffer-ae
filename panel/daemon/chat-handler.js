@@ -212,7 +212,40 @@ export class ChatHandler {
     var effortBlock = help.match(/--effort <level>[\s\S]*?\(([a-z, ]+)\)/i);
     if (effortBlock) efforts = effortBlock[1].split(',').map(function (s) { return s.trim(); }).filter(Boolean);
     if (!efforts.length) efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
-    self.modelOptions = { models: models, efforts: efforts };
+    // Pinnable versions: full model ids the CLI accepts (verified:
+    // `--model claude-opus-4-6` works; version aliases don't exist).
+    // Enumerated from the CLI's own state file (~/.claude.json — server
+    // -pushed model options + feature cache), so the list tracks CLI
+    // updates instead of being hardcoded here.
+    var versions = {};
+    try {
+      var stateRaw = readFileSync(join(process.env.HOME || '', '.claude.json'), 'utf8');
+      var seen = {};
+      var vm, vre = /claude-([a-z]+)-[0-9][0-9a-z-]*/g;
+      while ((vm = vre.exec(stateRaw))) {
+        var id = vm[0].replace(/-$/, '');
+        // versions only — numeric segments (opt. date), not entitlement
+        // ids like claude-fable-5-promotional-access
+        if (!/^claude-[a-z]+(-\d+)+$/.test(id)) continue;
+        if (seen[id]) continue;
+        seen[id] = true;
+        (versions[vm[1]] = versions[vm[1]] || []).push(id);
+      }
+      var vnum = function (id) {
+        return id.replace(/^claude-[a-z]+-/, '').split('-')
+          .map(function (n) { return parseInt(n, 10) || 0; });
+      };
+      for (var fam in versions) {
+        versions[fam].sort(function (a, b) {
+          var x = vnum(a), y = vnum(b);
+          for (var i = 0; i < Math.max(x.length, y.length); i++) {
+            if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
+          }
+          return 0;
+        });
+      }
+    } catch (e) { /* no state file — versions stay empty */ }
+    self.modelOptions = { models: models, efforts: efforts, versions: versions };
     return self.modelOptions;
   }
 
