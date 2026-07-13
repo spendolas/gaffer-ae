@@ -178,6 +178,42 @@ export class ChatHandler {
     this.compacting = false;
     this.claudeBin = null;
     this.envForSpawn = null;
+    this.modelOptions = null; // cached discovery result
+  }
+
+  // Discover what the installed CLI offers — no hardcoded lists in the
+  // panel. Parses `claude --help`: the --effort enum is explicit
+  // ("(low, medium, high, xhigh, max)"); the --model description names the
+  // current aliases as quoted examples. 'haiku' works but isn't listed in
+  // the examples, so a floor of known-good aliases is unioned in.
+  async listModelOptions() {
+    if (this.modelOptions) return this.modelOptions;
+    var self = this;
+    var help = await new Promise(async function (resolve) {
+      try {
+        var bin = await findClaudeBinary();
+        execFile(bin, ['--help'], { env: augmentedEnv(), timeout: 15000 }, function (err, stdout) {
+          resolve(String(stdout || ''));
+        });
+      } catch (e) { resolve(''); }
+    });
+    var models = [];
+    var modelBlock = help.match(/--model <model>[\s\S]*?(?=\n\s+-{1,2}[a-z])/i);
+    if (modelBlock) {
+      var m, re = /'([a-z][a-z0-9]*)'/g; // bare aliases only, not 'claude-*' ids
+      while ((m = re.exec(modelBlock[0]))) {
+        if (models.indexOf(m[1]) === -1) models.push(m[1]);
+      }
+    }
+    for (var base of ['opus', 'sonnet', 'haiku']) {
+      if (models.indexOf(base) === -1) models.push(base);
+    }
+    var efforts = [];
+    var effortBlock = help.match(/--effort <level>[\s\S]*?\(([a-z, ]+)\)/i);
+    if (effortBlock) efforts = effortBlock[1].split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!efforts.length) efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+    self.modelOptions = { models: models, efforts: efforts };
+    return self.modelOptions;
   }
 
   async handleChat(msg, socket) {
@@ -207,7 +243,12 @@ export class ChatHandler {
     }
 
     var model = msg.model || 'opus';
+    // Context-window variant: 1M suffix (verified live: `--model "opus[1m]"`).
+    // Only opus/sonnet ship 1M variants — ignored for other models.
+    if (msg.variant === '1m' && (model === 'opus' || model === 'sonnet')) model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+    var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+    if (msg.effort && EFFORTS.indexOf(msg.effort) !== -1) args.push('--effort', msg.effort);
 
     // Build allowedTools for every call so MCP toggle changes apply
     // immediately, even on resumed sessions.

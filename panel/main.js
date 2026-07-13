@@ -46,6 +46,8 @@
   var chatBusy = false;
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
   var currentModel = 'opus';
+  var currentVariant = 'latest'; // 'latest' | '1m' (context-window variant)
+  var currentEffort = 'high'; // low | medium | high | xhigh | max
   var autoCheckUpdates = true;
   var dismissedUpdateCommit = null;
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
@@ -211,6 +213,8 @@
       messages: chatHistory,
       sessionId: currentSessionId,
       model: currentModel,
+      variant: currentVariant,
+      effort: currentEffort,
       autoCheckUpdates: autoCheckUpdates,
       dismissedUpdateCommit: dismissedUpdateCommit,
       enabledMcps: enabledMcps,
@@ -241,6 +245,14 @@
         if (data.model) {
           currentModel = data.model;
           updateModelSelect();
+        }
+        if (data.variant) {
+          currentVariant = data.variant;
+          updateVariantSelect();
+        }
+        if (data.effort) {
+          currentEffort = data.effort;
+          updateEffortSelect();
         }
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
@@ -389,6 +401,11 @@
       }
       if (msg.type === 'chat_event') {
         showChatNotice(msg.message || msg.event);
+        return;
+      }
+      if (msg.type === 'models') {
+        // CLI-discovered model/effort options (never hardcoded panel-side)
+        applyModelOptions(msg);
         return;
       }
       if (msg.type === 'mcps') {
@@ -705,6 +722,8 @@
       message: fullMessage,
       sessionId: currentSessionId,
       model: currentModel,
+      variant: currentVariant,
+      effort: currentEffort,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
     }));
@@ -1266,55 +1285,100 @@
     location.reload();
   });
 
-  // ── Custom ModelSelect (Figma atom — options incl. Fable) ──
-  var MODELS = [
-    { value: 'fable', label: 'Fable' },
-    { value: 'opus', label: 'Opus' },
-    { value: 'sonnet', label: 'Sonnet' },
-    { value: 'haiku', label: 'Haiku' },
+  // ── Custom selects (Figma atom): model, context variant, effort ──
+  // Model + effort options are NOT hardcoded — the daemon discovers them
+  // from the installed CLI (`claude --help`) and pushes a 'models' message
+  // on load; these are only the pre-push fallbacks.
+  function labelize(v) {
+    if (v === 'xhigh') return 'Extra High';
+    if (v === '1m') return '1M';
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  }
+  var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
+  var VARIANTS = [
+    { value: 'latest', label: 'Latest' },
+    { value: '1m', label: '1M' },
   ];
-  function updateModelSelect() {
-    var m = null;
-    for (var i = 0; i < MODELS.length; i++) if (MODELS[i].value === currentModel) m = MODELS[i];
-    modelSelectLabelEl.textContent = m ? m.label : currentModel;
-    var opts = modelSelectPopupEl.querySelectorAll('.option');
-    for (var j = 0; j < opts.length; j++) {
-      opts[j].classList.toggle('selected', opts[j].dataset.value === currentModel);
+  var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'].map(function (v) { return { value: v, label: labelize(v) }; });
+  // Generic popup select: options is [{value,label}], get/set close over the
+  // state var. Popup goes position:fixed on open so the drawer's
+  // overflow:hidden (animation requirement) can't clip it. Returned handle
+  // exposes update() and setOptions() for CLI-discovered rebuilds.
+  function makeSelect(btnEl, popupEl, labelEl, options, get, set) {
+    function update() {
+      var cur = null;
+      for (var i = 0; i < options.length; i++) if (options[i].value === get()) cur = options[i];
+      labelEl.textContent = cur ? cur.label : labelize(get());
+      var opts = popupEl.querySelectorAll('.option');
+      for (var j = 0; j < opts.length; j++) {
+        opts[j].classList.toggle('selected', opts[j].dataset.value === get());
+      }
+    }
+    function build() {
+      popupEl.innerHTML = '';
+      options.forEach(function (o) {
+        var opt = document.createElement('span');
+        opt.className = 'option';
+        opt.dataset.value = o.value;
+        opt.textContent = o.label;
+        opt.addEventListener('click', function () {
+          set(o.value);
+          popupEl.hidden = true;
+          update();
+          saveChat();
+        });
+        popupEl.appendChild(opt);
+      });
+    }
+    build();
+    btnEl.addEventListener('click', function (e) {
+      e.preventDefault();
+      popupEl.hidden = !popupEl.hidden;
+      if (!popupEl.hidden) {
+        var r = btnEl.getBoundingClientRect();
+        var s = popupEl.style;
+        s.position = 'fixed';
+        s.left = r.left + 'px';
+        s.bottom = (window.innerHeight - r.top + 2) + 'px';
+        s.minWidth = r.width + 'px';
+      }
+      update();
+    });
+    document.addEventListener('click', function (e) {
+      if (!popupEl.hidden && !btnEl.contains(e.target) && !popupEl.contains(e.target)) {
+        popupEl.hidden = true;
+      }
+    });
+    return {
+      update: update,
+      setOptions: function (next) { options = next; build(); update(); },
+    };
+  }
+  var modelSelect = makeSelect(
+    modelSelectBtnEl, modelSelectPopupEl, modelSelectLabelEl, MODELS,
+    function () { return currentModel; }, function (v) { currentModel = v; }
+  );
+  var variantSelect = makeSelect(
+    document.getElementById('variantSelectBtn'), document.getElementById('variantSelectPopup'),
+    document.getElementById('variantSelectLabel'), VARIANTS,
+    function () { return currentVariant; }, function (v) { currentVariant = v; }
+  );
+  var effortSelect = makeSelect(
+    document.getElementById('effortSelectBtn'), document.getElementById('effortSelectPopup'),
+    document.getElementById('effortSelectLabel'), EFFORTS,
+    function () { return currentEffort; }, function (v) { currentEffort = v; }
+  );
+  var updateModelSelect = modelSelect.update;
+  var updateVariantSelect = variantSelect.update;
+  var updateEffortSelect = effortSelect.update;
+  function applyModelOptions(data) {
+    if (Array.isArray(data.models) && data.models.length) {
+      modelSelect.setOptions(data.models.map(function (v) { return { value: v, label: labelize(v) }; }));
+    }
+    if (Array.isArray(data.efforts) && data.efforts.length) {
+      effortSelect.setOptions(data.efforts.map(function (v) { return { value: v, label: labelize(v) }; }));
     }
   }
-  MODELS.forEach(function (m) {
-    var opt = document.createElement('span');
-    opt.className = 'option';
-    opt.dataset.value = m.value;
-    opt.textContent = m.label;
-    opt.addEventListener('click', function () {
-      currentModel = m.value;
-      modelSelectPopupEl.hidden = true;
-      updateModelSelect();
-      saveChat();
-    });
-    modelSelectPopupEl.appendChild(opt);
-  });
-  modelSelectBtnEl.addEventListener('click', function (e) {
-    e.preventDefault();
-    modelSelectPopupEl.hidden = !modelSelectPopupEl.hidden;
-    if (!modelSelectPopupEl.hidden) {
-      // Fixed positioning so the drawer's overflow:hidden (animation
-      // requirement) can't clip the popup.
-      var r = modelSelectBtnEl.getBoundingClientRect();
-      var s = modelSelectPopupEl.style;
-      s.position = 'fixed';
-      s.left = r.left + 'px';
-      s.bottom = (window.innerHeight - r.top + 2) + 'px';
-      s.minWidth = r.width + 'px';
-    }
-    updateModelSelect();
-  });
-  document.addEventListener('click', function (e) {
-    if (!modelSelectPopupEl.hidden && !modelSelectBtnEl.contains(e.target) && !modelSelectPopupEl.contains(e.target)) {
-      modelSelectPopupEl.hidden = true;
-    }
-  });
   autoCheckEl.addEventListener('change', function () {
     autoCheckUpdates = autoCheckEl.checked;
     saveChat();

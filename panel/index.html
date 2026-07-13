@@ -21,6 +21,9 @@
       /* fader's transparent knot — always the same hex as bg-panel at
          alpha 0; both re-derived together from AppSkinInfo in JS */
       --color-bg-panel-0: rgba(35, 35, 35, 0);
+      /* motion: state changes ease both ways, entrances decelerate */
+      --ease-state: ease;
+      --ease-enter: ease-out;
       --color-border-default: #333333;
       --color-border-input: #444444;
       --color-border-banner: #5876b2;
@@ -638,6 +641,8 @@
     .mcp-tooltip {
       position: fixed;
       z-index: 200;
+      /* recreated per show — snappy fade re-runs each time */
+      animation: tipIn 0.08s var(--ease-enter);
       padding: 3px 8px;
       border-radius: 6px;
       background: var(--color-btn-icon-bg);
@@ -646,6 +651,9 @@
       line-height: 15px;
       pointer-events: none;
       white-space: nowrap;
+    }
+    @keyframes tipIn {
+      from { opacity: 0; }
     }
     .mcp-tile .monogram {
       font-family: "Adobe Clean SemiCondensed", "Adobe Clean", sans-serif;
@@ -694,6 +702,11 @@
       border-radius: 8px;
       background: var(--color-border-input);
       z-index: 50;
+      /* [hidden] is display:none, so the entrance re-runs on every open */
+      animation: popIn 0.12s var(--ease-enter);
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(3px); }
     }
     .select-popup .option {
       display: block;
@@ -829,9 +842,9 @@
     .send-btn, .stop-btn, .icon-btn, .text-btn, .model-select,
     .select-popup .option, .toggle, .toggle .knob,
     #updateBtn, .banner-dismiss, .paste-chip-x, .activity-log summary {
-      transition: background-color 0.15s ease, color 0.15s ease,
-                  border-color 0.15s ease, opacity 0.15s ease,
-                  transform 0.15s ease, filter 0.15s ease;
+      transition: background-color 0.15s var(--ease-state), color 0.15s var(--ease-state),
+                  border-color 0.15s var(--ease-state), opacity 0.15s var(--ease-state),
+                  transform 0.15s var(--ease-state), filter 0.15s var(--ease-state);
     }
   </style>
 </head>
@@ -884,8 +897,14 @@
         <button id="modelSelectBtn" class="select-btn"><span id="modelSelectLabel">Opus</span></button>
         <div id="modelSelectPopup" class="select-popup" hidden></div>
       </span>
-      <button class="select-btn" disabled title="Model variant — plumbing pending"><span>Latest • 1M</span></button>
-      <button class="select-btn" disabled title="Effort — plumbing pending"><span>High</span></button>
+      <span class="select-wrap">
+        <button id="variantSelectBtn" class="select-btn" title="Context window"><span id="variantSelectLabel">Latest</span></button>
+        <div id="variantSelectPopup" class="select-popup" hidden></div>
+      </span>
+      <span class="select-wrap">
+        <button id="effortSelectBtn" class="select-btn" title="Reasoning effort"><span id="effortSelectLabel">High</span></button>
+        <div id="effortSelectPopup" class="select-popup" hidden></div>
+      </span>
     </div>
     <div class="activity-settings">
       <span id="versionText">v—</span>
