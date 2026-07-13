@@ -830,12 +830,39 @@
     scrollToBottom();
   }
 
+  // Typing dots lifecycle: visible before the first output, hidden while
+  // content flows, and BACK whenever the agent goes quiet mid-turn
+  // (thinking, long tool runs) — any stream event resets the idle timer.
+  var typingIdleTimer = null;
+  function markStreamActivity() {
+    var el = document.getElementById('currentResponse');
+    if (el) {
+      var t = el.querySelector('.typing-indicator');
+      if (t) t.remove();
+    }
+    if (typingIdleTimer) clearTimeout(typingIdleTimer);
+    typingIdleTimer = setTimeout(function () {
+      typingIdleTimer = null;
+      var cur = document.getElementById('currentResponse');
+      if (!chatBusy || !cur) return;
+      var t = document.createElement('span');
+      t.className = 'typing-indicator';
+      t.innerHTML = '<i></i><i></i><i></i>';
+      cur.appendChild(t);
+      scrollToBottom();
+    }, 700);
+  }
+  function removeTyping(el) {
+    if (typingIdleTimer) { clearTimeout(typingIdleTimer); typingIdleTimer = null; }
+    var t = el && el.querySelector('.typing-indicator');
+    if (t) t.remove();
+  }
+
   function appendChatChunk(text) {
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
     el = document.getElementById('currentResponse');
-    var typing = el.querySelector('.typing-indicator');
-    if (typing) typing.remove();
+    markStreamActivity();
     var textNode = el.querySelector('.msg-text');
     if (!textNode) {
       textNode = document.createElement('span');
@@ -874,15 +901,15 @@
     }
     pill.className = 'tool-pill ' + status;
     pill.textContent = tool;
+    markStreamActivity(); // dots return if the tool runs long
     scrollToBottom();
   }
 
   function finalizeChatResponse(sessionId) {
     currentSessionId = sessionId;
     var el = document.getElementById('currentResponse');
+    removeTyping(el);
     if (el) {
-      var typing = el.querySelector('.typing-indicator');
-      if (typing) typing.remove();
       var msgText = el.querySelector('.msg-text');
       var rawText = msgText && msgText.dataset && msgText.dataset.raw
         ? msgText.dataset.raw.trim()
@@ -914,8 +941,7 @@
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
     el = document.getElementById('currentResponse');
-    var typing = el.querySelector('.typing-indicator');
-    if (typing) typing.remove();
+    removeTyping(el);
     el.className += ' error';
     el.textContent += '\n[Error: ' + error + ']';
     el.removeAttribute('id');
