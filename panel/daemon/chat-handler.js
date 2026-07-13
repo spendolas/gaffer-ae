@@ -243,9 +243,11 @@ export class ChatHandler {
     }
 
     var model = msg.model || 'opus';
-    // Context-window variant: 1M suffix (verified live: `--model "opus[1m]"`).
-    // Only opus/sonnet ship 1M variants — ignored for other models.
-    if (msg.variant === '1m' && (model === 'opus' || model === 'sonnet')) model += '[1m]';
+    // Context-window variant: 1M suffix, passed through for ANY model
+    // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear
+    // API 400 about subscription availability). Never silently strip —
+    // an unsupported combo must surface its error in chat.
+    if (msg.variant === '1m') model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (msg.effort && EFFORTS.indexOf(msg.effort) !== -1) args.push('--effort', msg.effort);
