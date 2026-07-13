@@ -154,6 +154,14 @@ Before you begin, read these rules. They apply to every step below.
 
 ---
 
+## Updating (instructions for Claude)
+
+- **v0.2.0 or newer:** the panel checks `panel/version.json` on `main` and shows an update banner — the user clicks Update and the bundled `panel/daemon/update.sh` (macOS) / `update.ps1` (Windows) handles everything: stops the daemon, replaces files, preserves `chat-history.json`, reinstalls deps.
+- **v0.1.0 (no banner, no updater):** re-run the installer from a fresh checkout — download/clone this repo, then run `scripts/install-mac.sh` or `scripts/install-win.ps1`. The installer stops any running daemon, preserves the user's `chat-history.json`, and installs daemon dependencies into the deployed extension. Ask the user to restart After Effects afterwards.
+- Never update a dev install (extension dir symlinked to a git checkout) with these scripts — use `git pull`.
+
+---
+
 ## What it does
 
 The panel auto-starts a local daemon that connects Claude to After Effects via MCP.

@@ -34,7 +34,20 @@ if (-not $nodeVersion) {
 }
 Write-Host "  Node.js: $nodeVersion"
 
-# 2. Symlink extension (or copy on systems without symlink support)
+# 2. Stop any running daemon — a live process holds its cwd inside the old
+# install (blocks Remove-Item) and would keep serving stale code after update
+Write-Host "Stopping any running daemon..."
+Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*daemon\index.js*" } | Stop-Process -Force
+Start-Sleep -Seconds 1
+
+# 3. Symlink extension (or copy on systems without symlink support),
+# preserving chat history across reinstalls (the 0.1.0 -> latest path)
+$historyBackup = $null
+if (Test-Path "$installDir\chat-history.json") {
+    $historyBackup = Join-Path $env:TEMP "gaffer-chat-history-$PID.json"
+    Copy-Item "$installDir\chat-history.json" $historyBackup
+}
 Write-Host "Installing extension to $installDir..."
 if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
 try {
@@ -45,14 +58,21 @@ try {
     robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
     Write-Host "  (copied)"
 }
+if ($historyBackup -and (Test-Path $historyBackup)) {
+    Copy-Item $historyBackup "$installDir\chat-history.json" -Force
+    Remove-Item $historyBackup -Force
+    Write-Host "  (chat history preserved)"
+}
 
-# 3. Install daemon dependencies
+# 4. Install daemon dependencies INTO THE DEPLOYED install — installing into
+# the source checkout leaves a copied install without node_modules and the
+# daemon can never start (symlinked installs resolve to the same place)
 Write-Host "Installing daemon dependencies..."
-Push-Location "$panelDir\daemon"
+Push-Location "$installDir\daemon"
 & npm install --production
 Pop-Location
 
-# 4. Registry: PlayerDebugMode
+# 5. Registry: PlayerDebugMode
 Write-Host "Setting PlayerDebugMode in registry..."
 foreach ($ver in @("11", "12")) {
     $key = "HKCU:\Software\Adobe\CSXS.$ver"
@@ -60,7 +80,7 @@ foreach ($ver in @("11", "12")) {
     Set-ItemProperty -Path $key -Name "PlayerDebugMode" -Value 1 -Type DWord
 }
 
-# 5. Register MCP server
+# 6. Register MCP server
 Write-Host "Registering Gaffer MCP server..."
 & $claudeBin mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" 2>$null
 
