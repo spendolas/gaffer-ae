@@ -187,7 +187,8 @@
        the bubble's pre-wrap would render marked's inter-block newlines
        as extra blank lines; <pre> keeps its own whitespace. */
     .msg-text { display: block; white-space: normal; }
-    .msg-text h1, .msg-text h2, .msg-text h3, .msg-text h4 {
+    .msg-text h1, .msg-text h2, .msg-text h3, .msg-text h4,
+    .msg-text h5, .msg-text h6 {
       font-weight: 700; /* real Bold face — 600 doesn't exist in Adobe Clean */
       margin: 8px 0 4px 0;
       color: var(--color-text-strong);
@@ -196,7 +197,9 @@
     .msg-text h1 { font-size: 16px; }
     .msg-text h2 { font-size: 14px; }
     .msg-text h3 { font-size: 13px; }
-    .msg-text h4 { font-size: 12px; color: var(--color-text-light); }
+    /* h5/h6 clamp to h4 — four tiers is the system's floor (no designed
+       styles below 12px headings; browser defaults would leak otherwise) */
+    .msg-text h4, .msg-text h5, .msg-text h6 { font-size: 12px; color: var(--color-text-light); }
     .msg-text p { margin: 12px 0; }
     .msg-text p:first-child { margin-top: 0; }
     .msg-text p:last-child { margin-bottom: 0; }
