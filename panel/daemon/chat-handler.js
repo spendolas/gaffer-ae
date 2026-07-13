@@ -3,6 +3,7 @@ import { findClaudeBinary } from './claude-binary.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -219,7 +220,7 @@ export class ChatHandler {
     // updates instead of being hardcoded here.
     var versions = {};
     try {
-      var stateRaw = readFileSync(join(process.env.HOME || '', '.claude.json'), 'utf8');
+      var stateRaw = readFileSync(join(homedir(), '.claude.json'), 'utf8');
       var seen = {};
       var vm, vre = /claude-([a-z]+)-[0-9][0-9a-z-]*/g;
       while ((vm = vre.exec(stateRaw))) {
