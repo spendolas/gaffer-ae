@@ -62,8 +62,7 @@ gaffer/
 │   ├── install-mac.sh, install-win.ps1
 │   └── gaffer-cli.sh          # CLI wrapper
 ├── docs/                      # Spec, Claude Hub integration, bug reports
-├── Knowledge/                 # Local-only AE SDK/CEP reference archives (untracked)
-├── assets/                    # Local-only asset store (untracked) — fonts/AdobeClean.zip (licensed), fonts/SourceSans3 (OFL, staged for bundling)
+├── assets/                    # Local-only store (untracked): fonts/AdobeClean.zip (licensed), fonts/SourceSans3 (OFL, staged for bundling), Knowledge/ (AE SDK/CEP reference archives)
 ├── CHANGELOG.md
 └── README.md                  # Includes step-by-step install instructions written FOR Claude
 ```

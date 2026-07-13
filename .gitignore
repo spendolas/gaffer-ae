@@ -5,9 +5,6 @@ panel/daemon/gaffer-daemon.exe
 panel/daemon/dist/
 panel/chat-history.json
 
-# Local-only — licensed Adobe material, never publish
-Knowledge/
-
 # Session history (local tooling)
 .remember/
 
