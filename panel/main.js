@@ -1300,7 +1300,11 @@
           ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-update-spawn.log'
           : '/tmp/gaffer-update-spawn.log';
         var uout = ufs.openSync(ulog, 'a');
-        var child = cp.spawn(cmd, args, { detached: true, stdio: ['ignore', uout, uout], windowsHide: true });
+        // Windows: detached kills the child silently on Node v24 combos
+        // (verified isolation table in the field handoff); the child
+        // survives location.reload() anyway — CEP's Node context is
+        // process-scoped, not document-scoped. Mac keeps detached (proven).
+        var child = cp.spawn(cmd, args, { detached: !isWin, stdio: ['ignore', uout, uout], windowsHide: true });
         var spawnFailed = false;
         child.on('error', function (e) {
           spawnFailed = true;

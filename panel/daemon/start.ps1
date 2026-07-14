@@ -1,4 +1,4 @@
-# Gaffer daemon launcher (Windows) — called by CEP panel.
+﻿# Gaffer daemon launcher (Windows) - called by CEP panel.
 # Prefer node over compiled binary because binary may be stale (not
 # replaced by update.ps1). Set $env:GAFFER_USE_BINARY=1 to force binary.
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path

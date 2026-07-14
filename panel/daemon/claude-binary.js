@@ -14,14 +14,25 @@ function desktopAppCli() {
   try {
     var base = join(process.env.APPDATA || '', 'Claude', 'claude-code');
     return readdirSync(base)
-      .sort()
-      .reverse()
+      .sort(function (a, b) {
+        // numeric semver compare — lexicographic puts 2.1.9 above 2.1.121
+        var x = a.split('.').map(Number), y = b.split('.').map(Number);
+        for (var i = 0; i < Math.max(x.length, y.length); i++) {
+          if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
+        }
+        return 0;
+      })
       .map(function (v) { return join(base, v, 'claude.exe'); });
   } catch (e) { return []; }
 }
 
 export async function findClaudeBinary() {
-  if (cached) return cached;
+  // the desktop-app CLI path changes on every auto-update — re-resolve if
+  // the cached binary vanished mid-daemon-life
+  if (cached) {
+    try { accessSync(cached, constants.X_OK); return cached; }
+    catch (e) { cached = null; }
+  }
 
   // 1. Config file (written by installer)
   try {

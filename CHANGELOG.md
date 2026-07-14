@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.13 — 2026-07-14
+
+Refinements from the Windows field handoff (thanks to the reporter's isolation harness):
+
+- **Update spawn drops `detached` on Windows** — every flag combination containing it silently kills the child on Node v24/Win11 (verified isolation table); the child survives panel reloads regardless. macOS keeps its proven behavior.
+- **Desktop-app CLI version dirs sort numerically** — lexicographic order put 2.1.9 above 2.1.121; the newest CLI is now actually picked, and a vanished cached binary (the version dir churns on every CLI auto-update) triggers re-discovery instead of dead spawns.
+- `start.ps1` gets the same ASCII + UTF-8 BOM treatment as the other PowerShell scripts.
+
 ## v0.5.12 — 2026-07-14
 
 All four Windows findings from the field, upstreamed:
