@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.7 — 2026-07-14
+
+One-click update flow, actually end-to-end:
+
+- **Panel waits for the updater to finish** — it polls the on-disk version and reloads only when the commit moves (previously it reloaded after 2s while the updater was still downloading, showing a false "did not complete" notice and never picking up the new code)
+- **No daemon respawn mid-update** — the panel paused restarting the daemon while files are being replaced (a half-copied daemon grabbed the port and could lock node_modules during npm install); both updaters also stop any straggler daemon right before finishing
+- Banner shows "Updating…" with the button disabled while the update runs
+
 ## v0.5.6 — 2026-07-14
 
 - Update banner renders above the chat fader (was washed by the gradient)

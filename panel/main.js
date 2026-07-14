@@ -494,7 +494,9 @@
         daemonStartAttempted = false;
         wasConnected = false;
       }
-      if (!daemonStartAttempted) startDaemon();
+      // never respawn the daemon while an update is replacing its files —
+      // a half-copied daemon grabs the port and locks node_modules
+      if (!daemonStartAttempted && !window.__gafferUpdating) startDaemon();
       scheduleReconnect();
     };
 
@@ -1215,16 +1217,41 @@
     var daemonDir = extPath + '/daemon';
 
     function reloadAfterUpdate() {
-      // remember what we attempted — after reload, an unchanged commit
-      // means the script died; surface that instead of silently re-baiting
-      // the user with the same banner
+      // The updater needs ~30-60s (download + npm). Poll the on-disk
+      // version.json and reload ONLY once the commit moves — reloading
+      // early would load half-copied files and flag a false failure.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
           target: updateBannerEl._latestCommit || null,
           at: Date.now(),
         }));
       } catch (e) { /* ignore */ }
-      setTimeout(function () { location.reload(); }, 2000);
+      updateTextEl.textContent = 'Updating…';
+      updateBtnEl.disabled = true;
+      window.__gafferUpdating = true; // pauses daemon auto-respawn
+      var startCommit = versionData.commit;
+      var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
+      var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
+      var waited = 0;
+      var timer = setInterval(function () {
+        waited += 5000;
+        cs.evalScript(jsx, function (result) {
+          var commit = null;
+          try { commit = JSON.parse(result).commit; } catch (e) { /* mid-write */ }
+          if (commit && commit !== startCommit) {
+            clearInterval(timer);
+            try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
+            location.reload(); // fresh panel + fresh daemon
+          } else if (waited >= 180000) {
+            clearInterval(timer);
+            window.__gafferUpdating = false;
+            updateBannerEl.classList.remove('visible');
+            updateBtnEl.disabled = false;
+            showChatNotice('Update did not complete — the updater log has details: '
+              + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
+          }
+        });
+      }, 5000);
     }
 
     function runViaExtendScript() {

@@ -80,6 +80,12 @@ if [ -n "${NODE:-}" ]; then
   PATH="$NPM_DIR:$PATH" npm install --production
 fi
 
+# Kill any daemon that respawned from the half-copied tree during the update
+# (the panel pauses auto-start now, but belt and braces) — the panel reloads
+# when version.json changes and boots a clean daemon.
+pkill -f "gaffer-daemon" 2>/dev/null || true
+pkill -f "node.*daemon/index.js" 2>/dev/null || true
+
 # Write new version.json — version comes from the downloaded tarball,
 # only the commit is stamped (rsync already copied the tarball's file,
 # but stamp explicitly in case the tarball's commit field is stale).

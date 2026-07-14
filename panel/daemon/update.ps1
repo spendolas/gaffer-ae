@@ -75,6 +75,13 @@ Push-Location $daemonDir
 & npm install --production
 Pop-Location
 
+# Kill any daemon that respawned mid-update (panel reloads on version.json
+# change and boots a clean one)
+Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 # Write new version.json — version comes from the downloaded tarball
 $latestVersion = (Get-Content "$extracted\panel\version.json" | ConvertFrom-Json).version
 if (-not $latestVersion) { $latestVersion = "0.0.0" }
