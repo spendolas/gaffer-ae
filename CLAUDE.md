@@ -130,6 +130,10 @@ Daemon: `@modelcontextprotocol/sdk`, `ws`, `zod`. Express comes transitively via
 
 ## CEP Development Notes
 
+- **PowerShell scripts (`*.ps1`) must be ASCII-only with a UTF-8 BOM.** Windows PowerShell 5.1 reads BOM-less files as Windows-1252 — a single em-dash in a comment produces phantom parse errors ("missing brace"). No typographic dashes/quotes in .ps1 files, ever.
+- **Node child processes on Windows need `windowsHide: true`** (every spawn/execFile/execSync) — console-subsystem children flash a visible cmd window otherwise, and `detached: true` requires real file-handle stdio (with `stdio: 'ignore'` the child dies silently on Win11).
+
+
 - Target CEP 12 (AE 2022+). Extension ID: `com.gaffer.panel`.
 - Dev loading requires `PlayerDebugMode = 1` for both CSXS.11 and CSXS.12.
 - `require()` is NOT available in panel context despite `--enable-nodejs` — use `system.callSystem()` for OS operations.

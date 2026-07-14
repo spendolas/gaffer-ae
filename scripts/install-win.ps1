@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $extensionId = "com.gaffer.panel"
 $installDir = "$env:APPDATA\Adobe\CEP\extensions\$extensionId"
@@ -36,11 +36,11 @@ if (-not $nodeVersion) {
 }
 Write-Host "  Node.js: $nodeVersion"
 
-# 2. Stop any running daemon — a live process holds its cwd inside the old
+# 2. Stop any running daemon - a live process holds its cwd inside the old
 # install (blocks Remove-Item) and would keep serving stale code after update
 Write-Host "Stopping any running daemon..."
 Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
-# match by COMMAND LINE — Get-Process .Path is node.exe and never matches the script
+# match by COMMAND LINE - Get-Process .Path is node.exe and never matches the script
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -59,7 +59,7 @@ try {
     New-Item -ItemType SymbolicLink -Path $installDir -Target $panelDir -Force | Out-Null
     Write-Host "  (symlinked)"
 } catch {
-    # Symlinks may require admin on some Windows configs — fall back to copy
+    # Symlinks may require admin on some Windows configs - fall back to copy
     robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
     Write-Host "  (copied)"
 }
@@ -69,7 +69,7 @@ if ($historyBackup -and (Test-Path $historyBackup)) {
     Write-Host "  (chat history preserved)"
 }
 
-# 4. Install daemon dependencies INTO THE DEPLOYED install — installing into
+# 4. Install daemon dependencies INTO THE DEPLOYED install - installing into
 # the source checkout leaves a copied install without node_modules and the
 # daemon can never start (symlinked installs resolve to the same place)
 Write-Host "Installing daemon dependencies..."

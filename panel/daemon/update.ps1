@@ -1,4 +1,4 @@
-# Gaffer update script (Windows) — downloads latest tarball, replaces files,
+﻿# Gaffer update script (Windows) - downloads latest tarball, replaces files,
 # preserves chat history, restarts daemon.
 $ErrorActionPreference = "Stop"
 
@@ -11,7 +11,7 @@ $logPath = Join-Path $env:TEMP "gaffer-update.log"
 Start-Transcript -Path $logPath -Append
 Write-Host "=== Update started: $(Get-Date) ==="
 
-# Never overwrite a development checkout — a dev install points the panel
+# Never overwrite a development checkout - a dev install points the panel
 # at a git repo; /PURGE would clobber uncommitted work.
 if ((Test-Path (Join-Path (Split-Path -Parent $panelDir) ".git")) -or (Test-Path "$panelDir\.git")) {
     Write-Error "panel dir is inside a git repo (dev install) - refusing to update. Use git pull instead."
@@ -52,7 +52,7 @@ if (Test-Path "$panelDir\chat-history.json") {
 # Kill daemon
 Write-Host "Stopping daemon..."
 Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
-# match by COMMAND LINE — Get-Process .Path is node.exe and never matches the script
+# match by COMMAND LINE - Get-Process .Path is node.exe and never matches the script
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -69,9 +69,9 @@ if ($backup -and (Test-Path $backup)) {
     Copy-Item $backup "$panelDir\chat-history.json" -Force
 }
 
-# npm install — CEP spawns this script with a STRIPPED PATH, so bare `npm`
+# npm install - CEP spawns this script with a STRIPPED PATH, so bare `npm`
 # doesn't resolve when launched from the panel's Update button (manual
-# terminal runs never hit this — which is why they always worked).
+# terminal runs never hit this - which is why they always worked).
 Write-Host "Installing daemon dependencies..."
 $nodeDirs = @(
     "$env:ProgramFiles\nodejs",
@@ -84,7 +84,7 @@ foreach ($d in $nodeDirs) { $env:Path = "$d;$env:Path" }
 $npmCmd = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
 if (-not $npmCmd) { $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue).Source }
 if (-not $npmCmd) {
-    Write-Error "npm not found in known Node.js locations or PATH — run this script from a terminal once"
+    Write-Error "npm not found in known Node.js locations or PATH - run this script from a terminal once"
     Stop-Transcript
     exit 1
 }
@@ -100,7 +100,7 @@ Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyC
     Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
-# Write new version.json — version comes from the downloaded tarball
+# Write new version.json - version comes from the downloaded tarball
 $latestVersion = (Get-Content "$extracted\panel\version.json" | ConvertFrom-Json).version
 if (-not $latestVersion) { $latestVersion = "0.0.0" }
 @{

@@ -1,4 +1,4 @@
-import { accessSync, readFileSync, constants } from 'node:fs';
+import { accessSync, readFileSync, readdirSync, constants } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -6,6 +6,19 @@ import { execSync } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 var cached = null;
+
+// Claude Code installed via the desktop app lives at
+// %APPDATA%\Claude\claude-code\<version>\claude.exe — versioned dirs,
+// newest first.
+function desktopAppCli() {
+  try {
+    var base = join(process.env.APPDATA || '', 'Claude', 'claude-code');
+    return readdirSync(base)
+      .sort()
+      .reverse()
+      .map(function (v) { return join(base, v, 'claude.exe'); });
+  } catch (e) { return []; }
+}
 
 export async function findClaudeBinary() {
   if (cached) return cached;
@@ -26,7 +39,7 @@ export async function findClaudeBinary() {
     ? [
         join(process.env.LOCALAPPDATA || '', 'Programs', 'claude-code', 'claude.exe'),
         join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'),
-      ]
+      ].concat(desktopAppCli())
     : [
         '/opt/homebrew/bin/claude',  // Apple Silicon Homebrew
         '/usr/local/bin/claude',     // Intel Homebrew

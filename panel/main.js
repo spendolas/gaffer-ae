@@ -1292,7 +1292,15 @@
           cmd = 'bash';
           args = [daemonDir + '/update.sh'];
         }
-        var child = cp.spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+        // stdio must be real file handles: detached + stdio:'ignore' silently
+        // kills the child on some Node/Windows combos (verified on Win11) —
+        // the daemon spawn survives for exactly this reason
+        var ufs = require('fs');
+        var ulog = isWin
+          ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-update-spawn.log'
+          : '/tmp/gaffer-update-spawn.log';
+        var uout = ufs.openSync(ulog, 'a');
+        var child = cp.spawn(cmd, args, { detached: true, stdio: ['ignore', uout, uout], windowsHide: true });
         var spawnFailed = false;
         child.on('error', function (e) {
           spawnFailed = true;

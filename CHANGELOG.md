@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.12 — 2026-07-14
+
+All four Windows findings from the field, upstreamed:
+
+- **The update-mechanism regression, solved** — the updater script had picked up typographic dashes in comments; Windows PowerShell 5.1 reads BOM-less files as Windows-1252 and fails parsing on them. Both .ps1 scripts are now ASCII-only with a UTF-8 BOM (and the repo rules forbid reintroducing this).
+- **Updater spawn hardened** — `detached` + `stdio: 'ignore'` silently kills the child on some Node/Windows combos; the updater now logs to a file handle like the daemon spawn always did (`%TEMP%\gaffer-update-spawn.log`).
+- **CLI discovery finds desktop-app installs** — `%APPDATA%\Claude\claude-code\<version>\claude.exe` is now scanned (newest first); previously only the standalone/WinGet paths were checked.
+- Console windows hidden on all CLI child processes (shipped in 0.5.11, noted here for the set).
+
 ## v0.5.11 — 2026-07-14
 
 - **No more cmd window flashes on Windows** — every CLI child process (`claude mcp list` on drawer expand, model discovery, auth, chat itself) now runs with a hidden console. Killing the flashed window used to kill the underlying command and error the MCP row.
