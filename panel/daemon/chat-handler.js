@@ -224,7 +224,7 @@ export class ChatHandler {
     var help = await new Promise(async function (resolve) {
       try {
         var bin = await findClaudeBinary();
-        execFile(bin, ['--help'], { env: augmentedEnv(), timeout: 15000 }, function (err, stdout) {
+        execFile(bin, ['--help'], { env: augmentedEnv(), timeout: 15000, windowsHide: true }, function (err, stdout) {
           resolve(String(stdout || ''));
         });
       } catch (e) { resolve(''); }
@@ -358,6 +358,7 @@ export class ChatHandler {
     var child = spawn(claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env,
+      windowsHide: true, // console-subsystem children flash a cmd window otherwise
     });
     this.activeProcess = child;
 
@@ -549,6 +550,7 @@ export class ChatHandler {
     var child = spawn(this.claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: this.envForSpawn,
+      windowsHide: true,
     });
     var out = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString(); });
@@ -616,7 +618,7 @@ export class ChatHandler {
     return new Promise(function (resolve) {
       // Health check runs per registered server — with many claude.ai
       // connectors the full list takes 10s+, so give generous headroom.
-      execFile(claudeBin, ['mcp', 'list'], { timeout: 45000, env: env }, function (err, stdout) {
+      execFile(claudeBin, ['mcp', 'list'], { timeout: 45000, env: env, windowsHide: true }, function (err, stdout) {
         if (err) {
           var reason = err.killed ? 'timed out listing MCP servers (45s)' : err.message;
           console.error('Gaffer listMcps failed: ' + reason);
@@ -669,7 +671,7 @@ export class ChatHandler {
 
     return new Promise(function (resolve) {
       // 5 min: covers the user completing browser OAuth; abandoned flows die.
-      execFile(claudeBin, ['mcp', 'login', id], { timeout: 300000, env: env }, function (err, stdout, stderr) {
+      execFile(claudeBin, ['mcp', 'login', id], { timeout: 300000, env: env, windowsHide: true }, function (err, stdout, stderr) {
         if (err) {
           var reason = err.killed
             ? 'login timed out (5 min) — browser flow not completed'

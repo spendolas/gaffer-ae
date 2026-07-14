@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.11 — 2026-07-14
+
+- **No more cmd window flashes on Windows** — every CLI child process (`claude mcp list` on drawer expand, model discovery, auth, chat itself) now runs with a hidden console. Killing the flashed window used to kill the underlying command and error the MCP row.
+
 ## v0.5.10 — 2026-07-14
 
 - Update banner hides its buttons while an update runs — just "Updating…" until the panel reloads itself

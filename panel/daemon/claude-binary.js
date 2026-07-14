@@ -51,6 +51,7 @@ export async function findClaudeBinary() {
       : ['/opt/homebrew/bin', '/usr/local/bin', join(process.env.HOME || '', '.local', 'bin'), process.env.PATH || ''].filter(Boolean).join(':');
     var lines = execSync(cmd, {
       encoding: 'utf-8',
+      windowsHide: true,
       env: Object.assign({}, process.env, { PATH: augmented }),
     }).trim().split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
     var result;
