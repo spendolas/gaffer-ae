@@ -87,7 +87,7 @@ cd panel/daemon && node index.js
 claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
 ```
 
-There are no tests or linters in this repo.
+Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-only + UTF-8 BOM — run before any release touching PowerShell). `scripts/windows-tests/` holds a field-contributed Windows repro harness (encoding, console-flash, detached-spawn) — runs on a Windows machine only.
 
 ## Releasing
 
