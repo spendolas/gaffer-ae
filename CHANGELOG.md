@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.8 — 2026-07-14
+
+- **The Windows one-click update root cause** — `update.ps1` called bare `npm`, but the panel's Update button spawns PowerShell with CEP's stripped PATH, so npm never resolved and the script died before finishing (manual terminal runs always worked, which hid it). The updater now resolves npm from the standard Node.js install locations, like the macOS script always did.
+
 ## v0.5.7 — 2026-07-14
 
 One-click update flow, actually end-to-end:
