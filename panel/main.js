@@ -1235,7 +1235,8 @@
         }));
       } catch (e) { /* ignore */ }
       updateTextEl.textContent = 'Updating…';
-      updateBtnEl.disabled = true;
+      var actionsEl = updateBannerEl.querySelector('.actions');
+      if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
       window.__gafferUpdating = true; // pauses daemon auto-respawn
       var startCommit = versionData.commit;
       var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
@@ -1254,7 +1255,7 @@
             clearInterval(timer);
             window.__gafferUpdating = false;
             updateBannerEl.classList.remove('visible');
-            updateBtnEl.disabled = false;
+            if (actionsEl) actionsEl.style.display = '';
             showChatNotice('Update did not complete — the updater log has details: '
               + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
           }

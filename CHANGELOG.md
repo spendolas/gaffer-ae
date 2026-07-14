@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.10 — 2026-07-14
+
+- Update banner hides its buttons while an update runs — just "Updating…" until the panel reloads itself
+
 ## v0.5.9 — 2026-07-14
 
 - **Copy button fixed on Windows** — the clipboard fallback shelled out to macOS-only `pbcopy`, popping an AE error dialog ("cannot find the file specified"). Copy now uses the browser's synchronous clipboard command — no shell, works identically on both platforms.
