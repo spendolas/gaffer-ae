@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.6 — 2026-07-14
+
+- Update banner renders above the chat fader (was washed by the gradient)
+- Update-flow verification release — first one-click update expected to succeed end-to-end on Windows
+
 ## v0.5.5 — 2026-07-14
 
 - **MCP tiles redesigned (final form)** — fixed 48×40 rounded tiles: enabled = dark inset with blue glyph, available = bare with muted glyph, needs-auth/error = amber/red with dark glyph. Attention colors only where action is needed.
