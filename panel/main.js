@@ -340,15 +340,6 @@
     return str.length > len ? str.substring(0, len) + '...' : str;
   }
 
-  function copyViaPbcopy(text, btn) {
-    // Use ExtendScript system.callSystem to pipe text to clipboard
-    var escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-    var jsx = 'system.callSystem("echo \\"" + "' + escaped + '" + "\\" | pbcopy")';
-    cs.evalScript(jsx, function () {
-      copyFeedback(btn);
-    });
-  }
-
   // Swap the copy icon for a check for 1.5s
   function copyFeedback(btn) {
     btn.innerHTML = '';
@@ -787,15 +778,32 @@
       var text = textEl && textEl.dataset && textEl.dataset.raw
         ? textEl.dataset.raw
         : (textEl ? textEl.textContent.trim() : div.textContent.trim());
-      try {
-        navigator.clipboard.writeText(text).then(function () {
-          copyFeedback(copyBtn);
-        }).catch(function () { copyViaPbcopy(text, copyBtn); });
-      } catch (e) {
-        copyViaPbcopy(text, copyBtn);
+      if (copyToClipboard(text)) {
+        copyFeedback(copyBtn);
+      } else {
+        // async API as backup; never shell out (pbcopy is mac-only and
+        // callSystem failures raise a modal AE warning on Windows)
+        try {
+          navigator.clipboard.writeText(text).then(function () { copyFeedback(copyBtn); });
+        } catch (e) { /* give up quietly */ }
       }
     });
     div.appendChild(copyBtn);
+  }
+
+  // Synchronous CEF-safe copy — execCommand works in CEP on both OSes
+  // without clipboard permissions or window focus requirements.
+  function copyToClipboard(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { /* fall through */ }
+    ta.remove();
+    return ok;
   }
 
   function renderMarkdown(text) {

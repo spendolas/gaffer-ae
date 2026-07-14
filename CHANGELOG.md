@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.9 — 2026-07-14
+
+- **Copy button fixed on Windows** — the clipboard fallback shelled out to macOS-only `pbcopy`, popping an AE error dialog ("cannot find the file specified"). Copy now uses the browser's synchronous clipboard command — no shell, works identically on both platforms.
+
 ## v0.5.8 — 2026-07-14
 
 - **The Windows one-click update root cause** — `update.ps1` called bare `npm`, but the panel's Update button spawns PowerShell with CEP's stripped PATH, so npm never resolved and the script died before finishing (manual terminal runs always worked, which hid it). The updater now resolves npm from the standard Node.js install locations, like the macOS script always did.
