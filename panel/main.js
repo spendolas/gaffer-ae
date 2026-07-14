@@ -719,6 +719,7 @@
     }));
     chatInputEl.value = '';
     chatInputEl.style.height = '18px';
+    chatInputEl.style.overflowY = 'hidden'; // long-message auto doesn't linger
     sendBtnEl.classList.remove('typed');
     pendingImages = [];
     renderPendingImages();
@@ -1538,6 +1539,8 @@
     sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
     chatInputEl.style.height = '18px';
     chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 144) + 'px';
+    // scrollbar only when content genuinely exceeds the 8-line cap
+    chatInputEl.style.overflowY = chatInputEl.scrollHeight > 144 ? 'auto' : 'hidden';
   });
 
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching

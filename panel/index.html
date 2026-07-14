@@ -498,6 +498,11 @@
       padding: 0 8px;
       height: 18px;
       max-height: 144px; /* 8 lines x 18px */
+      /* hidden until the cap — fractional DPI scaling (Windows 125%/150%)
+         rounds clientHeight/scrollHeight apart and fakes a 1px overflow,
+         painting a phantom scrollbar in the empty field; JS flips to auto
+         only when content truly exceeds the cap */
+      overflow-y: hidden;
       align-self: center;
       resize: none;
       outline: none;
