@@ -201,6 +201,12 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 | `relinkFootage` | Repoint a missing or existing footage item to a new file |
 | `addToRenderQueue` | Queue a comp for render with output path + template (does not start the render) |
 | `importFromFigma` | Deterministic Figma → AE layer translation |
+| `listMarkers` | Comp + layer markers with time, duration, comment, chapter/url/cue-point |
+| `listTextLayers` | Every text layer's content + type styling (font, size, fill/stroke, box bounds) — active comp or whole project |
+| `getLayerEffects` | One layer's full effect stack with parameter values, keyframe counts, expressions |
+| `getShapeContents` | Structured shape-layer contents tree + all masks; optional raw vertex data |
+| `getProjectTree` | Full project-panel hierarchy: folders, comps, footage, solids with parent ids |
+| `getProjectSettings` | AE version, color depth/space, expression engine, GPU acceleration, time display |
 
 ### Architecture
 

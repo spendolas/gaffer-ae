@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.0 — 2026-07-29
+
+**Six new discovery tools** — the typed tool surface now covers essentially everything AE exposes for reading (mutations stay in `runJSX`, where the undo-group safety lives):
+
+- `listMarkers` — comp + layer markers (time, duration, comment, chapter/url/cue-point)
+- `listTextLayers` — text contents + type styling across the active comp or the whole project
+- `getLayerEffects` — a layer's full effect stack with values, keyframe counts, and expressions
+- `getShapeContents` — the shape-layer contents tree and all masks, with optional raw vertex data
+- `getProjectTree` — the real project-panel hierarchy (folders, comps, footage, solids, parent ids)
+- `getProjectSettings` — AE version/build, color depth and working space, expression engine, GPU acceleration, time display
+
+All six verified end-to-end against a live AE fixture (12/12 assertions).
+
 ## v0.5.13 — 2026-07-14
 
 Refinements from the Windows field handoff (thanks to the reporter's isolation harness):

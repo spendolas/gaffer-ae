@@ -21,6 +21,12 @@ import { register as registerCaptureFrame } from './tools/captureFrame.js';
 import { register as registerCaptureLayer } from './tools/captureLayer.js';
 import { register as registerRelinkFootage } from './tools/relinkFootage.js';
 import { register as registerAddToRenderQueue } from './tools/addToRenderQueue.js';
+import { register as registerListMarkers } from './tools/listMarkers.js';
+import { register as registerListTextLayers } from './tools/listTextLayers.js';
+import { register as registerGetLayerEffects } from './tools/getLayerEffects.js';
+import { register as registerGetShapeContents } from './tools/getShapeContents.js';
+import { register as registerGetProjectTree } from './tools/getProjectTree.js';
+import { register as registerGetProjectSettings } from './tools/getProjectSettings.js';
 
 /**
  * Creates and starts the MCP HTTP server.
@@ -82,6 +88,12 @@ export function startMcpServer(port, queue) {
     registerCaptureLayer(server, queue, z);
     registerRelinkFootage(server, queue, z);
     registerAddToRenderQueue(server, queue, z);
+    registerListMarkers(server, queue, z);
+    registerListTextLayers(server, queue, z);
+    registerGetLayerEffects(server, queue, z);
+    registerGetShapeContents(server, queue, z);
+    registerGetProjectTree(server, queue, z);
+    registerGetProjectSettings(server, queue, z);
 
     return server;
   }

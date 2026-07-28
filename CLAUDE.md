@@ -15,7 +15,7 @@ Claude Code / Claude Hub / Panel Chat
     │  MCP over Streamable HTTP (:9824)
     ▼
 Gaffer Daemon (Node.js or standalone SEA binary)
-  - MCP tools: runJSX + 18 typed tools (project/comp/layer discovery,
+  - MCP tools: runJSX + 24 typed tools (project/comp/layer discovery,
     expression dump, keyframe inspection, layer/effect search, footage
     relink, render queue add, frame/layer capture, Figma import)
   - Chat handler: spawns claude -p, streams response to panel
@@ -54,7 +54,7 @@ gaffer/
 │   │   ├── chat-handler.js, claude-binary.js
 │   │   ├── start.sh, start.ps1    # OS launchers (prefer node over SEA binary)
 │   │   ├── update.sh, update.ps1  # One-click update from GitHub tarball
-│   │   ├── tools/                 # One file per typed MCP tool (18) + figma-translator.js helper
+│   │   ├── tools/                 # One file per typed MCP tool (24) + figma-translator.js helper
 │   │   └── gaffer-daemon          # Compiled SEA binary (built, not checked in)
 │   └── prompts/gaffer.md      # System prompt for the panel chat agent
 ├── scripts/

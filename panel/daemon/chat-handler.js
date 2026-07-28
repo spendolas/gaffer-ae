@@ -28,6 +28,12 @@ var GAFFER_TOOLS = [
   'mcp__gaffer__captureLayer',
   'mcp__gaffer__relinkFootage',
   'mcp__gaffer__addToRenderQueue',
+  'mcp__gaffer__listMarkers',
+  'mcp__gaffer__listTextLayers',
+  'mcp__gaffer__getLayerEffects',
+  'mcp__gaffer__getShapeContents',
+  'mcp__gaffer__getProjectTree',
+  'mcp__gaffer__getProjectSettings',
 ];
 
 // Build a human-readable label for tool pills. Strips mcp__gaffer__ prefix
