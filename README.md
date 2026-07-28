@@ -13,7 +13,7 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
 ## Prerequisites
 
 - After Effects 2022+
-- Claude Code CLI ([install](https://claude.ai/code))
+- Claude Code CLI ([install](https://claude.ai/code)) — on Windows use the native installer or desktop app, not `npm install -g` (the daemon can't launch npm's script shims)
 - Node.js 18+ ([install](https://nodejs.org))
 - No git required
 
@@ -111,13 +111,14 @@ Before you begin, read these rules. They apply to every step below.
      echo "WARNING: claude not found on PATH, skipping config pin"
    fi
 
-   # Windows (PowerShell)
+   # Windows (PowerShell) — pin ONLY a real .exe; npm shims (.ps1/.cmd)
+   # cannot be spawned by the daemon and must not be pinned
    $cmd = Get-Command claude -ErrorAction SilentlyContinue
    $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
-   if ($cmd -and $cmd.Source) {
+   if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') {
      @{claudeBin=$cmd.Source} | ConvertTo-Json -Compress | Set-Content "$installDir\.gaffer-config.json"
    } else {
-     Write-Warning "claude not found on PATH, skipping config pin"
+     Write-Host "No claude.exe on PATH - skipping pin; the daemon discovers standalone, WinGet, and desktop-app installs on its own"
    }
    ```
 
@@ -158,6 +159,7 @@ Before you begin, read these rules. They apply to every step below.
 
 - **v0.2.0 or newer:** the panel checks `panel/version.json` on `main` and shows an update banner — the user clicks Update and the bundled `panel/daemon/update.sh` (macOS) / `update.ps1` (Windows) handles everything: stops the daemon, replaces files, preserves `chat-history.json`, reinstalls deps.
 - **v0.1.0 (no banner, no updater):** re-run the installer from a fresh checkout — download/clone this repo, then run `scripts/install-mac.sh` or `scripts/install-win.ps1`. The installer stops any running daemon, preserves the user's `chat-history.json`, and installs daemon dependencies into the deployed extension. Ask the user to restart After Effects afterwards.
+- If an update fails, the panel says so and the updater log has details: `/tmp/gaffer-update.log` (macOS) / `%TEMP%\gaffer-update.log` (Windows). The update script can also be run manually from the extension's `daemon/` folder.
 - Never update a dev install (extension dir symlinked to a git checkout) with these scripts — use `git pull`.
 
 ---
@@ -172,8 +174,9 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 ### Chat features
 
 - **Drop or paste images** into the panel — claude reads them as visual input. Click any thumbnail to zoom.
-- **Per-install MCP picker** in the activity bar — toggle which of your Connected MCP servers (Grip, Notion, Figma, etc.) the chat agent has access to. Stored locally, never committed.
-- **Model picker** — Opus / Sonnet / Haiku per session.
+- **MCP server tiles** in the activity drawer — one tile per Connected MCP server (Grip, Notion, Figma, ...) with brand icons and color-coded states: enabled, available, needs-auth (click to authorize), failed. Selection is stored locally, never committed.
+- **Model, context, and effort selects** — discovered from your installed `claude` CLI, not hardcoded: model aliases (Fable / Opus / Sonnet / Haiku), context window (Latest, 1M, or pinned versions like 4.6), and reasoning effort (Low through Max).
+- **Self-healing sessions** — if the CLI's session storage is wiped (CLI updates, re-auth), the panel detects the dead session and retries on a fresh one automatically.
 
 ### MCP Tools
 
