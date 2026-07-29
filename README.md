@@ -208,6 +208,14 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 | `getProjectTree` | Full project-panel hierarchy: folders, comps, footage, solids with parent ids |
 | `getProjectSettings` | AE version, color depth/space, expression engine, GPU acceleration, time display |
 
+### Claude Code skill (optional)
+
+`skills/gaffer/SKILL.md` is a field guide distilled from real Gaffer sessions — tool selection, ExtendScript survival rules, shape/expression techniques. Installing it makes any Claude Code session sharper with the Gaffer tools:
+
+```bash
+mkdir -p ~/.claude/skills/gaffer && curl -sL https://raw.githubusercontent.com/spendolas/gaffer-ae/main/skills/gaffer/SKILL.md -o ~/.claude/skills/gaffer/SKILL.md
+```
+
 ### Architecture
 
 ```
