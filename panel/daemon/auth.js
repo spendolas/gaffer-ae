@@ -41,13 +41,13 @@ export function signIn(claudeBin, mode, opts = {}) {
     child.on('exit', () => { if (!settled) statusFn().then((s) => {
       if (s && s.loggedIn === true) finish({ ok: true, status: s });
       else finish({ ok: false, degraded: true });
-    }); });
+    }).catch(() => {}); });
     child.on('error', () => finish({ ok: false, error: 'spawn failed' }));
   }
-  if (opts.onStarted) opts.onStarted();
+  try { if (opts.onStarted) opts.onStarted(); } catch (e) {}
 
   poll = setInterval(() => {
-    statusFn().then((s) => { if (s && s.loggedIn === true) finish({ ok: true, status: s }); });
+    statusFn().then((s) => { if (s && s.loggedIn === true) finish({ ok: true, status: s }); }).catch(() => {});
   }, pollMs);
   deadline = setTimeout(() => finish({ ok: false, error: 'timeout' }), timeoutMs);
 

@@ -68,3 +68,37 @@ test('signIn cancel stops polling and kills the child', async () => {
   assert.equal(r.ok, false);
   assert.equal(killed, true);
 });
+
+test('signIn times out if status never returns loggedIn:true', async () => {
+  const statusFn = async () => ({ loggedIn: false });
+  const spawnFn = () => ({ on: () => {}, kill: () => {} });
+  const { done } = signIn('claude', 'claudeai', { pollMs: 5, timeoutMs: 20, spawnFn, statusFn });
+  const r = await done;
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'timeout');
+});
+
+test('signIn swallows statusFn rejection and continues polling', async () => {
+  let calls = 0;
+  const statusFn = async () => {
+    ++calls;
+    if (calls <= 2) throw new Error('boom');
+    return { loggedIn: true };
+  };
+  const spawnFn = () => ({ on: () => {}, kill: () => {} });
+  const { done } = signIn('claude', 'claudeai', { pollMs: 5, timeoutMs: 1000, spawnFn, statusFn });
+  const r = await done;
+  assert.equal(r.ok, true);
+});
+
+test('signIn returns control even if onStarted throws', async () => {
+  const spawnFn = () => ({ on: () => {}, kill: () => {} });
+  const statusFn = async () => ({ loggedIn: false });
+  const onStarted = () => { throw new Error('boom'); };
+  const ctl = signIn('claude', 'claudeai', { pollMs: 5, timeoutMs: 20, spawnFn, statusFn, onStarted });
+  assert.equal(typeof ctl.cancel, 'function');
+  ctl.cancel();
+  const r = await ctl.done;
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'cancelled');
+});
