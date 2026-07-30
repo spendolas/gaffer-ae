@@ -1,4 +1,4 @@
-import { execFile as _execFile } from 'node:child_process';
+import { execFile as _execFile, spawn as _spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileP = promisify(_execFile);
 
@@ -16,4 +16,40 @@ export async function authStatus(claudeBin, opts = {}) {
   } catch (e) {
     return { loggedIn: null };
   }
+}
+
+export function signIn(claudeBin, mode, opts = {}) {
+  const pollMs = opts.pollMs || 2000;
+  const timeoutMs = opts.timeoutMs || 300000;
+  const spawnFn = opts.spawnFn || _spawn;
+  const statusFn = opts.statusFn || (() => authStatus(claudeBin, { env: opts.env }));
+  const flag = mode === 'console' ? '--console' : '--claudeai';
+
+  let child, poll, deadline, settled = false;
+  let resolveDone;
+  const done = new Promise((res) => { resolveDone = res; });
+  function finish(result) {
+    if (settled) return;
+    settled = true;
+    clearInterval(poll); clearTimeout(deadline);
+    resolveDone(result);
+  }
+
+  child = spawnFn(claudeBin, ['auth', 'login', flag],
+    { env: opts.env || process.env, windowsHide: true });
+  if (child && child.on) {
+    child.on('exit', () => { if (!settled) statusFn().then((s) => {
+      if (s && s.loggedIn === true) finish({ ok: true, status: s });
+      else finish({ ok: false, degraded: true });
+    }); });
+    child.on('error', () => finish({ ok: false, error: 'spawn failed' }));
+  }
+  if (opts.onStarted) opts.onStarted();
+
+  poll = setInterval(() => {
+    statusFn().then((s) => { if (s && s.loggedIn === true) finish({ ok: true, status: s }); });
+  }, pollMs);
+  deadline = setTimeout(() => finish({ ok: false, error: 'timeout' }), timeoutMs);
+
+  return { done, cancel: () => { try { child && child.kill && child.kill(); } catch (e) {} finish({ ok: false, error: 'cancelled' }); } };
 }
