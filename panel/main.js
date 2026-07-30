@@ -204,6 +204,278 @@
 
   // ── WebSocket ──
 
+  // ── Reply sounds — synthesized 'gaffer' cues, no asset files ──
+  // Lamp-on = relay click + warm tungsten bloom (reply ready).
+  // Breaker-trip = dull click + downward whump (error).
+  var soundEnabled = false; // off by default; persisted in chat-history.json
+  var textScale = 1; // chat reading-surface scale (A-/A+ stepper); persisted
+  var TEXT_MIN = 0.8, TEXT_MAX = 1.6, TEXT_STEP = 0.1;
+  var audioCtx = null;
+  function ac() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function noiseBurst(ctx, seconds) {
+    var buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * seconds)), ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    return src;
+  }
+  function playSqueakClean() {
+    // SQUEAK: two friction chirps ("e-EEK") — pitch glide + fast shallow
+    // vibrato + slight tremolo through a resonant band.
+    var ctx = ac();
+    var t = ctx.currentTime + 0.01;
+    var out = ctx.createGain();
+    out.gain.value = 0.42;
+    out.connect(ctx.destination);
+    function chirp(t0, dur, f0, f1, amp) {
+      var osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f0, t0);
+      osc.frequency.exponentialRampToValueAtTime(f1, t0 + dur * 0.7);
+      osc.frequency.linearRampToValueAtTime(f1 * 0.92, t0 + dur);
+      var vib = ctx.createOscillator();
+      vib.type = 'sine';
+      vib.frequency.value = 34;
+      var vibGain = ctx.createGain();
+      vibGain.gain.value = f0 * 0.035;
+      vib.connect(vibGain); vibGain.connect(osc.frequency);
+      var bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 1300; bp.Q.value = 2.2;
+      var g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(amp, t0 + 0.02);
+      g.gain.setValueAtTime(amp, t0 + dur - 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      var trem = ctx.createOscillator();
+      trem.type = 'sine'; trem.frequency.value = 26;
+      var tremGain = ctx.createGain();
+      tremGain.gain.value = amp * 0.3;
+      trem.connect(tremGain); tremGain.connect(g.gain);
+      osc.connect(bp); bp.connect(g); g.connect(out);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+      vib.start(t0); vib.stop(t0 + dur + 0.02);
+      trem.start(t0); trem.stop(t0 + dur + 0.02);
+    }
+    chirp(t, 0.09, 820, 1150, 0.16);
+    chirp(t + 0.13, 0.2, 980, 1600, 0.2);
+  }
+
+  function playCreakTurning() {
+    // TURNING CREAK: creak = SLOW stick-slip (you hear individual grabs),
+    // squeak = fast. Slip pulses at ~70-170/s, rate rising with the turn
+    // and sagging at the stop, ringing low inharmonic metal modes.
+    var ctx = ac();
+    var t = ctx.currentTime + 0.01;
+    var out = ctx.createGain();
+    out.gain.value = 0.5;
+    out.connect(ctx.destination);
+    var dur = 0.55;
+    // slip source: saw at grab-rate -> waveshaped into sharp pulses
+    var drive = ctx.createOscillator();
+    drive.type = 'sawtooth';
+    drive.frequency.setValueAtTime(70, t);
+    drive.frequency.linearRampToValueAtTime(170, t + dur * 0.6); // turn speeds up
+    drive.frequency.linearRampToValueAtTime(90, t + dur);        // eases to a stop
+    var jit = noiseBurst(ctx, dur + 0.1);
+    var jitLp = ctx.createBiquadFilter();
+    jitLp.type = 'lowpass'; jitLp.frequency.value = 12;
+    var jitG = ctx.createGain();
+    jitG.gain.value = 26; // grabs are uneven
+    jit.connect(jitLp); jitLp.connect(jitG); jitG.connect(drive.frequency);
+    jit.start(t);
+    var shaper = ctx.createWaveShaper();
+    var curve = new Float32Array(1024);
+    for (var i = 0; i < 1024; i++) {
+      var x = i / 1023;
+      curve[i] = x > 0.6 ? (x - 0.6) / 0.4 : 0; // wider slip pulse = audible energy
+    }
+    shaper.curve = curve;
+    // makeup gain — sparse pulses through high-Q bands lose ~20dB
+    // (measured offline: this lands peak ~0.33)
+    var makeup = ctx.createGain();
+    makeup.gain.value = 10;
+    shaper.connect(makeup);
+    // low metal body
+    var modes = [[480, 8, 1.0], [1150, 12, 0.6], [2100, 16, 0.28]];
+    var env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.linearRampToValueAtTime(0.55, t + 0.06);
+    env.gain.setValueAtTime(0.5, t + dur - 0.08);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.08);
+    env.connect(out);
+    for (var m = 0; m < modes.length; m++) {
+      var res = ctx.createBiquadFilter();
+      res.type = 'bandpass';
+      res.frequency.value = modes[m][0];
+      res.Q.value = modes[m][1];
+      var mg = ctx.createGain();
+      mg.gain.value = modes[m][2];
+      makeup.connect(res); res.connect(mg); mg.connect(env);
+    }
+    drive.connect(shaper);
+    drive.start(t); drive.stop(t + dur + 0.05);
+  }
+
+  var WALKIE_VARIANTS = {
+    a: { band: [1500, 0.6], close: 0.24, bed: 0,
+         blips: [[0.035, 1560, 0.07, 0.5], [0.125, 1170, 0.09, 0.45]] },
+    b: { band: [1100, 1.0], close: 0.27, bed: 0.05,
+         blips: [[0.04, 1250, 0.08, 0.5], [0.14, 940, 0.1, 0.45]] },
+    c: { band: [1800, 0.7], close: 0.14, bed: 0,
+         blips: [[0.03, 1760, 0.06, 0.5]] },
+    // d = the sign-off: c's dry radio voice but the blip steps DOWN and out,
+    // so disabling reads as the inverse of c's single up-chirp.
+    d: { band: [1500, 0.7], close: 0.16, bed: 0,
+         blips: [[0.03, 1500, 0.05, 0.5], [0.085, 1000, 0.07, 0.42]] },
+  };
+  function playWalkie(variant, gainScale) {
+    // WALKIE: on-set radio "copy that" — squelch opens (tiny noise puff),
+    // talk-permit chirp in radio band, squelch closes.
+    var v = WALKIE_VARIANTS[variant] || WALKIE_VARIANTS.a;
+    var ctx = ac();
+    var t = ctx.currentTime + 0.01;
+    var out = ctx.createGain();
+    out.gain.value = 0.4 * (gainScale || 1);
+    out.connect(ctx.destination);
+    // radio voicing: everything through a band-limited channel
+    var radio = ctx.createBiquadFilter();
+    radio.type = 'bandpass'; radio.frequency.value = v.band[0]; radio.Q.value = v.band[1];
+    radio.connect(out);
+    function squelch(t0, amp) {
+      var n = noiseBurst(ctx, 0.03);
+      var hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 1200;
+      var g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(amp, t0 + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.03);
+      n.connect(hp); hp.connect(g); g.connect(radio);
+      n.start(t0);
+    }
+    function blip(t0, freq, dur, amp) {
+      var osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      var g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(amp, t0 + 0.008);
+      g.gain.setValueAtTime(amp, t0 + dur - 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g); g.connect(radio);
+      osc.start(t0); osc.stop(t0 + dur + 0.01);
+    }
+    // static bed while the channel is open (v.bed = 0 disables)
+    if (v.bed) {
+      var bed = noiseBurst(ctx, v.close + 0.03);
+      var bedLp = ctx.createBiquadFilter();
+      bedLp.type = 'lowpass'; bedLp.frequency.value = 3000;
+      var bedG = ctx.createGain();
+      bedG.gain.setValueAtTime(0.0001, t);
+      bedG.gain.linearRampToValueAtTime(v.bed, t + 0.01);
+      bedG.gain.setValueAtTime(v.bed, t + v.close);
+      bedG.gain.exponentialRampToValueAtTime(0.0001, t + v.close + 0.03);
+      bed.connect(bedLp); bedLp.connect(bedG); bedG.connect(radio);
+      bed.start(t);
+    }
+    squelch(t, 0.5); // channel opens
+    for (var b = 0; b < v.blips.length; b++) {
+      blip(t + v.blips[b][0], v.blips[b][1], v.blips[b][2], v.blips[b][3]);
+    }
+    squelch(t + v.close, 0.35); // channel closes
+  }
+
+  function playBreakerTrip() {
+    var ctx = ac();
+    var t = ctx.currentTime + 0.01;
+    var out = ctx.createGain();
+    out.gain.value = 0.5;
+    out.connect(ctx.destination);
+    // dull contact click (+ a quieter bounce)
+    for (var c = 0; c < 2; c++) {
+      var click = noiseBurst(ctx, 0.01);
+      var lpc = ctx.createBiquadFilter();
+      lpc.type = 'lowpass'; lpc.frequency.value = 900;
+      var cg = ctx.createGain();
+      var ct = t + c * 0.055;
+      cg.gain.setValueAtTime(c === 0 ? 0.45 : 0.18, ct);
+      cg.gain.exponentialRampToValueAtTime(0.001, ct + 0.014);
+      click.connect(lpc); lpc.connect(cg); cg.connect(out);
+      click.start(ct);
+    }
+    // power-down whump — falling sine, closing filter
+    var osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, t + 0.01);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.2);
+    var lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(600, t + 0.01);
+    lp.frequency.exponentialRampToValueAtTime(120, t + 0.22);
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.32, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    osc.connect(lp); lp.connect(g); g.connect(out);
+    osc.start(t + 0.01); osc.stop(t + 0.3);
+  }
+  // Walkie rolls: A carries the cue, B answers once every 4th play so the
+  // radio doesn't wear a groove in your ear.
+  var walkiePlays = 0;
+  function playWalkieRolling() {
+    walkiePlays++;
+    playWalkie(walkiePlays % 4 === 0 ? 'b' : 'a');
+  }
+  var SOUND_CANDIDATES = [
+    { id: 'walkie', label: 'Walkie', play: playWalkieRolling },
+    { id: 'creak', label: 'Drunk Gaffer', play: playCreakTurning },
+    { id: 'squeak', label: 'Hot Points', play: playSqueakClean },
+  ];
+  var soundVariant = 'squeak'; // Hot Points — default cue; persisted selection
+  // quiet radio tick for MCP tile enable/disable — direct interaction
+  // feedback, so it plays regardless of panel focus (still respects the
+  // Sound toggle)
+  function playMcpTick(on) {
+    if (!soundEnabled) return;
+    // key-up (c) when enabling, sign-off (d) when disabling
+    try { playWalkie(on ? 'c' : 'd', 0.11); } catch (e) { /* audio unavailable */ }
+  }
+  function playSelectedCue() {
+    var c = SOUND_CANDIDATES[0];
+    for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) c = SOUND_CANDIDATES[i];
+    c.play();
+  }
+  // unattended cap: after 3 cues with zero user activity the panel goes
+  // quiet — nobody's machine squeaks all night. Any focus/click/keypress
+  // re-arms it.
+  var unattendedCues = 0;
+  window.addEventListener('focus', function () { unattendedCues = 0; });
+  document.addEventListener('pointerdown', function () { unattendedCues = 0; });
+  document.addEventListener('keydown', function () { unattendedCues = 0; });
+  function playReplySound(kind) {
+    if (!soundEnabled) return;
+    // the cue exists for when you're elsewhere — silent while focused
+    try { if (document.hasFocus()) return; } catch (e) { /* play anyway */ }
+    if (unattendedCues >= 3) return;
+    unattendedCues++;
+    try { kind === 'error' ? playBreakerTrip() : playSelectedCue(); } catch (e) { /* audio unavailable */ }
+  }
+  // preview hook (drawer toggle + tuning sessions) — bypasses the focus
+  // gate but still respects the Sound toggle
+  window.__gafferSound = function (kind) {
+    if (!soundEnabled) return;
+    try {
+      if (kind === 'error') { playBreakerTrip(); return; }
+      for (var i = 0; i < SOUND_CANDIDATES.length; i++) {
+        if (SOUND_CANDIDATES[i].id === kind) { SOUND_CANDIDATES[i].play(); return; }
+      }
+      playSelectedCue();
+    } catch (e) {}
+  };
+
   // ── Chat persistence (via ExtendScript file I/O) ──
 
   var chatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history.json';
@@ -216,6 +488,9 @@
       variant: currentVariant,
       effort: currentEffort,
       autoCheckUpdates: autoCheckUpdates,
+      soundEnabled: soundEnabled,
+      soundVariant: soundVariant,
+      textScale: textScale,
       dismissedUpdateCommit: dismissedUpdateCommit,
       enabledMcps: enabledMcps,
       mcpUsage: mcpUsage,
@@ -239,9 +514,11 @@
 
   function restoreChat() {
     function applyData(data) {
-        if (!data || !data.messages) return;
+        // Restore settings (text size, sound, model, ...) even with no chat
+        // history — they must not depend on messages existing.
+        if (!data) return;
         currentSessionId = data.sessionId || null;
-        chatHistory = data.messages;
+        chatHistory = data.messages || [];
         if (data.model) {
           currentModel = data.model;
           updateModelSelect();
@@ -258,6 +535,21 @@
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
           autoCheckEl.checked = autoCheckUpdates;
+        }
+        if (typeof data.soundEnabled === 'boolean') {
+          soundEnabled = data.soundEnabled;
+          var rsEl = document.getElementById('replySound');
+          if (rsEl) rsEl.checked = soundEnabled;
+        }
+        if (typeof data.soundVariant === 'string') {
+          soundVariant = data.soundVariant;
+          if (soundVariant.indexOf('walkie') === 0) soundVariant = 'walkie';
+          if (soundVariant === 'barn-door' || soundVariant === 'tape' || soundVariant === 'c47' || soundVariant === 'scrim') soundVariant = 'squeak';
+          updateSoundCycleLabel();
+        }
+        if (typeof data.textScale === 'number') {
+          textScale = data.textScale;
+          applyTextScale();
         }
         if (data.dismissedUpdateCommit) {
           dismissedUpdateCommit = data.dismissedUpdateCommit;
@@ -718,8 +1010,7 @@
       enabledMcps: enabledMcps,
     }));
     chatInputEl.value = '';
-    chatInputEl.style.height = '18px';
-    chatInputEl.style.overflowY = 'hidden'; // long-message auto doesn't linger
+    resizeChatInput(); // collapse to one (scaled) line
     sendBtnEl.classList.remove('typed');
     pendingImages = [];
     renderPendingImages();
@@ -930,6 +1221,7 @@
       }
     }
     setChatBusy(false);
+    playReplySound('done');
     chatInputEl.focus();
   }
 
@@ -948,6 +1240,7 @@
     el = document.getElementById('currentResponse');
     removeTyping(el);
     el.className += ' error';
+    playReplySound('error');
     el.textContent += '\n[Error: ' + error + ']';
     el.removeAttribute('id');
     setChatBusy(false);
@@ -1115,6 +1408,7 @@
           enabledMcps = enabledMcps.filter(function (x) { return x !== s.id; });
         }
         saveChat();
+        playMcpTick(st === 'available'); // 'available' → we just enabled it
         tile.classList.remove('enabled', 'available');
         tile.classList.add(mcpTileState(s));
       } else if (st === 'auth' && !pendingAuthId && ws && ws.readyState === 1) {
@@ -1498,6 +1792,90 @@
       rebuildVariantSelect();
     }
   }
+  var soundCycleBtnEl = document.getElementById('soundCycleBtn');
+  function updateSoundCycleLabel() {
+    if (!soundCycleBtnEl) return;
+    var label = soundVariant;
+    for (var i = 0; i < SOUND_CANDIDATES.length; i++) {
+      if (SOUND_CANDIDATES[i].id === soundVariant) label = SOUND_CANDIDATES[i].label;
+    }
+    soundCycleBtnEl.textContent = '\u266a ' + label;
+  }
+  if (soundCycleBtnEl) {
+    updateSoundCycleLabel();
+    soundCycleBtnEl.addEventListener('click', function () {
+      var idx = 0;
+      for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) idx = i;
+      var next = SOUND_CANDIDATES[(idx + 1) % SOUND_CANDIDATES.length];
+      soundVariant = next.id;
+      updateSoundCycleLabel();
+      if (soundEnabled) next.play(); // hear what you just selected
+      saveChat();
+    });
+  }
+
+  var replySoundEl = document.getElementById('replySound');
+  if (replySoundEl) {
+    replySoundEl.checked = soundEnabled;
+    replySoundEl.addEventListener('change', function () {
+      soundEnabled = replySoundEl.checked;
+      saveChat();
+      if (soundEnabled) playSelectedCue(); // hear what you enabled
+    });
+  }
+
+  // Text-size stepper: scales the chat reading surface via --chat-text.
+  var textDecEl = document.getElementById('textDecBtn');
+  var textIncEl = document.getElementById('textIncBtn');
+  var textResetEl = document.getElementById('textResetBtn');
+  if (textDecEl) textDecEl.appendChild(icon('minus'));
+  if (textResetEl) textResetEl.appendChild(icon('textSize'));
+  if (textIncEl) textIncEl.appendChild(icon('plus'));
+  function applyTextScale() {
+    // clamp + snap to the step grid so restored/legacy values stay clean
+    textScale = Math.max(TEXT_MIN, Math.min(TEXT_MAX, Math.round(textScale / TEXT_STEP) * TEXT_STEP));
+    // set on :root so BOTH the chat log and the composer (which sits
+    // outside .chat-messages) inherit the factor
+    document.documentElement.style.setProperty('--chat-text', textScale);
+    // Figma design carries no numeric readout — the glyph is the only label;
+    // the current percent rides the reset button's tooltip instead.
+    if (textResetEl) textResetEl.title = 'Reset chat text size (' + Math.round(textScale * 100) + '%)';
+    if (textDecEl) textDecEl.disabled = textScale <= TEXT_MIN + 1e-6;
+    if (textIncEl) textIncEl.disabled = textScale >= TEXT_MAX - 1e-6;
+    resizeChatInput(); // re-fit the composer to the new line height
+  }
+  // Auto-grow the composer against a cap, both scaled by --chat-text so the
+  // 8-line ceiling stays 8 lines at any text size.
+  function resizeChatInput() {
+    if (!chatInputEl) return;
+    var line = Math.round(18 * textScale);
+    var cap = Math.round(144 * textScale); // 8 lines
+    chatInputEl.style.height = line + 'px';
+    chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, cap) + 'px';
+    chatInputEl.style.overflowY = chatInputEl.scrollHeight > cap ? 'auto' : 'hidden';
+  }
+  function nudgeTextScale(delta) {
+    textScale += delta;
+    applyTextScale();
+    saveChat();
+  }
+  // The whole control lives inside <summary>. Catch-all: ANY click over
+  // the pill (buttons, gaps, disabled buttons, the container itself)
+  // preventDefaults so it never expands the drawer — the summary handler
+  // bails on defaultPrevented, same contract as Clear/Reload.
+  var textSizeEl = textDecEl && textDecEl.parentNode;
+  if (textSizeEl) textSizeEl.addEventListener('click', function (e) { e.preventDefault(); });
+  if (textDecEl) textDecEl.addEventListener('click', function () { nudgeTextScale(-TEXT_STEP); });
+  if (textIncEl) textIncEl.addEventListener('click', function () { nudgeTextScale(TEXT_STEP); });
+  if (textResetEl) textResetEl.addEventListener('click', function () { textScale = 1; applyTextScale(); saveChat(); });
+  // Hover descriptions ride the action spell like the other left-cluster
+  // controls (native CEF title tooltips don't render in the panel). The
+  // centre glyph doubles as the readout — it shows the current percent.
+  wireSpell(textDecEl, function () { return 'Smaller text'; });
+  wireSpell(textResetEl, function () { return 'Text size ' + Math.round(textScale * 100) + '% — tap to reset'; });
+  wireSpell(textIncEl, function () { return 'Larger text'; });
+  applyTextScale(); // initialize label + disabled states at load
+
   autoCheckEl.addEventListener('change', function () {
     autoCheckUpdates = autoCheckEl.checked;
     saveChat();
@@ -1537,10 +1915,7 @@
   // Typed state + auto-grow (Figma InputRow mode=typed: field grows to 2+ lines)
   chatInputEl.addEventListener('input', function () {
     sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
-    chatInputEl.style.height = '18px';
-    chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 144) + 'px';
-    // scrollbar only when content genuinely exceeds the 8-line cap
-    chatInputEl.style.overflowY = chatInputEl.scrollHeight > 144 ? 'auto' : 'hidden';
+    resizeChatInput();
   });
 
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching

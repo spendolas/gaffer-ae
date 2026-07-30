@@ -29,7 +29,8 @@
       --color-border-input: #444444;
       --color-border-banner: #5876b2;
       --color-text-default: #e0e0e0;
-      --color-text-strong: #fafafa;
+      --color-text-strong: #e8e6e3;
+      --color-text-strong-dimmed: #c2c0bc;
       --color-text-light: #dddddd;
       --color-text-light-2: #cccccc;
       --color-text-muted: #aaaaaa;
@@ -57,12 +58,13 @@
       --color-overlay-drop: rgba(35, 60, 100, 0.95);
       --color-overlay-lightbox: rgba(0, 0, 0, 0.95);
       --color-bg-table-row: rgba(0, 0, 0, 0.2);
+      /* row hover: strong 50% darken — hovered row drops to near-black,
+         well clear of the panel grey. */
+      --color-bg-table-row-hover: rgba(0, 0, 0, 0.5);
       /* Unbound in Figma — proposed tokens (audit §3) */
       --color-bubble-error-bg: rgba(204, 68, 68, 0.5);
       --color-bubble-error-text: #ee8888;
       --color-code-inline-bg: rgba(216, 176, 112, 0.2);
-      --color-code-block-text: #d8d8d8;
-      --color-text-placeholder: rgba(119, 119, 119, 0.5);
       /* Space + radius scale */
       --space-2: 2px; --space-4: 4px; --space-6: 6px; --space-8: 8px;
       --space-12: 12px; --space-16: 16px;
@@ -147,8 +149,10 @@
       padding: 8px;
       border-radius: 16px;
       max-width: 95%;
-      font-size: 14px;
-      line-height: 18px;
+      /* --chat-text (set on .chat-messages by the A-/A+ stepper) scales the
+         reading surface only; bubble padding, radii and images stay fixed */
+      font-size: calc(14px * var(--chat-text, 1));
+      line-height: calc(18px * var(--chat-text, 1));
       white-space: pre-wrap;
       word-wrap: break-word;
       user-select: text;
@@ -161,7 +165,7 @@
       background: var(--color-bubble-user-bg);
       border-radius: 16px 16px 2px 16px;
       align-self: flex-end;
-      color: var(--color-text-light);
+      color: var(--color-text-light-2);
     }
     .chat-msg.assistant {
       background: transparent;
@@ -194,21 +198,24 @@
       color: var(--color-text-strong);
       line-height: 1.3;
     }
-    .msg-text h1 { font-size: 16px; }
-    .msg-text h2 { font-size: 14px; }
-    .msg-text h3 { font-size: 13px; }
+    .msg-text h1 { font-size: calc(16px * var(--chat-text, 1)); }
+    .msg-text h2 { font-size: calc(14px * var(--chat-text, 1)); }
+    .msg-text h3 { font-size: calc(13px * var(--chat-text, 1)); }
     /* h5/h6 clamp to h4 — four tiers is the system's floor (no designed
        styles below 12px headings; browser defaults would leak otherwise) */
-    .msg-text h4, .msg-text h5, .msg-text h6 { font-size: 12px; color: var(--color-text-light); }
+    .msg-text h4, .msg-text h5, .msg-text h6 { font-size: calc(12px * var(--chat-text, 1)); color: var(--color-text-light); }
     .msg-text p { margin: 12px 0; }
     .msg-text p:first-child { margin-top: 0; }
     .msg-text p:last-child { margin-bottom: 0; }
     .msg-text p:empty { display: none; }
     .msg-text br + br { display: none; }
     .msg-text strong { color: var(--color-text-strong); font-weight: 600; }
+    /* bold inside a (dimmed) blockquote uses the dimmed strong so it doesn't
+       out-shout the quote's muted body */
+    .msg-text blockquote strong { color: var(--color-text-strong-dimmed); }
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
-    .msg-text li { margin: 0; font-size: 14px; line-height: 18px; display: list-item; }
+    .msg-text li { margin: 0; font-size: calc(14px * var(--chat-text, 1)); line-height: calc(18px * var(--chat-text, 1)); display: list-item; }
     .msg-text li > p { margin: 0; display: inline; }
     .msg-text li + li { margin-top: 2px; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
@@ -222,10 +229,10 @@
       border-radius: 4px;
       padding: 2px 4px;
       font-family: "Source Code Pro", "SF Mono", "Consolas", monospace;
-      font-size: 12px;
+      font-size: calc(12px * var(--chat-text, 1));
       /* pin below the body's 18px: a mono's baseline split at an
          inherited 18px pushes mixed lines past 18 */
-      line-height: 16px;
+      line-height: calc(16px * var(--chat-text, 1));
       letter-spacing: -0.02em; /* Mono/* styles carry -2% tracking */
       color: var(--color-text-code);
     }
@@ -241,9 +248,9 @@
       background: transparent;
       border: 0;
       padding: 0;
-      color: var(--color-code-block-text);
-      font-size: 12px;
-      line-height: 16px;
+      color: var(--color-text-light-2);
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
     }
     .msg-text blockquote {
       border-left: 2px solid var(--color-text-hint);
@@ -259,8 +266,8 @@
       border-collapse: separate;
       border-spacing: 0;
       margin: 6px 0;
-      font-size: 12px;
-      line-height: 16px;
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
       width: 100%;
       background: var(--color-bg-input);
       border-radius: 8px;
@@ -271,11 +278,15 @@
       border-right: 1px solid var(--color-bg-panel);
       padding: 4px 8px;
       text-align: left;
-      color: var(--color-text-strong);
+      transition: background 0.12s ease;
     }
     .msg-text th:last-child, .msg-text td:last-child { border-right: none; }
-    .msg-text th { font-weight: 600; }
+    /* Figma MarkdownTable: header light-2, data muted (not both strong) */
+    .msg-text th { font-weight: 600; color: var(--color-text-light-2); }
+    .msg-text td { color: var(--color-text-muted); }
     .msg-text tbody tr:nth-child(odd) td { background: var(--color-bg-table-row); }
+    /* hover lifts the whole data row above both zebra states, uniformly */
+    .msg-text tbody tr:hover td { background: var(--color-bg-table-row-hover); }
     .msg-text hr { border: 0; border-top: 1px solid var(--color-border-default); margin: 8px 0; }
 
     /* Tool activity as a line of status dashes — one 16x2 segment per
@@ -491,13 +502,15 @@
       border: none;
       color: var(--color-text-default);
       font-family: inherit;
-      font-size: 14px;
-      line-height: 18px;
+      /* composer tracks the chat text-size factor (--chat-text) so what
+         you type matches what you read; JS auto-grow scales in lockstep */
+      font-size: calc(14px * var(--chat-text, 1));
+      line-height: calc(18px * var(--chat-text, 1));
       /* horizontal pad only + centered — vertical rhythm comes from the
          row's pad 8, keeping the pill at the designed 48px */
       padding: 0 8px;
-      height: 18px;
-      max-height: 144px; /* 8 lines x 18px */
+      height: calc(18px * var(--chat-text, 1));
+      max-height: calc(144px * var(--chat-text, 1)); /* 8 lines x 18px */
       /* hidden until the cap — fractional DPI scaling (Windows 125%/150%)
          rounds clientHeight/scrollHeight apart and fakes a 1px overflow,
          painting a phantom scrollbar in the empty field; JS flips to auto
@@ -508,7 +521,7 @@
       outline: none;
     }
     .chat-input::placeholder {
-      color: var(--color-text-placeholder);
+      color: var(--color-text-dim);
       font-style: italic;
     }
     .chat-input.offline::placeholder { font-style: normal; }
@@ -783,6 +796,36 @@
       line-height: 10px;
       cursor: pointer;
     }
+    .text-btn:hover { color: var(--color-text-light); }
+    .text-btn:disabled { opacity: 0.4; cursor: default; }
+    /* Text-size stepper — Figma "Text Size" 330:1547: one #333 pill (r10,
+       24h), three 24x24 cells with 16px line icons. Minus/plus read
+       --color-text-dimmer, the centre glyph --color-text-dimmest. */
+    .text-size {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      background: var(--color-border-default);
+      border-radius: 10px;
+    }
+    .ts-btn, .ts-glyph {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .ts-btn .gicon, .ts-glyph .gicon { width: 16px; height: 16px; }
+    .ts-btn .gicon { color: var(--color-text-dimmer); }
+    .ts-glyph .gicon { color: var(--color-text-dimmest); }
+    .ts-btn:hover .gicon { color: var(--color-text-light); }
+    .ts-btn:disabled { cursor: default; }
+    .ts-btn:disabled .gicon { opacity: 0.4; }
     .model-select {
       background: var(--color-bg-input);
       border: 1px solid var(--color-border-input);
@@ -910,6 +953,11 @@
         </span>
         <button id="clearBtn" class="icon-btn" title="Clear chat"></button>
         <button id="reloadBtn" class="icon-btn" title="Reload panel"></button>
+        <span class="text-size">
+          <button id="textDecBtn" class="ts-btn" aria-label="Smaller chat text" title="Smaller chat text"></button>
+          <button id="textResetBtn" class="ts-glyph" title="Reset chat text size"></button>
+          <button id="textIncBtn" class="ts-btn" aria-label="Larger chat text" title="Larger chat text"></button>
+        </span>
         <span id="actionSpell" class="action-spell"></span>
       </span>
       <span class="activity-more">
@@ -941,6 +989,12 @@
     <div class="activity-settings">
       <span id="versionText">v—</span>
       <span class="spacer"></span>
+      <button id="soundCycleBtn" class="text-btn" title="Cycle reply-sound candidates — the one you leave selected is the cue"></button>
+      <label class="toggle-label" title="Reply cue when the panel is unfocused">
+        <input type="checkbox" id="replySound">
+        <span class="toggle"><span class="knob"></span></span>
+        Sound
+      </label>
       <label class="toggle-label">
         <input type="checkbox" id="autoCheckUpdates">
         <span class="toggle"><span class="knob"></span></span>

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.1 — 2026-07-30
+
+**Panel polish — chat text sizing, reply sounds, and a colour pass.**
+
+- **Adjustable chat text size** — an A−/A+ control in the activity bar scales the whole conversation *and* the composer together, 80%–160%, remembered across reloads. Tapping it never expands the drawer.
+- **Reply sounds** (off by default) — an optional cue when Gaffer finishes while the panel is unfocused, chosen from a small set in the settings; a quiet radio tick when you enable/disable an MCP server; and a distinct error cue. It self-silences after a few unattended cues so nothing chirps all night.
+- **Table-row hover** — hovering a markdown table row now highlights it.
+- **Text colours matched to the design** — bold and headings, table header/data cells, code blocks, and the input placeholder now track their Figma tokens, with new warm `strong` / `strong-dimmed` emphasis colours (bold reads warm-and-heavy rather than glaring; bold inside a blockquote dims to suit).
+
 ## v0.6.0 — 2026-07-29
 
 **Six new discovery tools** — the typed tool surface now covers essentially everything AE exposes for reading (mutations stay in `runJSX`, where the undo-group safety lives):
