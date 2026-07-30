@@ -133,3 +133,17 @@ test('signOut runs auth logout and reports ok', async () => {
   const r = await signOut('claude', { execFileFn });
   assert.equal(r.ok, true);
 });
+
+test('signOut handles execFileFn rejection and reports error', async () => {
+  const execFileFn = async () => { throw new Error('boom'); };
+  const r = await signOut('claude', { execFileFn });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'boom');
+});
+
+test('signOut invokes the real CLI arg shape (auth logout)', async () => {
+  const { execFileFn, argvFile } = fakeBin({});
+  const r = await signOut('claude', { execFileFn });
+  assert.equal(r.ok, true);
+  assert.match(readFileSync(argvFile, 'utf8'), /"auth","logout"/);
+});
