@@ -1,8 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authStatus, signIn } from '../auth.js';
+import { authStatus, signIn, signOut } from '../auth.js';
+import { execFile as _execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const execFileP = promisify(_execFile);
 
 const okJson = JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'a@b.co', orgName: 'Acme', subscriptionType: 'team' });
+
+function fakeBin(state) {
+  const dir = mkdtempSync(join(tmpdir(), 'gaffer-auth-'));
+  const sf = join(dir, 'state.json');
+  writeFileSync(sf, JSON.stringify(state));
+  const stub = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url));
+  // execFileFn that shells the stub with the statefile prepended
+  const execFileFn = (bin, args, o) => execFileP(process.execPath, [stub, sf, ...args], o);
+  return { execFileFn, argvFile: sf + '.argv' };
+}
 
 test('authStatus parses logged-in JSON', async () => {
   const execFileFn = async () => ({ stdout: okJson });
@@ -101,4 +119,17 @@ test('signIn returns control even if onStarted throws', async () => {
   const r = await ctl.done;
   assert.equal(r.ok, false);
   assert.equal(r.error, 'cancelled');
+});
+
+test('authStatus talks to the real CLI arg shape (auth status --json)', async () => {
+  const { execFileFn, argvFile } = fakeBin({ loggedIn: true, email: 'x@y.z' });
+  const s = await authStatus('claude', { execFileFn });
+  assert.equal(s.loggedIn, true);
+  assert.match(readFileSync(argvFile, 'utf8'), /"auth","status","--json"/);
+});
+
+test('signOut runs auth logout and reports ok', async () => {
+  const execFileFn = async () => ({ stdout: '' });
+  const r = await signOut('claude', { execFileFn });
+  assert.equal(r.ok, true);
 });

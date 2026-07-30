@@ -53,3 +53,14 @@ export function signIn(claudeBin, mode, opts = {}) {
 
   return { done, cancel: () => { try { child && child.kill && child.kill(); } catch (e) {} finish({ ok: false, error: 'cancelled' }); } };
 }
+
+export async function signOut(claudeBin, opts = {}) {
+  const execFileFn = opts.execFileFn || execFileP;
+  try {
+    await execFileFn(claudeBin, ['auth', 'logout'],
+      { env: opts.env || process.env, timeout: 15000, windowsHide: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || 'logout failed' };
+  }
+}
