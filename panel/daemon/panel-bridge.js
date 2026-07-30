@@ -94,6 +94,10 @@ export class PanelBridge {
             if (this.onAuthMcp) this.onAuthMcp(msg, socket);
             return;
           }
+          if (msg.type === 'auth_status') { if (this.onAuthStatus) this.onAuthStatus(socket); return; }
+          if (msg.type === 'sign_in') { if (this.onSignIn) this.onSignIn(msg, socket); return; }
+          if (msg.type === 'sign_out') { if (this.onSignOut) this.onSignOut(socket); return; }
+          if (msg.type === 'cancel_sign_in') { if (this.onCancelSignIn) this.onCancelSignIn(); return; }
 
           // Legacy: JSX response (no type field)
           var entry = this.pending.get(msg.id);

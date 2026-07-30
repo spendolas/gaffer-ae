@@ -2,6 +2,8 @@ import { PanelBridge } from './panel-bridge.js';
 import { Queue } from './queue.js';
 import { startMcpServer } from './mcp-server.js';
 import { ChatHandler } from './chat-handler.js';
+import { authStatus, signIn, signOut } from './auth.js';
+import { findClaudeBinary } from './claude-binary.js';
 
 var WS_PORT = 9823;
 var MCP_PORT = 9824;
@@ -45,6 +47,38 @@ bridge.onAuthMcp = async (msg, socket) => {
     socket.send(JSON.stringify({ type: 'mcp_auth_done', id: msg.id, ok: result.ok, error: result.error }));
   }
 };
+
+let activeSignIn = null;
+function sendAuthStatus(socket, s) {
+  if (socket && socket.readyState === 1)
+    socket.send(JSON.stringify({ type: 'auth_status', loggedIn: s.loggedIn,
+      email: s.email, orgName: s.orgName, plan: s.subscriptionType, authMethod: s.authMethod }));
+}
+bridge.onAuthStatus = async (socket) => {
+  try { sendAuthStatus(socket, await authStatus(await findClaudeBinary())); }
+  catch (e) { sendAuthStatus(socket, { loggedIn: null }); }
+};
+bridge.onSignIn = async (msg, socket) => {
+  if (activeSignIn) return;
+  let bin; try { bin = await findClaudeBinary(); }
+  catch (e) { socket.send(JSON.stringify({ type: 'sign_in_done', ok: false, error: e.message })); return; }
+  const mode = msg.mode === 'console' ? 'console' : 'claudeai';
+  activeSignIn = signIn(bin, mode, { onStarted: () => {
+    if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'sign_in_started' }));
+  }});
+  const r = await activeSignIn.done;
+  activeSignIn = null;
+  if (socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
+    if (r.ok && r.status) sendAuthStatus(socket, r.status);
+    else sendAuthStatus(socket, await authStatus(bin));
+  }
+};
+bridge.onSignOut = async (socket) => {
+  try { await signOut(await findClaudeBinary()); } catch (e) {}
+  sendAuthStatus(socket, { loggedIn: false });
+};
+bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activeSignIn = null; } };
 
 var queue = new Queue(bridge);
 
