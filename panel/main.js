@@ -135,8 +135,8 @@
   function updateChatEnabled() {
     var connected = ledEl.classList.contains('connected');
     var ok = connected && authLoggedIn !== false;
-    chatInputEl.disabled = !ok || chatBusy;
-    sendBtnEl.disabled = !ok || chatBusy;
+    chatInputEl.disabled = !ok;             // input: connected+auth only — preserve type-ahead while busy
+    sendBtnEl.disabled = !ok || chatBusy;   // send: also gated on busy
   }
 
   // ── Auth ──
@@ -1099,7 +1099,7 @@
 
   function setChatBusy(busy) {
     chatBusy = busy;
-    sendBtnEl.disabled = busy;
+    updateChatEnabled();
     sendBtnEl.style.display = busy ? 'none' : 'block';
     stopBtnEl.style.display = busy ? 'block' : 'none';
   }
