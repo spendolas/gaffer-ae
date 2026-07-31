@@ -16,7 +16,7 @@ function fakeBin(state) {
   const dir = mkdtempSync(join(tmpdir(), 'gaffer-auth-'));
   const sf = join(dir, 'state.json');
   writeFileSync(sf, JSON.stringify(state));
-  const stub = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url));
+  const stub = fileURLToPath(new URL('../test-fixtures/fake-claude.mjs', import.meta.url));
   // execFileFn that shells the stub with the statefile prepended
   const execFileFn = (bin, args, o) => execFileP(process.execPath, [stub, sf, ...args], o);
   return { execFileFn, argvFile: sf + '.argv' };
