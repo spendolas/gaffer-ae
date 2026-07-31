@@ -37,7 +37,7 @@ Gaffer spawns `claude -p …` and assumes the CLI is already authenticated. A us
 - `cancelSignIn()` → kills the in-flight login child and stops the poll.
 
 ### Panel
-- **Sign-in card** — centered in the chat area (a signed-out user cannot chat). Two buttons: **"Sign in with Claude"** (subscription) and **"Use Anthropic Console"** (API billing). In-progress state: "Complete sign-in in your browser…" + spinner + **Cancel**, plus the login URL with a copy button if the CLI printed one.
+- **Sign-in card** — a whole-panel takeover when signed out (a signed-out user can't chat or use any control, so the card overlays the entire panel — anchored to `body`; decision 2026-07-31). Two buttons: **"Sign in with Claude"** (subscription) and **"Use Anthropic Console"** (API billing). In-progress state: "Complete sign-in in your browser…" + spinner + **Cancel**, plus the login URL with a copy button if the CLI printed one.
 - **Account chip + Sign out** — in the "More" drawer once signed in; shows `email · orgName · subscriptionType` from `auth status`.
 
 ## Protocol (new WS messages; matches existing typed set)
