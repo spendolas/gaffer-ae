@@ -731,10 +731,15 @@
       if (msg.type === 'auth_status') { renderAuth(msg); return; }
       if (msg.type === 'sign_in_started') {
         document.getElementById('signInProgress').hidden = false;
-        document.getElementById('signInError').hidden = true; return;
+        document.getElementById('signInError').hidden = true;
+        var sic = document.getElementById('signInClaude'); if (sic) sic.disabled = true;
+        var sico = document.getElementById('signInConsole'); if (sico) sico.disabled = true;
+        return;
       }
       if (msg.type === 'sign_in_done') {
         document.getElementById('signInProgress').hidden = true;
+        var sic2 = document.getElementById('signInClaude'); if (sic2) sic2.disabled = false;
+        var sico2 = document.getElementById('signInConsole'); if (sico2) sico2.disabled = false;
         if (!msg.ok) { var e = document.getElementById('signInError'); e.hidden = false;
           e.textContent = msg.error === 'timeout' ? 'Sign-in timed out — try again.'
             : msg.error === 'cancelled' ? '' : ('Sign-in failed: ' + (msg.error || 'unknown')); }
@@ -1005,6 +1010,7 @@
   function sendChatMessage() {
     var text = chatInputEl.value.trim();
     if (!ws || ws.readyState !== 1 || chatBusy) return;
+    if (authLoggedIn === false) return; // defense-in-depth: signed-out users can never send
     if (!text && pendingImages.length === 0 && replyQuotes.length === 0) return;
 
     // Staged reply quotes: stored structurally on the message (styled cards in

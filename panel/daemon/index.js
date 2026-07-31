@@ -49,6 +49,7 @@ bridge.onAuthMcp = async (msg, socket) => {
 };
 
 let activeSignIn = null;
+let signInInFlight = false;
 function sendAuthStatus(socket, s) {
   if (socket && socket.readyState === 1)
     socket.send(JSON.stringify({ type: 'auth_status', loggedIn: s.loggedIn,
@@ -59,15 +60,21 @@ bridge.onAuthStatus = async (socket) => {
   catch (e) { sendAuthStatus(socket, { loggedIn: null }); }
 };
 bridge.onSignIn = async (msg, socket) => {
-  if (activeSignIn) return;
+  if (signInInFlight || activeSignIn) return;
+  signInInFlight = true;
   let bin; try { bin = await findClaudeBinary(); }
-  catch (e) { if (socket && socket.readyState === 1) socket.send(JSON.stringify({ type: 'sign_in_done', ok: false, error: e.message })); return; }
+  catch (e) {
+    signInInFlight = false;
+    if (socket && socket.readyState === 1) socket.send(JSON.stringify({ type: 'sign_in_done', ok: false, error: e.message }));
+    return;
+  }
   const mode = msg.mode === 'console' ? 'console' : 'claudeai';
   activeSignIn = signIn(bin, mode, { onStarted: () => {
     if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'sign_in_started' }));
   }});
   const r = await activeSignIn.done;
   activeSignIn = null;
+  signInInFlight = false;
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
     if (r.ok && r.status) sendAuthStatus(socket, r.status);
@@ -82,7 +89,7 @@ bridge.onSignOut = async (socket) => {
   if (r.ok) sendAuthStatus(socket, { loggedIn: false });
   else sendAuthStatus(socket, await authStatus(bin)); // logout failed → report real state
 };
-bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activeSignIn = null; } };
+bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activeSignIn = null; } signInInFlight = false; };
 
 var queue = new Queue(bridge);
 
