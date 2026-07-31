@@ -44,6 +44,7 @@
   // Chat state
   var currentSessionId = null;
   var chatBusy = false;
+  var authLoggedIn = null; // null = unknown/indeterminate, true/false once daemon reports
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
   var currentModel = 'opus';
   var currentVariant = 'standard'; // 'standard' | '1m' (context-window variant)
@@ -118,14 +119,43 @@
   function setStatus(state, text) {
     ledEl.className = 'led' + (state === 'connected' ? ' connected' : state === 'starting' ? ' starting' : '');
     if (statusWrapEl) statusWrapEl.title = text || state; // star-only status: text is the tooltip
-    chatInputEl.disabled = state !== 'connected';
-    sendBtnEl.disabled = state !== 'connected' || chatBusy;
     // Figma InputRow state matrix: offline shows a bare panel-colored
     // button + "Gaffer" placeholder; connected shows the italic prompt.
     var offline = state !== 'connected';
     chatInputEl.classList.toggle('offline', offline);
     sendBtnEl.classList.toggle('offline', offline);
     chatInputEl.placeholder = offline ? 'Gaffer' : 'Ask Gaffer...';
+    updateChatEnabled();
+  }
+
+  // Chat input/send are enabled only once both the daemon is connected AND
+  // (per Task 6 auth wiring) the user is not known to be signed out — an
+  // indeterminate authLoggedIn (null, before the first auth_status reply)
+  // must NOT lock the chat out.
+  function updateChatEnabled() {
+    var connected = ledEl.classList.contains('connected');
+    var ok = connected && authLoggedIn !== false;
+    chatInputEl.disabled = !ok || chatBusy;
+    sendBtnEl.disabled = !ok || chatBusy;
+  }
+
+  // ── Auth ──
+
+  function renderAuth(s) {
+    authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
+    var card = document.getElementById('signInCard');
+    var chip = document.getElementById('accountChip');
+    var signedOut = authLoggedIn === false;
+    if (card) card.classList.toggle('visible', signedOut);
+    if (card) { card.hidden = false; } // display controlled by .visible
+    if (chip) {
+      chip.hidden = !(authLoggedIn === true);
+      if (authLoggedIn === true) {
+        document.getElementById('accountLabel').textContent =
+          [s.email, s.orgName, s.plan].filter(Boolean).join(' · ');
+      }
+    }
+    updateChatEnabled();
   }
 
   // ── Daemon auto-start ──
@@ -698,6 +728,18 @@
         renderMcpList();
         return;
       }
+      if (msg.type === 'auth_status') { renderAuth(msg); return; }
+      if (msg.type === 'sign_in_started') {
+        document.getElementById('signInProgress').hidden = false;
+        document.getElementById('signInError').hidden = true; return;
+      }
+      if (msg.type === 'sign_in_done') {
+        document.getElementById('signInProgress').hidden = true;
+        if (!msg.ok) { var e = document.getElementById('signInError'); e.hidden = false;
+          e.textContent = msg.error === 'timeout' ? 'Sign-in timed out — try again.'
+            : msg.error === 'cancelled' ? '' : ('Sign-in failed: ' + (msg.error || 'unknown')); }
+        return;
+      }
 
       // ── Legacy: JSX execution request (no type field) ──
       if (!msg.id || !msg.code) return;
@@ -743,6 +785,7 @@
       wasConnected = true;
       reconnectDelay = 1000;
       requestMcpList();
+      ws.send(JSON.stringify({ type: 'auth_status' }));
     };
 
     ws.onmessage = handleMessage;
@@ -2274,6 +2317,15 @@
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching
   // the panel JS. registerKeyEventsInterest doesn't work in CEP 12 for these.
   // Copy is handled via Copy buttons on each message instead.
+
+  // ── Auth wiring ──
+  function sendWs(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+  var b;
+  if ((b = document.getElementById('signInClaude'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'claudeai' }); });
+  if ((b = document.getElementById('signInConsole'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'console' }); });
+  if ((b = document.getElementById('signInCancel'))) b.addEventListener('click', function () { sendWs({ type: 'cancel_sign_in' }); });
+  if ((b = document.getElementById('signOutBtn'))) b.addEventListener('click', function () { sendWs({ type: 'sign_out' }); });
+  window.__gafferAuth = function (s) { renderAuth(s || {}); }; // dev/test hook (mirrors __gafferSound)
 
   // ── Start ──
   if (typeof GafferIcons !== 'undefined') {
