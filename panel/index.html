@@ -457,6 +457,67 @@
     }
     .paste-chip-x:hover { background: var(--color-accent-red); color: var(--color-text-white); }
 
+    /* Reply-quote tray — dedicated area above the input for quoted snippets
+       (Figma Cell: Replying 428:3945). Lives in .input-overlays (absolute, so
+       it never shifts the chat scroll). Rises from behind the pill on add,
+       shrinks on remove (max-height + opacity). Anchored at the overlay
+       stack's bottom, so growth extends upward = "up from behind". */
+    .reply-quotes {
+      align-self: stretch;
+      padding: 0 24px; /* Reply Quote L/R 24 */
+      overflow: hidden;
+      max-height: 0;
+      opacity: 0;
+      transition: max-height 0.2s var(--ease-state), opacity 0.2s var(--ease-state);
+    }
+    .reply-quotes.visible { opacity: 1; } /* max-height set inline by JS = scrollHeight */
+    .reply-quotes-pill {
+      display: flex;
+      flex-direction: column;
+      gap: 12px; /* Pill itemSpacing 12 */
+      padding: 8px 6px 8px 12px; /* Pill T8 R6 B8 L12 */
+      background: #000000; /* Figma Pill fill */
+      border-radius: 16px;
+    }
+    .reply-quote-row { display: flex; align-items: stretch; gap: 8px; }
+    /* Wave marker — impl note "recreate the sin wave in code, round caps":
+       one seamless sine PERIOD tiled vertically (loopable, undistorted at any
+       row height). 5px wide, amp 1.5, period 8, round caps, dimmed. */
+    .reply-quote-wave {
+      flex-shrink: 0;
+      width: 5px;
+      background-repeat: repeat-y;
+      background-position: center top;
+      background-size: 5px 8px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%225%22 height=%228%22 viewBox=%220 0 5 8%22%3E%3Cpath d=%22M2.50 0.0 L3.07 0.5 L3.56 1.0 L3.89 1.5 L4.00 2.0 L3.89 2.5 L3.56 3.0 L3.07 3.5 L2.50 4.0 L1.93 4.5 L1.44 5.0 L1.11 5.5 L1.00 6.0 L1.11 6.5 L1.44 7.0 L1.93 7.5 L2.50 8.0%22 fill=%22none%22 stroke=%22%23888888%22 stroke-width=%221%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E");
+    }
+    .reply-quote-text {
+      flex: 1;
+      min-width: 0;
+      font-size: 12px;
+      line-height: 16px;
+      color: var(--color-text-dimmer);
+      display: -webkit-box;
+      -webkit-line-clamp: 2; /* Figma clamps long quotes to 2 lines */
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+    }
+    .reply-quote-x {
+      flex-shrink: 0;
+      align-self: flex-start;
+      width: 20px;
+      height: 20px;
+      padding: 2px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--color-text-dimmer);
+      cursor: pointer;
+    }
+    .reply-quote-x:hover { color: var(--color-text-light-2); }
+    .reply-quote-x .gicon { width: 16px; height: 16px; display: block; }
+
     /* Drag-over hint and lightbox */
     /* DropOverlay 191:1275 — flat, no border; 'Drop here' above the icon */
     .drop-overlay {
@@ -961,6 +1022,7 @@
           </span>
         </div>
       </div>
+      <div class="reply-quotes" id="replyQuotes"></div>
     </div>
     <div class="chat-input-row">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>

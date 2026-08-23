@@ -984,11 +984,16 @@
   function sendChatMessage() {
     var text = chatInputEl.value.trim();
     if (!ws || ws.readyState !== 1 || chatBusy) return;
-    if (!text && pendingImages.length === 0) return;
+    if (!text && pendingImages.length === 0 && replyQuotes.length === 0) return;
+
+    // Staged reply quotes ride along as leading blockquotes (same routing as
+    // when they lived in the input) — shown in the user bubble and sent.
+    var quotePrefix = replyQuotePrefix();
+    var body = quotePrefix ? (quotePrefix + (text ? '\n\n' + text : '')) : text;
 
     var imgs = pendingImages.slice();
     var imgPrefix = imgs.map(function (p) { return '[image: ' + p.path + ']'; }).join('\n');
-    var fullMessage = imgPrefix ? (imgPrefix + (text ? '\n' + text : '')) : text;
+    var fullMessage = imgPrefix ? (imgPrefix + (body ? '\n' + body : '')) : body;
 
     // every send counts one use for each enabled server (drives tile order)
     enabledMcps.forEach(function (id) {
@@ -997,7 +1002,7 @@
       u.last = Date.now();
       mcpUsage[id] = u;
     });
-    appendUserMessage(text, imgs);
+    appendUserMessage(body, imgs);
     ws.send(JSON.stringify({
       type: 'chat',
       message: fullMessage,
@@ -1012,6 +1017,7 @@
     chatInputEl.value = '';
     resizeChatInput(); // collapse to one (scaled) line
     sendBtnEl.classList.remove('typed');
+    clearReplyQuotes();
     pendingImages = [];
     renderPendingImages();
     setChatBusy(true);
@@ -1162,7 +1168,7 @@
       e.preventDefault();
       e.stopPropagation(); // clicks inside the CTA must not reach the outside-click handler
       var text = currentSelectionText();
-      if (text) replyToSelection(text);
+      if (text) addReplyQuote(text);
       hideSelectionCta();
     });
   }
@@ -1187,19 +1193,77 @@
     if (selectionCta) selectionCta.classList.remove('visible');
   }
 
-  // Stage a markdown blockquote of the selection in the input; the user types
-  // their reaction and sends. The quote gives the agent the exact referent —
-  // no protocol change, Gaffer already pipes the input string to claude -p.
-  function replyToSelection(text) {
-    var quoted = text.split('\n').map(function (l) { return '> ' + l; }).join('\n');
-    var existing = chatInputEl.value;
-    chatInputEl.value = quoted + '\n\n' + (existing || '');
-    chatInputEl.focus();
-    try {
-      var end = chatInputEl.value.length;
-      chatInputEl.setSelectionRange(end, end);
-    } catch (e) { /* non-text input — ignore */ }
-    chatInputEl.dispatchEvent(new Event('input', { bubbles: true })); // auto-grow + state
+  // ── Reply quotes ──
+  // Selected text is staged in a dedicated tray above the input (Figma
+  // Cell: Replying). On send, each staged quote is prepended to the message
+  // as a markdown blockquote — the agent gets the exact referent, same
+  // routing as before (Gaffer pipes the message string to claude -p). The
+  // tray rises from behind the pill on add and shrinks on remove.
+  var replyQuotes = [];
+  var replyQuotesEl = document.getElementById('replyQuotes');
+
+  function addReplyQuote(text) {
+    if (!text) return;
+    replyQuotes.push(text);
+    renderReplyQuotes();
+    chatInputEl.focus(); // ready to type the reaction
+  }
+
+  function removeReplyQuote(i) {
+    replyQuotes.splice(i, 1);
+    renderReplyQuotes();
+  }
+
+  function clearReplyQuotes() {
+    if (!replyQuotes.length) return;
+    replyQuotes = [];
+    renderReplyQuotes();
+  }
+
+  // Prefix that carries the staged quotes into the outgoing message.
+  function replyQuotePrefix() {
+    if (!replyQuotes.length) return '';
+    return replyQuotes.map(function (q) {
+      return q.split('\n').map(function (l) { return '> ' + l; }).join('\n');
+    }).join('\n\n');
+  }
+
+  function renderReplyQuotes() {
+    if (!replyQuotesEl) return;
+    // staged quotes count as "typed" so the send button lights up
+    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+    if (replyQuotes.length === 0) {
+      replyQuotesEl.style.maxHeight = '0px';
+      replyQuotesEl.classList.remove('visible');
+      // drop the rows only after the collapse so the shrink animates from
+      // real content height, not an emptied box
+      setTimeout(function () { if (replyQuotes.length === 0) replyQuotesEl.innerHTML = ''; }, 220);
+      return;
+    }
+    replyQuotesEl.innerHTML = '';
+    var pill = document.createElement('div');
+    pill.className = 'reply-quotes-pill';
+    replyQuotes.forEach(function (q, i) {
+      var row = document.createElement('div');
+      row.className = 'reply-quote-row';
+      var wave = document.createElement('div');
+      wave.className = 'reply-quote-wave';
+      var txt = document.createElement('div');
+      txt.className = 'reply-quote-text';
+      txt.textContent = q;
+      var x = document.createElement('button');
+      x.className = 'reply-quote-x';
+      x.title = 'Remove quote';
+      x.appendChild(icon('close'));
+      x.addEventListener('click', function () { removeReplyQuote(i); });
+      row.appendChild(wave);
+      row.appendChild(txt);
+      row.appendChild(x);
+      pill.appendChild(row);
+    });
+    replyQuotesEl.appendChild(pill);
+    replyQuotesEl.classList.add('visible');
+    replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px'; // animate to content
   }
 
   chatMessagesEl.addEventListener('mouseup', function () {
@@ -1372,6 +1436,7 @@
     chatMessagesEl.innerHTML = '';
     currentSessionId = null;
     chatHistory = [];
+    clearReplyQuotes();
     saveChat();
     if (chatBusy) startAssistantMessage();
   }
@@ -2044,7 +2109,7 @@
   });
   // Typed state + auto-grow (Figma InputRow mode=typed: field grows to 2+ lines)
   chatInputEl.addEventListener('input', function () {
-    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0);
+    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
     resizeChatInput();
   });
 
