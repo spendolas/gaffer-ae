@@ -1545,16 +1545,28 @@
   // hence callSystem instead.
   function detectDevInstall() {
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    var p = extPath.replace(/'/g, "\\'");
+    // One shell-out: confirm the repo AND read the live HEAD. Kernel path
+    // resolution follows the symlink, so <ext>/.. is the repo root. Append
+    // '+' when the working tree is dirty. Returns "dev:<hash>[+]" or "prod".
     var jsx = '(function(){'
       + 'if ($.os.indexOf("Windows") !== -1) return "prod";'
-      + 'return system.callSystem("bash -c \'test -d \\"' + extPath.replace(/'/g, "\\'") + '/../.git\\" && echo dev || echo prod\'");'
+      + 'return system.callSystem("bash -c \'D=\\"' + p + '/..\\"; if test -d \\"$D/.git\\"; then h=$(git -C \\"$D\\" rev-parse --short HEAD 2>/dev/null); git -C \\"$D\\" diff --quiet 2>/dev/null || h=\\"$h+\\"; echo \\"dev:$h\\"; else echo prod; fi\'");'
       + '})()';
     cs.evalScript(jsx, function (result) {
-      isDevInstall = String(result).indexOf('dev') !== -1;
-      if (isDevInstall) {
-        versionTextEl.textContent = versionTextEl.textContent + ' · dev';
-        versionTextEl.title = 'Dev install (git checkout) — update with git pull, not the panel updater';
+      var s = String(result);
+      isDevInstall = s.indexOf('dev') === 0;
+      if (!isDevInstall) return;
+      // Show the REAL git HEAD, not the frozen version.json commit.
+      var m = s.match(/dev:([0-9a-f]{4,}\+?)/i);
+      if (m && m[1]) {
+        var base = versionTextEl.textContent.replace(/\s*\([0-9a-f]+\)/i, '');
+        versionTextEl.textContent = base + ' (' + m[1] + ')';
       }
+      versionTextEl.textContent = versionTextEl.textContent + ' · dev';
+      versionTextEl.title = 'Dev install — build number is the live git HEAD'
+        + (m && m[1] && m[1].charAt(m[1].length - 1) === '+' ? ' (uncommitted changes present)' : '')
+        + '. Update with git pull, not the panel updater.';
     });
   }
 
