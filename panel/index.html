@@ -598,6 +598,20 @@
     }
     .icon-btn .gicon { width: 16px; height: 16px; display: block; }
     .icon-btn:hover { color: var(--color-text-light-2); }
+    /* Floating selection CTA — copy/reply the highlighted text, positioned
+       over the selection (fixed, viewport coords). Buttons reuse .icon-btn. */
+    .selection-cta {
+      position: fixed;
+      z-index: 3000;
+      display: none;
+      gap: 4px;
+      padding: 4px;
+      background: var(--color-bg-panel);
+      border: 1px solid var(--color-border-default);
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+    }
+    .selection-cta.visible { display: flex; }
     /* Animated expand/collapse — native <details> can't transition, so
        the element stays open and .expanded drives the body height */
     .activity-body {

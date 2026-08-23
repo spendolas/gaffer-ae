@@ -1098,6 +1098,108 @@
     return ok;
   }
 
+  // Floating selection CTA — copy or reply-to the highlighted text inside a
+  // chat message. Distinct from the per-bubble copy button (which grabs the
+  // whole message's raw markdown); this copies exactly what's selected.
+  var selectionCta = null, selCopyBtn = null, selReplyBtn = null;
+
+  function currentSelectionText() {
+    var sel = window.getSelection && window.getSelection();
+    return sel ? sel.toString().trim() : '';
+  }
+
+  // Return the live selection only when it sits inside a chat bubble (so the
+  // input field's own selection never triggers the CTA).
+  function selectionInChat() {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    var el = sel.anchorNode;
+    if (el && el.nodeType !== 1) el = el.parentNode;
+    while (el && el !== document.body) {
+      if (el.classList && el.classList.contains('chat-msg')) return sel;
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  function buildSelectionCta() {
+    selectionCta = document.createElement('div');
+    selectionCta.className = 'selection-cta';
+    selCopyBtn = document.createElement('button');
+    selCopyBtn.className = 'icon-btn';
+    selCopyBtn.title = 'Copy selection';
+    selCopyBtn.appendChild(icon('copy'));
+    selReplyBtn = document.createElement('button');
+    selReplyBtn.className = 'icon-btn';
+    selReplyBtn.title = 'Reply to selection';
+    selReplyBtn.appendChild(icon('reply'));
+    selectionCta.appendChild(selCopyBtn);
+    selectionCta.appendChild(selReplyBtn);
+    document.body.appendChild(selectionCta);
+
+    // mousedown + preventDefault: act before the browser clears the selection.
+    selCopyBtn.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var text = currentSelectionText();
+      if (text && copyToClipboard(text)) copyFeedback(selCopyBtn);
+      hideSelectionCta();
+    });
+    selReplyBtn.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var text = currentSelectionText();
+      if (text) replyToSelection(text);
+      hideSelectionCta();
+    });
+  }
+
+  function positionSelectionCta() {
+    var sel = selectionInChat();
+    if (!sel || !currentSelectionText()) { hideSelectionCta(); return; }
+    var rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) { hideSelectionCta(); return; }
+    if (!selectionCta) buildSelectionCta();
+    selectionCta.classList.add('visible'); // show first so offset* measure
+    var cw = selectionCta.offsetWidth, ch = selectionCta.offsetHeight;
+    var top = rect.top - ch - 6;             // above the selection
+    if (top < 4) top = rect.bottom + 6;      // flip below if no room up top
+    var left = rect.left + rect.width / 2 - cw / 2;
+    left = Math.max(4, Math.min(left, window.innerWidth - cw - 4));
+    selectionCta.style.top = top + 'px';
+    selectionCta.style.left = left + 'px';
+  }
+
+  function hideSelectionCta() {
+    if (selectionCta) selectionCta.classList.remove('visible');
+  }
+
+  // Stage a markdown blockquote of the selection in the input; the user types
+  // their reaction and sends. The quote gives the agent the exact referent —
+  // no protocol change, Gaffer already pipes the input string to claude -p.
+  function replyToSelection(text) {
+    var quoted = text.split('\n').map(function (l) { return '> ' + l; }).join('\n');
+    var existing = chatInputEl.value;
+    chatInputEl.value = quoted + '\n\n' + (existing || '');
+    chatInputEl.focus();
+    try {
+      var end = chatInputEl.value.length;
+      chatInputEl.setSelectionRange(end, end);
+    } catch (e) { /* non-text input — ignore */ }
+    chatInputEl.dispatchEvent(new Event('input', { bubbles: true })); // auto-grow + state
+  }
+
+  chatMessagesEl.addEventListener('mouseup', function () {
+    setTimeout(positionSelectionCta, 0); // let the selection settle first
+  });
+  chatMessagesEl.addEventListener('scroll', hideSelectionCta);
+  document.addEventListener('mousedown', function (e) {
+    if (selectionCta && !selectionCta.contains(e.target)) hideSelectionCta();
+  });
+  document.addEventListener('selectionchange', function () {
+    if (selectionCta && selectionCta.classList.contains('visible') && !currentSelectionText()) {
+      hideSelectionCta();
+    }
+  });
+
   function renderMarkdown(text) {
     if (typeof marked === 'undefined') return text;
     try {
