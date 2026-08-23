@@ -198,7 +198,7 @@ async function fetchSimpleIcon(id, displayName) {
 
 // CEP launches the daemon with a stripped PATH. Augment it so claude can
 // find node/npm and spawn stdio MCP servers (e.g. grip uses bare `node`).
-function augmentedEnv() {
+export function augmentedEnv() {
   var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
   var pathParts = (process.env.PATH || '').split(':');
   for (var p of extraPaths) {

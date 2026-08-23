@@ -1,7 +1,7 @@
 import { PanelBridge } from './panel-bridge.js';
 import { Queue } from './queue.js';
 import { startMcpServer } from './mcp-server.js';
-import { ChatHandler } from './chat-handler.js';
+import { ChatHandler, augmentedEnv } from './chat-handler.js';
 import { authStatus, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
 
@@ -56,7 +56,7 @@ function sendAuthStatus(socket, s) {
       email: s.email, orgName: s.orgName, plan: s.subscriptionType, authMethod: s.authMethod }));
 }
 bridge.onAuthStatus = async (socket) => {
-  try { sendAuthStatus(socket, await authStatus(await findClaudeBinary())); }
+  try { sendAuthStatus(socket, await authStatus(await findClaudeBinary(), { env: augmentedEnv() })); }
   catch (e) { sendAuthStatus(socket, { loggedIn: null }); }
 };
 bridge.onSignIn = async (msg, socket) => {
@@ -69,7 +69,8 @@ bridge.onSignIn = async (msg, socket) => {
     return;
   }
   const mode = msg.mode === 'console' ? 'console' : 'claudeai';
-  activeSignIn = signIn(bin, mode, { onStarted: () => {
+  const env = augmentedEnv();
+  activeSignIn = signIn(bin, mode, { env: env, onStarted: () => {
     if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'sign_in_started' }));
   }});
   const r = await activeSignIn.done;
@@ -78,16 +79,17 @@ bridge.onSignIn = async (msg, socket) => {
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
     if (r.ok && r.status) sendAuthStatus(socket, r.status);
-    else sendAuthStatus(socket, await authStatus(bin));
+    else sendAuthStatus(socket, await authStatus(bin, { env: env }));
   }
 };
 bridge.onSignOut = async (socket) => {
   let bin;
   try { bin = await findClaudeBinary(); }
   catch (e) { sendAuthStatus(socket, { loggedIn: null }); return; }
-  const r = await signOut(bin);
+  const env = augmentedEnv();
+  const r = await signOut(bin, { env: env });
   if (r.ok) sendAuthStatus(socket, { loggedIn: false });
-  else sendAuthStatus(socket, await authStatus(bin)); // logout failed → report real state
+  else sendAuthStatus(socket, await authStatus(bin, { env: env })); // logout failed → report real state
 };
 bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activeSignIn = null; } signInInFlight = false; };
 
