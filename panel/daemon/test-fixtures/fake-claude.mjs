@@ -6,7 +6,8 @@ appendFileSync(stateFile + '.argv', JSON.stringify(argv) + '\n');
 if (argv[0] === 'auth' && argv[1] === 'status') {
   const st = JSON.parse(readFileSync(stateFile, 'utf8'));
   process.stdout.write(JSON.stringify(st));
-  process.exit(0);
+  // Real CLI exits non-zero when logged out (still prints valid JSON).
+  process.exit(st.loggedIn === true ? 0 : 1);
 }
 
 if (argv[0] === 'auth' && argv[1] === 'logout') {

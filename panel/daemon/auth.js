@@ -4,10 +4,19 @@ const execFileP = promisify(_execFile);
 
 export async function authStatus(claudeBin, opts = {}) {
   const execFileFn = opts.execFileFn || execFileP;
+  let out;
   try {
-    const { stdout } = await execFileFn(claudeBin, ['auth', 'status', '--json'],
+    const r = await execFileFn(claudeBin, ['auth', 'status', '--json'],
       { env: opts.env || process.env, timeout: 15000, windowsHide: true });
-    const j = JSON.parse(stdout);
+    out = r && r.stdout;
+  } catch (e) {
+    // `claude auth status --json` exits non-zero when logged out but still
+    // prints valid JSON on stdout — recover it from the error object rather
+    // than treating logged-out as indeterminate (which would hide the card).
+    out = e && e.stdout;
+  }
+  try {
+    const j = JSON.parse(out);
     if (typeof j.loggedIn !== 'boolean') return { loggedIn: null };
     return {
       loggedIn: j.loggedIn, authMethod: j.authMethod, email: j.email,

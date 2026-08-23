@@ -42,6 +42,20 @@ test('authStatus returns loggedIn:null when the CLI errors', async () => {
   assert.equal(s.loggedIn, null);
 });
 
+// Regression: `claude auth status --json` exits non-zero when logged OUT
+// (execFile rejects) but still prints valid JSON. Must parse it as
+// loggedIn:false, not swallow it to null — else the sign-in card never shows.
+test('authStatus parses logged-out JSON even when the CLI exits non-zero', async () => {
+  const execFileFn = async () => {
+    const e = new Error('Command failed: exit 1');
+    e.code = 1;
+    e.stdout = JSON.stringify({ loggedIn: false, authMethod: 'none' });
+    throw e;
+  };
+  const s = await authStatus('claude', { execFileFn });
+  assert.equal(s.loggedIn, false);
+});
+
 function fakeChild() {
   let exitCb;
   return { on: (e, cb) => { if (e === 'exit') exitCb = cb; }, kill: () => exitCb && exitCb(0), _exit: (c) => exitCb && exitCb(c) };
@@ -126,6 +140,12 @@ test('authStatus talks to the real CLI arg shape (auth status --json)', async ()
   const s = await authStatus('claude', { execFileFn });
   assert.equal(s.loggedIn, true);
   assert.match(readFileSync(argvFile, 'utf8'), /"auth","status","--json"/);
+});
+
+test('authStatus reads logged-out state from the real (non-zero-exit) CLI shape', async () => {
+  const { execFileFn } = fakeBin({ loggedIn: false, authMethod: 'none' });
+  const s = await authStatus('claude', { execFileFn });
+  assert.equal(s.loggedIn, false);
 });
 
 test('signOut runs auth logout and reports ok', async () => {
