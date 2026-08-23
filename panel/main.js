@@ -1153,7 +1153,7 @@
         ctaDismissing = true;
         var ok = copyToClipboard(text);
         if (ok) copyFeedback(selCopyBtn); // swap to check (auto-restores to copy)
-        setTimeout(function () { ctaDismissing = false; hideSelectionCta(); }, ok ? 750 : 0);
+        setTimeout(function () { ctaDismissing = false; hideSelectionCta(); }, ok ? 500 : 0);
       } else {
         hideSelectionCta();
       }
