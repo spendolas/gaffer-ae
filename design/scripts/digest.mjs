@@ -87,6 +87,9 @@ function digestNode(n, out, depth, path) {
     id: n.id, name: n.name, type: n.type, depth,
     w: n.width != null ? Math.round(n.width * 100) / 100 : null,
     h: n.height != null ? Math.round(n.height * 100) / 100 : null,
+    // visible child count — gap is only observable with ≥2 children, so the
+    // diff gates its gap assertion on this (avoids flagging vestigial spacing).
+    kids: (n.children || []).filter((c) => c.visible !== false).length,
   };
   if (n.layoutMode && n.layoutMode !== 'NONE') {
     entry.layout = {
@@ -118,6 +121,15 @@ function digestNode(n, out, depth, path) {
     if (!entry.effects.length) delete entry.effects;
   }
   if (n.type === 'TEXT') {
+    // A text-range fill overrides the layer fill on the actual glyphs — the
+    // rendered color is textRangeFills, not fills[0]. Missing this made the
+    // reply-quote text read as #C2C0BC (layer default) when it paints #888888.
+    const trf = n.boundVariables && n.boundVariables.textRangeFills;
+    if (trf && trf[0] && varById[trf[0].variableId]) {
+      const v = varById[trf[0].variableId];
+      const op = v.value && v.value.opacity != null && v.value.opacity !== 1 ? '@' + v.value.opacity.toFixed(2) : '';
+      entry.fill = v.name + ' (' + v.value.hex + op + ')';
+    }
     entry.text = {
       chars: (n.characters || '').slice(0, 60),
       font: n.fontName ? n.fontName.family + ' ' + n.fontName.style : null,

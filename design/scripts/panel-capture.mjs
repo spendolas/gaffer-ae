@@ -19,12 +19,22 @@ mkdirSync(OUT, { recursive: true });
 const PORT = Number(process.argv[2] || 13870);
 
 const COMPUTED_PROPS = [
-  'color', 'background-color', 'border-radius', 'border-top-width', 'border-top-color',
-  'border-top-style', 'font-family', 'font-size', 'font-weight', 'line-height',
+  'color', 'background-color', 'border-radius',
+  // per-corner radii — the shorthand collapses [16,16,0,0] ambiguously; the
+  // node-level diff compares corners individually against the Figma spec.
+  'border-top-left-radius', 'border-top-right-radius',
+  'border-bottom-right-radius', 'border-bottom-left-radius',
+  // all four border sides (Figma strokes can be one-sided, e.g. banner dock)
+  'border-top-width', 'border-top-color', 'border-top-style',
+  'border-right-width', 'border-right-color',
+  'border-bottom-width', 'border-bottom-color',
+  'border-left-width', 'border-left-color',
+  'font-family', 'font-size', 'font-weight', 'line-height',
   'letter-spacing', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
   'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'gap', 'display',
   'align-items', 'justify-content', 'flex-direction', 'opacity', 'box-shadow',
   'text-align', 'overflow-x', 'overflow-y', 'white-space',
+  'min-width', 'max-width', 'min-height', 'max-height',
 ];
 
 // Each state: name + a DOM-level setup snippet (no reliance on main.js
@@ -40,11 +50,20 @@ window.__audit = (function () {
   }
   function chat() { return document.getElementById('chatMessages'); }
   function reset() {
+    // Neutralise the user's A-/A+ chat text-zoom (--chat-text, persisted at any
+    // factor) — parity numbers are defined at 1.0×, not whatever the live panel
+    // was left at. The var lives on <html> (root), so set it there: the reply
+    // quote scales with it too but sits OUTSIDE #chatMessages, so a chatMessages-
+    // only override wouldn't reach it.
+    document.documentElement.style.setProperty('--chat-text', '1');
     chat().innerHTML = '';
     document.getElementById('updateBanner').classList.remove('visible');
     document.getElementById('dropOverlay').classList.remove('visible');
     var lb = document.getElementById('imgLightbox'); lb.hidden = true;
     document.getElementById('pastePreviewRow').innerHTML = '';
+    if (window.__gaffer && window.__gaffer.clearReplyQuotes) window.__gaffer.clearReplyQuotes();
+    var rq = document.getElementById('replyQuotes');
+    if (rq) { rq.classList.remove('visible'); rq.style.maxHeight = '0px'; rq.innerHTML = ''; }
     document.querySelector('.activity-log').classList.remove('expanded');
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('sendBtn').style.display = '';
@@ -102,10 +121,20 @@ window.__audit = (function () {
       reset();
       var row = document.getElementById('pastePreviewRow');
       var chip = el('span', 'paste-chip');
+      chip.setAttribute('data-fig', 'I427:3060;185:1121'); // ImageChip
       var img = document.createElement('canvas'); img.width = 48; img.height = 48;
       chip.appendChild(img);
-      chip.appendChild(el('span', 'paste-chip-x', '\\u2715'));
+      var cx = el('span', 'paste-chip-x', '\\u2715');
+      cx.setAttribute('data-fig', 'I427:3060;185:1121;219:3708'); // CloseBtn
+      chip.appendChild(cx);
       row.appendChild(chip);
+    },
+    'reply-quote': function () {
+      reset();
+      // drive the real builder (window.__gaffer) so we capture shipping DOM
+      if (window.__gaffer && window.__gaffer.addReplyQuote) {
+        window.__gaffer.addReplyQuote('The visuals must be accurate to Figma.');
+      }
     },
     'drop-overlay': function () {
       reset();
@@ -136,6 +165,7 @@ window.__audit = (function () {
       for (var j = 0; j < props.length; j++) style[props[j]] = cs.getPropertyValue(props[j]);
       out.push({
         tag: n.tagName.toLowerCase(), id: n.id || null, cls: n.className && n.className.baseVal === undefined ? n.className : null,
+        fig: (n.getAttribute && n.getAttribute('data-fig')) || null,
         rect: { x: r.x, y: r.y, w: r.width, h: r.height }, style: style,
       });
     }
@@ -180,6 +210,23 @@ async function main() {
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   await rpc(ws, 'Page.enable');
   await rpc(ws, 'Runtime.enable');
+
+  // The panel exposes its real builders on window.__gaffer only when
+  // localStorage.gafferAudit === '1' (so no test seam ships to end users). Set
+  // the flag and reload once if the hooks aren't there yet; the flag persists,
+  // so subsequent runs skip the reload.
+  const hasHook = await evalJs(ws, '!!(window.__gaffer && window.__gaffer.addReplyQuote)');
+  if (!hasHook) {
+    await evalJs(ws, "localStorage.setItem('gafferAudit', '1'); 'set'");
+    await rpc(ws, 'Page.reload', {});
+    let ready = false;
+    for (let i = 0; i < 40 && !ready; i++) {
+      await sleep(250);
+      try { ready = await evalJs(ws, '!!(window.__gaffer && window.__gaffer.addReplyQuote)'); } catch (_) { /* context reloading */ }
+    }
+    if (!ready) throw new Error('audit seam not available after enabling gafferAudit + reload');
+    console.log('enabled gafferAudit seam (reloaded)');
+  }
 
   const env = {
     browser: version.Browser,

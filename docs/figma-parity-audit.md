@@ -184,13 +184,84 @@ Child order: **ChatMessages (grow) → UpdateBanner (hidden overlay, out of flow
 
 ## 7. Verification
 
-**Backlog status (2026-07-14): steps 1–8 all shipped.** Step 8 closed with
-`design/scripts/verify-parity.mjs` — 58/58 numeric assertions pass against the
-11 captured states (bubbles, markdown, pills, input row, chat bleed/fader
-geometry, banner, paste tray/chips, overlays, status) and all 35 color tokens
-in `design/tokens.json` match the `:root` literals exactly. Re-run after any
-design change: `figma-extract.mjs` (pins the Plugin Dev file) → `digest.mjs` →
-`panel-capture.mjs` (AE open) → `verify-parity.mjs`.
+### Pipeline (2026-08-23 — node-level auto-diff)
+
+The audit is no longer a hand-picked assertion list. Run, in order (grip + AE
+panel both open):
+
+```
+node design/scripts/figma-extract.mjs   # auto-discovers roots, walks to disk
+node design/scripts/css-inventory.mjs
+node design/scripts/digest.mjs           # walk-*.json → spec-*.json + tokens
+node design/scripts/panel-capture.mjs    # live CDP capture (:13870)
+node design/scripts/diff-parity.mjs      # node-level diff + coverage ledger
+node design/scripts/verify-parity.mjs    # legacy curated guard (still useful)
+```
+
+**`figma-extract.mjs` auto-discovers roots** — it enumerates the Gaffer page +
+the Components section every run and **hard-fails on any unrecognised top-level
+surface**, so new design work can't hide from the audit behind a frozen list.
+Add each new surface to `EXTRA_ROOTS` (diffed) or `NON_SURFACE` (reference art).
+Walks now stream to disk via `export_node format:JSON` (grip's 120KB read cap
+makes `get_node` unusable for full trees).
+
+**`diff-parity.mjs` is the anti-cherry-pick tool.** For every panel element
+carrying `data-fig="<figmaId>"`, it derives the expected CSS from that Figma
+node's spec and diffs **all** deterministic props (bg/text color, per-corner
+radius, padding, gap, font-size, line-height) — nothing picked by hand. It gates
+out unobservable checks (gap with <2 children; padding on a FIXED axis, absorbed
+by fixed size + centering). It also writes `parity-coverage.json`: every visible
+Figma node with paint/text/radius but no anchor, so unimplemented surfaces show
+up as explicit gaps. `panel-capture.mjs` records each element's `data-fig` and
+neutralises the user's A-/A+ chat zoom (`--chat-text` → 1) so numbers are scale-
+independent.
+
+Anchored & green (2026-08-23): the whole **InputArea 427:3058** — reply-quote
+tray (Pill/Wave/text 427:3102–3105), UpdateBanner, InputField+send, paste
+tray/chip/close — 14 nodes / 82 props, 0 mismatches. Add `data-fig` anchors to
+extend coverage to bubbles/markdown/activity as those surfaces are revisited.
+
+**Reply-quote tray — canonical component `428:3200` "Reply Quote" (COMPONENT).**
+⚠️ `427:3102` (inside `InputArea 427:3058`) is a **stale draft FRAME** — it lacks
+the DismissBtn and has different colours; do not anchor to it. Always anchor the
+COMPONENT. The tray is anchored to the 428-series (Pill 428:3186, Quote Wrapper
+428:3187, Wave 428:3188, banner-text 428:3198, DismissBtn 428:3201).
+
+- Pill `bubble/user-bg` #000, radius [16,16,0,0] (docks flush like the banner),
+  VERTICAL gap 12, pad [8,6,8,12].
+- Quote Wrapper HORIZONTAL, counterAxis **CENTER** → CSS `align-items:center`
+  (text centered in the row); wave `align-self:stretch` (V:FILL); DismissBtn
+  `align-self:flex-start` (its Alignment Wrapper 428:3224 is MIN/top). Getting
+  this wrong = a 2px top offset the property diff can't see.
+- Wave = vertical sine left-rule (5px, period 12, round caps) tiled `repeat-y`,
+  stroke **`text/dimmer` #888** (180:962).
+- banner-text 12/16 glyphs are **`text/hint` #555** — a **text-range fill**
+  (`textRangeFills` → 180:965) overrides the layer default (`text/strong dimmed`
+  #C2C0BC). `digest.mjs` resolves textRangeFills for TEXT so the diff's expected
+  color is the painted one. Scales with the A-/A+ zoom (`--chat-text`).
+- DismissBtn (×) 20×20 r8, icon stroke `text/hint` #555 — **it IS in the design**
+  (the "no ×" conclusion came from the stale draft 427:3102).
+- Multi-quote (stacked wrappers • 01/• 02) is designed. Every row's removal
+  animates: the row collapses (`.removing` → max-height/opacity 0) and eats its
+  vanishing 12px flex gap via a JS-set negative margin (top, or bottom for the
+  first row); the tray max-height animates to a **measured** resting height, so
+  first/middle/last all collapse with no clip and no end-snap.
+
+**Tool limitation surfaced here:** `diff-parity.mjs` checks computed *properties*,
+not rendered *position/alignment*. Both the draft-vs-canonical mixup and the 2px
+center-vs-top-align offset passed the property diff — caught only by overlaying
+the render on Figma. When pixel-overlaying, verify alignment by geometry, and
+always confirm you anchored the COMPONENT, not a draft frame of the same name.
+
+### Legacy guard
+
+`verify-parity.mjs` — 55/55 curated numeric assertions still pass (bubbles,
+markdown, pills, input row, chat bleed/fader geometry, banner, paste tray/chips,
+overlays, status) and all color tokens match `:root`. Two stale assertions fixed
+2026-08-23: inline-code height heuristic (`<20`→`<30`, font drift) and the table
+header color (the v2 note said `text/strong` #fafafa; the fresh walk shows
+MarkdownTable headers 185:1150/1151 are `text/light-2` SemiBold — panel was
+already correct).
 
 Post-audit design deltas already implemented: input-section rework (in-flow →
 out-of-flow overlay stack, gradient Chat Fader 290:9686, banner 290:8929

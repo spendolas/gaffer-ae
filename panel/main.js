@@ -563,29 +563,7 @@
         for (var i = 0; i < chatHistory.length; i++) {
           var msg = chatHistory[i];
           if (msg.role === 'user') {
-            var div = document.createElement('div');
-            div.className = 'chat-msg user';
-            if (msg.images && msg.images.length) {
-              var row = document.createElement('div');
-              row.className = 'bubble-images-row';
-              for (var k = 0; k < msg.images.length; k++) {
-                (function (item) {
-                  var img = document.createElement('img');
-                  img.className = 'bubble-image';
-                  img.src = item.dataUrl;
-                  img.alt = item.name || 'image';
-                  img.addEventListener('click', function () { openLightbox(item.dataUrl); });
-                  row.appendChild(img);
-                })(msg.images[k]);
-              }
-              div.appendChild(row);
-            }
-            if (msg.text) {
-              var t = document.createElement('div');
-              t.textContent = msg.text;
-              div.appendChild(t);
-            }
-            chatMessagesEl.appendChild(div);
+            chatMessagesEl.appendChild(buildUserMessageEl(msg.text, msg.images, msg.quotes));
           } else {
             var div = document.createElement('div');
             div.className = 'chat-msg assistant';
@@ -986,14 +964,17 @@
     if (!ws || ws.readyState !== 1 || chatBusy) return;
     if (!text && pendingImages.length === 0 && replyQuotes.length === 0) return;
 
-    // Staged reply quotes ride along as leading blockquotes (same routing as
-    // when they lived in the input) — shown in the user bubble and sent.
-    var quotePrefix = replyQuotePrefix();
-    var body = quotePrefix ? (quotePrefix + (text ? '\n\n' + text : '')) : text;
+    // Staged reply quotes: stored structurally on the message (styled cards in
+    // the log) and sent to the agent inside a <quoted_context> tag ahead of the
+    // instruction. The bubble text itself is just what the user typed.
+    var quotes = stagedQuotesData();
+    var quoteTag = buildQuoteTag();
+    var body = text;
+    var agentText = quoteTag ? (quoteTag + (text ? '\n\n' + text : '')) : text;
 
     var imgs = pendingImages.slice();
     var imgPrefix = imgs.map(function (p) { return '[image: ' + p.path + ']'; }).join('\n');
-    var fullMessage = imgPrefix ? (imgPrefix + (body ? '\n' + body : '')) : body;
+    var fullMessage = imgPrefix ? (imgPrefix + (agentText ? '\n' + agentText : '')) : agentText;
 
     // every send counts one use for each enabled server (drives tile order)
     enabledMcps.forEach(function (id) {
@@ -1002,7 +983,7 @@
       u.last = Date.now();
       mcpUsage[id] = u;
     });
-    appendUserMessage(body, imgs);
+    appendUserMessage(body, imgs, quotes);
     ws.send(JSON.stringify({
       type: 'chat',
       message: fullMessage,
@@ -1024,23 +1005,31 @@
     startAssistantMessage();
   }
 
-  function appendUserMessage(text, images) {
+  // Shared user-bubble builder (live send + history reload use the same DOM).
+  // Order inside the black bubble: quoted context (styled reply cards) on top,
+  // then images, then the typed text — a reply-preview pattern.
+  function buildUserMessageEl(text, images, quotes) {
     var div = document.createElement('div');
     div.className = 'chat-msg user';
+    if (quotes && quotes.length) {
+      div.classList.add('has-quotes');
+      var qc = document.createElement('div');
+      qc.className = 'msg-quotes';
+      quotes.forEach(function (q) { qc.appendChild(buildQuoteRow(q, null)); }); // no × — committed
+      div.appendChild(qc);
+    }
     if (images && images.length) {
       div.classList.add('has-images');
       var row = document.createElement('div');
       row.className = 'bubble-images-row';
-      for (var i = 0; i < images.length; i++) {
-        (function (item) {
-          var img = document.createElement('img');
-          img.className = 'bubble-image';
-          img.src = item.dataUrl;
-          img.alt = item.name || 'image';
-          img.addEventListener('click', function () { openLightbox(item.dataUrl); });
-          row.appendChild(img);
-        })(images[i]);
-      }
+      images.forEach(function (item) {
+        var img = document.createElement('img');
+        img.className = 'bubble-image';
+        img.src = item.dataUrl;
+        img.alt = item.name || 'image';
+        img.addEventListener('click', function () { openLightbox(item.dataUrl); });
+        row.appendChild(img);
+      });
       div.appendChild(row);
     }
     if (text) {
@@ -1048,10 +1037,17 @@
       t.textContent = text;
       div.appendChild(t);
     }
-    chatMessagesEl.appendChild(div);
+    return div;
+  }
+
+  function appendUserMessage(text, images, quotes) {
+    chatMessagesEl.appendChild(buildUserMessageEl(text, images, quotes));
     var entry = { role: 'user', text: text };
     if (images && images.length) {
       entry.images = images.map(function (i) { return { dataUrl: i.dataUrl, name: i.name }; });
+    }
+    if (quotes && quotes.length) {
+      entry.quotes = quotes.map(function (q) { return { html: q.html, text: q.text }; });
     }
     chatHistory.push(entry);
     saveChat();
@@ -1115,6 +1111,38 @@
     return sel ? sel.toString().trim() : '';
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Capture the selection as BOTH rendered HTML (preserves bold/code/links for
+  // the styled quote) and plain text (what the agent receives). A selection that
+  // spans multiple messages clones the chrome BETWEEN them too (copy buttons,
+  // tool-status dashes, typing dots, message-bubble wrappers), so sanitise the
+  // fragment down to content: drop the chrome elements and strip wrapper
+  // identity (class/id/style/data-fig) so nothing re-styles as a bubble/button.
+  var QUOTE_JUNK = 'button, svg, .copy-btn, .tool-pills-row, .tool-pill, .busy-pills,' +
+    ' .typing-indicator, .selection-cta, .reply-quotes-pill, .reply-quote-x, script, style';
+  function currentSelectionQuote() {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    var box = document.createElement('div');
+    box.appendChild(sel.getRangeAt(0).cloneContents());
+    var junk = box.querySelectorAll(QUOTE_JUNK);
+    for (var i = junk.length - 1; i >= 0; i--) { if (junk[i].parentNode) junk[i].parentNode.removeChild(junk[i]); }
+    var nodes = box.querySelectorAll('*');
+    for (var j = 0; j < nodes.length; j++) {
+      nodes[j].removeAttribute('class');
+      nodes[j].removeAttribute('id');
+      nodes[j].removeAttribute('style');
+      nodes[j].removeAttribute('data-fig');
+    }
+    // text from the CLEANED fragment (excludes chrome/hidden pill labels)
+    var text = (box.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return { html: box.innerHTML, text: text };
+  }
+
   // Return the live selection only when it sits inside a chat bubble (so the
   // input field's own selection never triggers the CTA).
   function selectionInChat() {
@@ -1167,8 +1195,8 @@
     selReplyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
       e.stopPropagation(); // clicks inside the CTA must not reach the outside-click handler
-      var text = currentSelectionText();
-      if (text) addReplyQuote(text);
+      var quote = currentSelectionQuote();
+      if (quote) addReplyQuote(quote);
       hideSelectionCta();
     });
   }
@@ -1199,19 +1227,100 @@
   // as a markdown blockquote — the agent gets the exact referent, same
   // routing as before (Gaffer pipes the message string to claude -p). The
   // tray rises from behind the pill on add and shrinks on remove.
-  var replyQuotes = [];
+  var replyQuotes = []; // [{ id, text }] — id keeps removal stable across renders
+  var replyQuoteSeq = 0;
   var replyQuotesEl = document.getElementById('replyQuotes');
 
-  function addReplyQuote(text) {
-    if (!text) return;
-    replyQuotes.push(text);
+  function addReplyQuote(quote) {
+    // Accept {html, text} (selection capture) or a bare string (audit hook /
+    // programmatic). html preserves the styling; text is the agent-facing form.
+    if (typeof quote === 'string') quote = { html: escapeHtml(quote), text: quote };
+    if (!quote || !quote.text) return;
+    replyQuotes.push({ id: ++replyQuoteSeq, html: quote.html || escapeHtml(quote.text), text: quote.text });
     renderReplyQuotes();
     chatInputEl.focus(); // ready to type the reaction
   }
 
-  function removeReplyQuote(i) {
-    replyQuotes.splice(i, 1);
-    renderReplyQuotes();
+  // Build one styled quote row (wave rule + rendered HTML snippet). Shared by
+  // the staging tray (dismissible) and the sent user message (static). onRemove
+  // omitted → no × button (committed quotes in the chat log can't be unstaged).
+  function buildQuoteRow(q, onRemove) {
+    var row = document.createElement('div');
+    row.className = 'reply-quote-row';
+    row.setAttribute('data-fig', '428:3187'); // Quote Wrapper
+    var wave = document.createElement('div');
+    wave.className = 'reply-quote-wave';
+    wave.setAttribute('data-fig', '428:3188'); // Wave
+    var txt = document.createElement('div');
+    // msg-text supplies the chat inline styling (code chips, bold, links);
+    // reply-quote-text (later in the sheet) overrides size/color/clamp.
+    txt.className = 'reply-quote-text msg-text';
+    txt.setAttribute('data-fig', '428:3198'); // banner-text
+    txt.innerHTML = q.html || escapeHtml(q.text || ''); // styled snippet
+    row.appendChild(wave);
+    row.appendChild(txt);
+    if (onRemove) {
+      var x = document.createElement('button');
+      x.className = 'reply-quote-x';
+      x.setAttribute('data-fig', '428:3201'); // DismissBtn
+      x.title = 'Remove quote';
+      x.appendChild(icon('close'));
+      x.addEventListener('click', function () { onRemove(); });
+      row.appendChild(x);
+    }
+    return row;
+  }
+
+  function removeReplyQuote(id) {
+    var idx = -1;
+    for (var k = 0; k < replyQuotes.length; k++) { if (replyQuotes[k].id === id) { idx = k; break; } }
+    if (idx === -1) return;
+    var pill = replyQuotesEl.firstChild;
+    var row = pill && pill.children[idx];
+    // Last remaining quote (or no node) → collapse the whole tray.
+    if (replyQuotes.length === 1 || !row) {
+      replyQuotes.splice(idx, 1);
+      renderReplyQuotes();
+      return;
+    }
+    // Mid-list removal: collapse THIS row while siblings glide up. Two timelines
+    // run in parallel and must share one curve or they visibly desync:
+    //   (a) the row's own height/gap/opacity → 0
+    //   (b) the tray's max-height → its measured resting height
+    // Measure the tray target with the row out of layout (exact, no end-snap),
+    // and LOCK the row to its real height before collapsing — otherwise it
+    // animates from the 200px max-height clamp, whose visible collapse is
+    // squeezed into the tail of the curve (a late jump) while the tray shrinks
+    // evenly the whole time.
+    row.style.display = 'none';
+    var target = replyQuotesEl.scrollHeight;
+    row.style.display = '';
+    var startH = row.scrollHeight; // real row height, for a proportional collapse
+    // Lock the row to its real height WITHOUT animating (transition off), commit
+    // it, then collapse. Otherwise setting max-height off the 200px base clamp
+    // starts its own 200→startH transition, and the following →0 runs from ~200
+    // (back-loaded: the row sits still, then snaps at the tail — the visible jump).
+    row.style.transition = 'none';
+    row.style.maxHeight = startH + 'px';
+    void row.offsetHeight; // commit the locked start with no transition
+    row.style.transition = ''; // restore the CSS transition for the collapse
+    row.classList.add('removing'); // opacity → 0
+    row.style.maxHeight = '0px'; // height now collapses startH → 0 over the full curve
+    // Eat the one 12px flex gap that disappears with this row (the gap above it,
+    // or — for the first row — the gap below) so the content height tracks the
+    // tray max-height exactly throughout: no clip, no end-snap.
+    if (row.previousElementSibling) row.style.marginTop = '-12px';
+    else row.style.marginBottom = '-12px';
+    replyQuotesEl.style.maxHeight = target + 'px';
+    setTimeout(function () {
+      var j = -1;
+      for (var k = 0; k < replyQuotes.length; k++) { if (replyQuotes[k].id === id) { j = k; break; } }
+      if (j === -1) return;
+      replyQuotes.splice(j, 1);
+      if (row.parentNode) row.parentNode.removeChild(row);
+      replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px';
+      sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+    }, 200);
   }
 
   function clearReplyQuotes() {
@@ -1220,12 +1329,18 @@
     renderReplyQuotes();
   }
 
-  // Prefix that carries the staged quotes into the outgoing message.
-  function replyQuotePrefix() {
+  // The staged quotes carried to the agent, wrapped in a delimited tag so it can
+  // tell the quoted material apart from the user's actual instruction. Plain text
+  // (styling is display-only).
+  function buildQuoteTag() {
     if (!replyQuotes.length) return '';
-    return replyQuotes.map(function (q) {
-      return q.split('\n').map(function (l) { return '> ' + l; }).join('\n');
-    }).join('\n\n');
+    var inner = replyQuotes.map(function (q) { return q.text; }).join('\n\n');
+    return '<quoted_context>\n' + inner + '\n</quoted_context>';
+  }
+  // Structured snapshot of the staged quotes, stored on the sent message so the
+  // chat log can re-render them styled (and tagged) on reload.
+  function stagedQuotesData() {
+    return replyQuotes.map(function (q) { return { html: q.html, text: q.text }; });
   }
 
   function renderReplyQuotes() {
@@ -1243,28 +1358,37 @@
     replyQuotesEl.innerHTML = '';
     var pill = document.createElement('div');
     pill.className = 'reply-quotes-pill';
-    replyQuotes.forEach(function (q, i) {
-      var row = document.createElement('div');
-      row.className = 'reply-quote-row';
-      var wave = document.createElement('div');
-      wave.className = 'reply-quote-wave';
-      var txt = document.createElement('div');
-      txt.className = 'reply-quote-text';
-      txt.textContent = q;
-      var x = document.createElement('button');
-      x.className = 'reply-quote-x';
-      x.title = 'Remove quote';
-      x.appendChild(icon('close'));
-      x.addEventListener('click', function () { removeReplyQuote(i); });
-      row.appendChild(wave);
-      row.appendChild(txt);
-      row.appendChild(x);
-      pill.appendChild(row);
+    pill.setAttribute('data-fig', '428:3186'); // Pill (canonical Reply Quote 428:3200)
+    replyQuotes.forEach(function (q) {
+      pill.appendChild(buildQuoteRow(q, function () { removeReplyQuote(q.id); }));
     });
     replyQuotesEl.appendChild(pill);
     replyQuotesEl.classList.add('visible');
     replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px'; // animate to content
   }
+
+  // Re-pin the tray height after the quote text reflows (e.g. an A-/A+ text-size
+  // change): --chat-text scales .reply-quote-text, so the fixed max-height set at
+  // render time would otherwise clip the taller text or leave a gap.
+  function refitReplyQuotes() {
+    if (!replyQuotesEl || !replyQuotes.length) return;
+    replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px';
+  }
+
+  // Audit/test seam — panel-capture.mjs drives the REAL builders over CDP so the
+  // parity capture reflects shipping DOM, not a hand-mirrored mock (mock drift
+  // has burned us). Gated to dev use: exposed ONLY when localStorage.gafferAudit
+  // === '1', which the capture tool sets and end-user installs never do — so no
+  // test surface ships in normal use. (This project ships unsigned, so end users
+  // also run with PlayerDebugMode on; that can't be the gate.)
+  try {
+    if (localStorage.getItem('gafferAudit') === '1') {
+      window.__gaffer = window.__gaffer || {};
+      window.__gaffer.addReplyQuote = addReplyQuote;
+      window.__gaffer.clearReplyQuotes = clearReplyQuotes;
+      window.__gaffer.currentSelectionQuote = currentSelectionQuote;
+    }
+  } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
   chatMessagesEl.addEventListener('mouseup', function () {
     setTimeout(positionSelectionCta, 0); // let the selection settle first
@@ -2038,6 +2162,7 @@
     if (textDecEl) textDecEl.disabled = textScale <= TEXT_MIN + 1e-6;
     if (textIncEl) textIncEl.disabled = textScale >= TEXT_MAX - 1e-6;
     resizeChatInput(); // re-fit the composer to the new line height
+    refitReplyQuotes(); // re-fit the reply tray to the reflowed quote text
   }
   // Auto-grow the composer against a cap, both scaled by --chat-text so the
   // 8-line ceiling stays 8 lines at any text size.

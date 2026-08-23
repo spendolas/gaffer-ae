@@ -51,7 +51,9 @@ const px = (v) => parseFloat(v);
 
 // ── Markdown (CodeInline 216:2914, CodeBlock 216:2929, quote 216:2944, table 216:2962) ──
 {
-  const code = find('markdown', (e) => e.tag === 'code' && /inline/.test('' + e.cls) === false && e.rect.h < 20);
+  // inline code sits on one line (~22px); the block <code> lives in a <pre> and
+  // is much taller — height is the only cue in the flat metrics dump.
+  const code = find('markdown', (e) => e.tag === 'code' && e.rect.h < 30);
   check('inline code 12px SF Mono', code.style['font-size'], '12px');
   check('inline code line-height 16px', code.style['line-height'], '16px');
   check('inline code color #efaa3c (text/code)', code.style['color'], 'rgb(239, 170, 60)');
@@ -62,7 +64,9 @@ const px = (v) => parseFloat(v);
   check('blockquote text muted #aaa', bq.style['color'], 'rgb(170, 170, 170)');
   const th = find('markdown', (e) => e.tag === 'th');
   check('table header 12px', th.style['font-size'], '12px');
-  check('table header strong #fafafa', th.style['color'], 'rgb(250, 250, 250)');
+  // MarkdownTable header cells (185:1150/1151) are text/light-2 SemiBold — NOT
+  // text/strong (the v2 audit note was wrong; the fresh walk is ground truth).
+  check('table header text/light-2 #cccccc (185:1150)', th.style['color'], 'rgb(204, 204, 204)');
 }
 
 // ── Tool status dashes (chips reduced per 2026-07-14 direction) ──

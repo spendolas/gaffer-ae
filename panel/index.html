@@ -389,9 +389,14 @@
       flex-direction: column;
     }
     /* Chat Fader 290:9686 — gradient anchored to the input row: solid
-       panel-bg from 26px into the row, fading out over the 24px above
-       its top (48px box at row-top -22). Sits above the banner (washing
-       the pill bottom, per Figma) and below the row/tray (positioned). */
+       panel-bg from 26px into the row, fading out over the 24px above its
+       top (48px box at row-top -22). It fades the CHAT WALL that bleeds up
+       behind the input; it sits BELOW the overlays (z 1 < 2), so the reply
+       tray / banner paint on top of it and are NOT washed. In Figma this is
+       the InputArea's reverse auto-layout stacking (itemReverseZIndex): the
+       InputRow that holds the fader is the last child but paints behind the
+       earlier overlay children. (Verified against the 428:3945 render — an
+       earlier note wrongly claimed the fader washes the tray bottom.) */
     .chat-input-area::before {
       content: '';
       position: absolute;
@@ -401,14 +406,14 @@
       height: 48px;
       background: linear-gradient(to top, var(--color-bg-panel) 50%, var(--color-bg-panel-0) 100%);
       pointer-events: none;
-      z-index: 1; /* above the overlays stack (washes the banner/tray bottom) */
+      z-index: 1; /* below the overlays (z 2): fades the chat wall, never the tray/banner */
     }
     .chat-input-row {
       position: relative;
       z-index: 1; /* later than the fader at the same level — paints above it */
       display: flex;
       align-items: flex-end;
-      gap: 6px;
+      gap: 0; /* InputField 185:1132 itemSpacing 0 — text fills, send sits at the edge */
       background: var(--color-bg-input);
       border-radius: 24px;
       padding: 8px;
@@ -458,33 +463,51 @@
     .paste-chip-x:hover { background: var(--color-accent-red); color: var(--color-text-white); }
 
     /* Reply-quote tray — dedicated area above the input for quoted snippets
-       (Figma Cell: Replying 428:3945). Lives in .input-overlays (absolute, so
-       it never shifts the chat scroll). Rises from behind the pill on add,
-       shrinks on remove (max-height + opacity). Anchored at the overlay
-       stack's bottom, so growth extends upward = "up from behind". */
+       (Figma Reply Quote 427:3102, inside the InputArea 427:3058). Lives in
+       .input-overlays (absolute, so it never shifts the chat scroll). Rises
+       from behind the pill on add, shrinks on remove (max-height + opacity).
+       Anchored at the overlay stack's bottom, so growth extends upward. */
     .reply-quotes {
       align-self: stretch;
-      padding: 0 24px; /* Reply Quote L/R 24 */
+      padding: 0 24px; /* Reply Quote 427:3102 L/R 24 */
       overflow: hidden;
       max-height: 0;
       opacity: 0;
       transition: max-height 0.2s var(--ease-state), opacity 0.2s var(--ease-state);
     }
     .reply-quotes.visible { opacity: 1; } /* max-height set inline by JS = scrollHeight */
-    .reply-quotes-pill {
+    .reply-quotes-pill { /* Pill 428:3186 — docks flush on the input row like the banner */
       display: flex;
       flex-direction: column;
-      gap: 12px; /* Pill itemSpacing 12 */
+      gap: 12px; /* Pill itemSpacing 12 (VERTICAL, between stacked quote rows) */
       padding: 8px 6px 8px 12px; /* Pill T8 R6 B8 L12 */
-      background: #000000; /* Figma Pill fill */
-      border-radius: 16px;
+      background: var(--color-bubble-user-bg); /* Pill fill = bubble/user-bg token */
+      border-radius: 16px 16px 0 0; /* top-only round; bottom meets the input pill */
     }
-    .reply-quote-row { display: flex; align-items: stretch; gap: 8px; }
-    /* Wave marker — impl note "recreate the sin wave in code, round caps":
-       one seamless sine PERIOD tiled vertically (loopable, undistorted at any
-       row height). 5px wide, amp 1.5, period 8, round caps, dimmed. */
+    /* Quote Wrapper 428:3187 — wave rule + text + dismiss. Rows stack via the
+       pill's flex gap. On removal, a row collapses its own height/opacity and
+       eats the vanishing 12px gap via a negative margin set inline by JS (which
+       side depends on position) so first/middle/last all collapse without a
+       jump or clip. */
+    .reply-quote-row {
+      display: flex;
+      align-items: center; /* Quote Wrapper counterAxis CENTER — text sits centered in the row */
+      gap: 8px; /* Quote Wrapper itemSpacing 8 */
+      overflow: hidden;
+      max-height: 200px;
+      opacity: 1;
+      transition: max-height 0.2s var(--ease-state), opacity 0.2s var(--ease-state),
+                  margin-top 0.2s var(--ease-state), margin-bottom 0.2s var(--ease-state);
+    }
+    /* max-height is driven inline on removal (locked to the row's real height,
+       then 0) so the collapse curve matches the tray's; the class only fades. */
+    .reply-quote-row.removing { opacity: 0; }
+    /* Wave 427:3144/3145 — impl note "recreate the sin wave in code, round
+       caps": one seamless sine PERIOD (12px) tiled vertically, loopable and
+       undistorted at any row height. 5px wide, amp 2, stroke #888 w1. */
     .reply-quote-wave {
       flex-shrink: 0;
+      align-self: stretch; /* Wave padding V:FILL — rule spans the full row height */
       width: 5px;
       padding: 4px 0; /* Wave padding T4/B4 — inset from row top/bottom */
       background-origin: content-box;
@@ -494,19 +517,20 @@
       background-size: 5px 12px; /* one period = 12px */
       background-image: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%225%22 height=%2212%22 viewBox=%220 0 5 12%22%3E%3Cpath d=%22M2.50 0.0 L3.02 0.5 L3.50 1.0 L3.91 1.5 L4.23 2.0 L4.43 2.5 L4.50 3.0 L4.43 3.5 L4.23 4.0 L3.91 4.5 L3.50 5.0 L3.02 5.5 L2.50 6.0 L1.98 6.5 L1.50 7.0 L1.09 7.5 L0.77 8.0 L0.57 8.5 L0.50 9.0 L0.57 9.5 L0.77 10.0 L1.09 10.5 L1.50 11.0 L1.98 11.5 L2.50 12.0%22 fill=%22none%22 stroke=%22%23888888%22 stroke-width=%221%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E");
     }
-    .reply-quote-text {
+    .reply-quote-text { /* banner-text 428:3198 */
       flex: 1;
       min-width: 0;
-      font-size: 12px;
-      line-height: 16px;
-      color: var(--color-text-hint); /* #555 — sampled from Figma */
+      /* 12/16 base, scaled by the A-/A+ chat zoom like the reading surface */
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
+      color: var(--color-text-hint); /* glyph fill = text/hint #555 (textRangeFills override, 180:965) */
       display: -webkit-box;
       -webkit-line-clamp: 2; /* Figma clamps long quotes to 2 lines */
       -webkit-box-orient: vertical;
       overflow: hidden;
       word-break: break-word;
     }
-    .reply-quote-x {
+    .reply-quote-x { /* DismissBtn 428:3201 — 20x20 r8, icon stroke text/hint #555 */
       flex-shrink: 0;
       align-self: flex-start;
       width: 20px;
@@ -515,11 +539,28 @@
       border: none;
       border-radius: 8px;
       background: transparent;
-      color: var(--color-text-hint); /* #555 — sampled from Figma */
+      color: var(--color-text-hint);
       cursor: pointer;
+      opacity: 0; /* revealed on row hover / keyboard focus — keeps its 20px slot so nothing reflows */
+      transition: opacity 0.15s var(--ease-state), color 0.15s var(--ease-state);
     }
+    .reply-quote-row:hover .reply-quote-x,
+    .reply-quote-x:focus-visible { opacity: 1; }
     .reply-quote-x:hover { color: var(--color-text-light-2); }
     .reply-quote-x .gicon { width: 16px; height: 16px; display: block; }
+    /* Quoted context inside a SENT user message — the reply-preview cards
+       (reusing .reply-quote-row) stacked above the message text. No pill bg
+       (the user bubble is already #000) and no × (committed, not staged). */
+    .msg-quotes {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    /* A styled quote snippet borrows .msg-text for inline styling, which also
+       brings block margins (p/pre/blockquote); flatten them so the 2-line
+       clamp measures the text, not the margins. */
+    .reply-quote-text > * { margin: 0 !important; }
 
     /* Drag-over hint and lightbox */
     /* DropOverlay 191:1275 — flat, no border; 'Drop here' above the icon */
@@ -1015,21 +1056,21 @@
 
   <div class="chat-input-area">
     <div class="input-overlays">
-      <div class="paste-preview-row" id="pastePreviewRow"></div>
+      <div class="paste-preview-row" id="pastePreviewRow" data-fig="427:3060"></div>
       <div id="updateBanner" class="update-banner">
-        <div class="banner-pill">
-          <span id="updateText" class="banner-text">Update available</span>
+        <div class="banner-pill" data-fig="I427:3061;284:1631">
+          <span id="updateText" class="banner-text" data-fig="I427:3061;191:1231">Update available</span>
           <span class="actions">
-            <button id="updateBtn">Update</button>
-            <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss"></button>
+            <button id="updateBtn" data-fig="I427:3061;191:1260">Update</button>
+            <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss" data-fig="I427:3061;191:1262"></button>
           </span>
         </div>
       </div>
-      <div class="reply-quotes" id="replyQuotes"></div>
+      <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
     </div>
-    <div class="chat-input-row">
+    <div class="chat-input-row" data-fig="I427:3062;185:1132">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
-      <button id="sendBtn" class="send-btn" title="Send" disabled></button>
+      <button id="sendBtn" class="send-btn" title="Send" data-fig="I427:3062;185:1132;240:1324" disabled></button>
       <button id="stopBtn" class="stop-btn" title="Stop"></button>
     </div>
   </div>
