@@ -1141,6 +1141,10 @@
     // mousedown + preventDefault: act before the browser clears the selection.
     selCopyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
+      // Stop here: copyFeedback swaps the icon (innerHTML=''), detaching this
+      // very e.target. If the event reached the document outside-click handler,
+      // selectionCta.contains(detached target) would be false → instant hide.
+      e.stopPropagation();
       var text = currentSelectionText();
       if (text) {
         // copyToClipboard selects a temp textarea → fires selectionchange,
@@ -1156,6 +1160,7 @@
     });
     selReplyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
+      e.stopPropagation(); // clicks inside the CTA must not reach the outside-click handler
       var text = currentSelectionText();
       if (text) replyToSelection(text);
       hideSelectionCta();
