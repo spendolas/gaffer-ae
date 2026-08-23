@@ -1102,6 +1102,7 @@
   // chat message. Distinct from the per-bubble copy button (which grabs the
   // whole message's raw markdown); this copies exactly what's selected.
   var selectionCta = null, selCopyBtn = null, selReplyBtn = null;
+  var ctaDismissing = false; // freezes selection-driven auto-hide during a copy confirm
 
   function currentSelectionText() {
     var sel = window.getSelection && window.getSelection();
@@ -1141,9 +1142,14 @@
     selCopyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
       var text = currentSelectionText();
-      if (text && copyToClipboard(text)) {
-        copyFeedback(selCopyBtn);            // swap to check (auto-restores to copy)
-        setTimeout(hideSelectionCta, 750);   // linger so the check reads, then fade out
+      if (text) {
+        // copyToClipboard selects a temp textarea → fires selectionchange,
+        // which would auto-hide us instantly. Freeze the auto-hide across the
+        // confirm window so the check reads, then run the out-animation.
+        ctaDismissing = true;
+        var ok = copyToClipboard(text);
+        if (ok) copyFeedback(selCopyBtn); // swap to check (auto-restores to copy)
+        setTimeout(function () { ctaDismissing = false; hideSelectionCta(); }, ok ? 750 : 0);
       } else {
         hideSelectionCta();
       }
@@ -1199,6 +1205,7 @@
     if (selectionCta && !selectionCta.contains(e.target)) hideSelectionCta();
   });
   document.addEventListener('selectionchange', function () {
+    if (ctaDismissing) return; // mid copy-confirm — the temp-textarea copy clears the selection
     if (selectionCta && selectionCta.classList.contains('visible') && !currentSelectionText()) {
       hideSelectionCta();
     }
