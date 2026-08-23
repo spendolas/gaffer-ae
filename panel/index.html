@@ -486,17 +486,20 @@
     .reply-quote-wave {
       flex-shrink: 0;
       width: 5px;
+      padding: 4px 0; /* Wave padding T4/B4 — inset from row top/bottom */
+      background-origin: content-box;
+      background-clip: content-box;
       background-repeat: repeat-y;
       background-position: center top;
-      background-size: 5px 8px;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%225%22 height=%228%22 viewBox=%220 0 5 8%22%3E%3Cpath d=%22M2.50 0.0 L3.07 0.5 L3.56 1.0 L3.89 1.5 L4.00 2.0 L3.89 2.5 L3.56 3.0 L3.07 3.5 L2.50 4.0 L1.93 4.5 L1.44 5.0 L1.11 5.5 L1.00 6.0 L1.11 6.5 L1.44 7.0 L1.93 7.5 L2.50 8.0%22 fill=%22none%22 stroke=%22%23888888%22 stroke-width=%221%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E");
+      background-size: 5px 12px; /* one period = 12px */
+      background-image: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%225%22 height=%2212%22 viewBox=%220 0 5 12%22%3E%3Cpath d=%22M2.50 0.0 L3.02 0.5 L3.50 1.0 L3.91 1.5 L4.23 2.0 L4.43 2.5 L4.50 3.0 L4.43 3.5 L4.23 4.0 L3.91 4.5 L3.50 5.0 L3.02 5.5 L2.50 6.0 L1.98 6.5 L1.50 7.0 L1.09 7.5 L0.77 8.0 L0.57 8.5 L0.50 9.0 L0.57 9.5 L0.77 10.0 L1.09 10.5 L1.50 11.0 L1.98 11.5 L2.50 12.0%22 fill=%22none%22 stroke=%22%23888888%22 stroke-width=%221%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E");
     }
     .reply-quote-text {
       flex: 1;
       min-width: 0;
       font-size: 12px;
       line-height: 16px;
-      color: var(--color-text-dimmer);
+      color: var(--color-text-hint); /* #555 — sampled from Figma */
       display: -webkit-box;
       -webkit-line-clamp: 2; /* Figma clamps long quotes to 2 lines */
       -webkit-box-orient: vertical;
@@ -512,7 +515,7 @@
       border: none;
       border-radius: 8px;
       background: transparent;
-      color: var(--color-text-dimmer);
+      color: var(--color-text-hint); /* #555 — sampled from Figma */
       cursor: pointer;
     }
     .reply-quote-x:hover { color: var(--color-text-light-2); }
