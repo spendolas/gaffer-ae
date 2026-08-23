@@ -603,15 +603,25 @@
     .selection-cta {
       position: fixed;
       z-index: 3000;
-      display: none;
+      display: flex;
       gap: 4px;
       padding: 4px;
       background: var(--color-bg-panel);
       border: 1px solid var(--color-border-default);
       border-radius: 10px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+      /* Subtle rise+fade in/out — stays in layout so offset* still measures */
+      opacity: 0;
+      transform: translateY(4px) scale(0.97);
+      transform-origin: center bottom;
+      pointer-events: none;
+      transition: opacity 120ms ease-out, transform 120ms ease-out;
     }
-    .selection-cta.visible { display: flex; }
+    .selection-cta.visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
     /* Animated expand/collapse — native <details> can't transition, so
        the element stays open and .expanded drives the body height */
     .activity-body {

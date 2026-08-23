@@ -1141,8 +1141,12 @@
     selCopyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
       var text = currentSelectionText();
-      if (text && copyToClipboard(text)) copyFeedback(selCopyBtn);
-      hideSelectionCta();
+      if (text && copyToClipboard(text)) {
+        copyFeedback(selCopyBtn);            // swap to check (auto-restores to copy)
+        setTimeout(hideSelectionCta, 750);   // linger so the check reads, then fade out
+      } else {
+        hideSelectionCta();
+      }
     });
     selReplyBtn.addEventListener('mousedown', function (e) {
       e.preventDefault();
@@ -1158,14 +1162,14 @@
     var rect = sel.getRangeAt(0).getBoundingClientRect();
     if (!rect || (!rect.width && !rect.height)) { hideSelectionCta(); return; }
     if (!selectionCta) buildSelectionCta();
-    selectionCta.classList.add('visible'); // show first so offset* measure
-    var cw = selectionCta.offsetWidth, ch = selectionCta.offsetHeight;
+    var cw = selectionCta.offsetWidth, ch = selectionCta.offsetHeight; // display:flex → measurable
     var top = rect.top - ch - 6;             // above the selection
     if (top < 4) top = rect.bottom + 6;      // flip below if no room up top
     var left = rect.left + rect.width / 2 - cw / 2;
     left = Math.max(4, Math.min(left, window.innerWidth - cw - 4));
     selectionCta.style.top = top + 'px';
     selectionCta.style.left = left + 'px';
+    selectionCta.classList.add('visible'); // position set first so it fades in in place
   }
 
   function hideSelectionCta() {
