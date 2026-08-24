@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pruneSessionFile } from './session-pruner.js';
+import { chooseModel } from './model-router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -315,6 +316,16 @@ export class ChatHandler {
     }
 
     var model = msg.model || 'opus';
+    var effort = msg.effort;
+    // Optional, off by default: on trivial turns pick a cheaper model. Never
+    // upshifts, never overrides a pinned id / 1m variant. Logged so the effect
+    // can be measured before this lever earns its keep.
+    if (msg.autoModel && msg.variant !== '1m') {
+      var picked = chooseModel(msg.message, { model: model, effort: effort });
+      if (picked.model !== model) console.log('[automodel] downshift ' + model + ' -> ' + picked.model);
+      model = picked.model;
+      effort = picked.effort;
+    }
     // Context-window variant: 1M suffix, passed through for ANY model
     // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear
     // API 400 about subscription availability). Never silently strip —
@@ -322,7 +333,7 @@ export class ChatHandler {
     if (msg.variant === '1m') model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-    if (msg.effort && EFFORTS.indexOf(msg.effort) !== -1) args.push('--effort', msg.effort);
+    if (effort && EFFORTS.indexOf(effort) !== -1) args.push('--effort', effort);
     // Register the gaffer MCP server inline — chat must work even when the
     // installer's `claude mcp add` step never ran (e.g. CLI installed after
     // the panel). Merges with any user-scope registration of the same name.
