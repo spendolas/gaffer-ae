@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.1 — 2026-08-24
+
+**Reply-quote polish.**
+
+- The chat now reserves scroll room for the quote tray, so a message the tray overlaps can be scrolled into view instead of staying hidden behind it — and staging or dismissing a quote never jumps the conversation.
+- The quote tray sits flush on the input pill's straight edge (no stray corner poking past the rounded input).
+- A quoted snippet reads as muted context — bold, inline code, and links are all dimmed rather than shouting like they do in live chat.
+- The chat grows and shrinks smoothly in step with the tray opening and collapsing; removing a quote animates cleanly.
+
 ## v0.7.0 — 2026-08-24
 
 **Quote a chat message and reply to it.**
