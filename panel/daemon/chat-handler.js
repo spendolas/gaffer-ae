@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pruneSessionFile } from './session-pruner.js';
-import { chooseModel } from './model-router.js';
+import { resolveTier, tierToSelection } from './model-router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -209,6 +209,33 @@ function augmentedEnv() {
   return { ...process.env, PATH: pathParts.join(':') };
 }
 
+// One-shot classifier runner for the autoModel middle band: haiku, no MCP, no
+// system prompt, no session. Returns (prompt) => Promise<stdout>. Never
+// rejects — resolves '' on timeout/error so classifyTurn falls back to
+// 'complex' (no downshift). 8s cap so a hung classify can't stall the turn.
+function makeClassifyRun(claudeBin) {
+  return function (prompt) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function (v) { if (!done) { done = true; resolve(v); } };
+      try {
+        var child = spawn(claudeBin, [
+          '-p', '--model', 'haiku',
+          '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+          '--dangerously-skip-permissions',
+        ], { stdio: ['pipe', 'pipe', 'pipe'], env: augmentedEnv(), windowsHide: true });
+        var out = '';
+        var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, 8000);
+        child.stdout.on('data', function (c) { out += c.toString(); });
+        child.on('close', function () { clearTimeout(timer); finish(out); });
+        child.on('error', function () { clearTimeout(timer); finish(''); });
+        child.stdin.write(prompt);
+        child.stdin.end();
+      } catch (e) { finish(''); }
+    });
+  };
+}
+
 export class ChatHandler {
   constructor() {
     this.activeProcess = null;
@@ -317,21 +344,24 @@ export class ChatHandler {
 
     var model = msg.model || 'opus';
     var effort = msg.effort;
-    // Optional, off by default: on a trivial turn lighten model + effort +
-    // context together (haiku / low / drop 1M). Never upshifts, never
-    // overrides a pinned version id. Logged so the effect can be measured
-    // before this lever earns its keep.
+    // Optional, off by default: a two-stage classifier lightens the turn.
+    // Stage 1 is a free local score; the ambiguous middle escalates to one
+    // cheap haiku call. trivial → haiku/low + drop 1M; moderate → sonnet/medium
+    // (keeps 1M); complex → unchanged. Never upshifts, never touches a pinned
+    // id. Logged so the lever can be measured before it earns its keep.
     var autoDownshifted = false;
     if (msg.autoModel) {
-      var picked = chooseModel(msg.message, { model: model, effort: effort });
-      autoDownshifted = picked.downshifted;
-      if (autoDownshifted) {
-        console.log('[automodel] downshift ' + model + '/' + (effort || '-')
+      var tier = await resolveTier(msg.message, { run: makeClassifyRun(claudeBin) });
+      var sel = tierToSelection(tier, { model: model, effort: effort, variant: msg.variant });
+      if (sel.downshifted) {
+        console.log('[automodel] ' + tier + ': ' + model + '/' + (effort || '-')
           + (msg.variant === '1m' ? '/1m' : '')
-          + ' -> ' + picked.model + '/' + (picked.effort || '-'));
+          + ' -> ' + sel.model + '/' + (sel.effort || '-')
+          + (sel.dropContext && msg.variant === '1m' ? ' (1m dropped)' : ''));
+        model = sel.model;
+        effort = sel.effort;
+        autoDownshifted = sel.dropContext;
       }
-      model = picked.model;
-      effort = picked.effort;
     }
     // Context-window variant: 1M suffix, passed through for ANY model
     // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear

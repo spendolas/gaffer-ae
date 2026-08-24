@@ -1,66 +1,112 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseModel } from '../model-router.js';
+import { scoreMessage, classifyTurn, resolveTier, tierToSelection } from '../model-router.js';
 
-test('downshifts a short non-build question to haiku + low effort', () => {
-  var a = chooseModel('what did you do?', { model: 'opus', effort: 'medium' });
-  assert.equal(a.model, 'haiku');
-  assert.equal(a.effort, 'low');
-  assert.equal(a.downshifted, true);
-  assert.equal(chooseModel('thanks!', { model: 'opus' }).model, 'haiku');
-});
-
-test('does NOT downshift build/expression tasks', () => {
-  for (var msg of [
-    'add a wiggle to the selected layer',
-    'write an expression that loops the position',
-    'animate the logo scaling in with overshoot',
-  ]) {
-    var r = chooseModel(msg, { model: 'opus', effort: 'medium' });
-    assert.equal(r.model, 'opus');
-    assert.equal(r.effort, 'medium'); // effort preserved when not downshifting
-    assert.equal(r.downshifted, false);
+// ── Stage 1: free feature score ───────────────────────────────────────
+test('scoreMessage: confident trivial', () => {
+  for (var m of ['hi', 'thanks!', 'what did you do?', 'ok cool', 'undo that']) {
+    assert.equal(scoreMessage(m), 'trivial', m);
   }
 });
 
-test('does not downshift long/detailed messages even without build verbs', () => {
-  var long = 'here is a lot of context '.repeat(20);
-  var r = chooseModel(long, { model: 'opus' });
-  assert.equal(r.model, 'opus');
-  assert.equal(r.downshifted, false);
+test('scoreMessage: confident complex', () => {
+  for (var m of [
+    'add a wiggle to the selected layer',
+    'animate the logo scaling in with overshoot',
+    'write an expression: wiggle(2, 30)',
+    'match this [image: /tmp/ref.png]',
+    'set opacity to 50%',
+    'why did ```var x``` fail?',
+    'did mcp__gaffer__runJSX work?',
+  ]) {
+    assert.equal(scoreMessage(m), 'complex', m);
+  }
 });
 
-test('never overrides an explicit pinned version id', () => {
-  var r = chooseModel('hi', { model: 'claude-opus-4-8', effort: 'high' });
-  assert.equal(r.model, 'claude-opus-4-8');
-  assert.equal(r.effort, 'high');
-  assert.equal(r.downshifted, false);
+test('scoreMessage: ambiguous middle → unsure', () => {
+  for (var m of [
+    'is the spinner comp using the right easing?',
+    'tell me about the layers in this project',
+    'which of those two looks closer to the reference',
+  ]) {
+    assert.equal(scoreMessage(m), 'unsure', m);
+  }
 });
 
-test('a bare alias on a trivial turn downshifts (context is dropped by caller)', () => {
-  // The panel sends model:"opus" + variant:"1m" for a bare-alias 1M pick, so
-  // chooseModel sees just "opus" here and downshifts; the caller drops the 1M.
-  var r = chooseModel('hi', { model: 'opus', effort: 'high' });
-  assert.equal(r.model, 'haiku');
-  assert.equal(r.effort, 'low');
-  assert.equal(r.downshifted, true);
+// ── Stage 2: cheap classifier (injected run, never spawns) ────────────
+test('classifyTurn: parses the one-word verdict', async () => {
+  var run = async () => 'moderate\n';
+  assert.equal(await classifyTurn('whatever', { run }), 'moderate');
 });
 
-test('never upshifts — haiku stays haiku on a heavy turn', () => {
-  var r = chooseModel('add a wiggle', { model: 'haiku', effort: 'medium' });
-  assert.equal(r.model, 'haiku');
-  assert.equal(r.effort, 'medium');
-  assert.equal(r.downshifted, false);
+test('classifyTurn: unparseable output → complex (safe)', async () => {
+  assert.equal(await classifyTurn('x', { run: async () => 'I think this is tricky' }), 'complex');
 });
 
-test('already at the floor (haiku + low) on a trivial turn is a no-op', () => {
-  var r = chooseModel('hi', { model: 'haiku', effort: 'low' });
-  assert.equal(r.model, 'haiku');
-  assert.equal(r.effort, 'low');
-  assert.equal(r.downshifted, false); // nothing changed → no log, no [1m] drop
+test('classifyTurn: runner throws → complex (safe)', async () => {
+  assert.equal(await classifyTurn('x', { run: async () => { throw new Error('boom'); } }), 'complex');
 });
 
-test('messages containing code fences or tool mentions are not trivial', () => {
-  assert.equal(chooseModel('why did ```var x``` fail?', { model: 'opus' }).downshifted, false);
-  assert.equal(chooseModel('did mcp__gaffer__runJSX work?', { model: 'opus' }).downshifted, false);
+test('classifyTurn: no runner → complex (safe)', async () => {
+  assert.equal(await classifyTurn('x', {}), 'complex');
+});
+
+test('resolveTier: confident score never calls the runner', async () => {
+  var called = false;
+  var run = async () => { called = true; return 'moderate'; };
+  assert.equal(await resolveTier('add a wiggle', { run }), 'complex');
+  assert.equal(await resolveTier('hi', { run }), 'trivial');
+  assert.equal(called, false); // extremes resolved free
+});
+
+test('resolveTier: unsure escalates to the runner', async () => {
+  var run = async () => 'moderate';
+  assert.equal(await resolveTier('tell me about the layers in this project', { run }), 'moderate');
+});
+
+// ── Tier → selection: ladder, never-upshift, context ──────────────────
+test('trivial floors to haiku / low and drops 1M', () => {
+  var s = tierToSelection('trivial', { model: 'opus', effort: 'high', variant: '1m' });
+  assert.deepEqual(s, { model: 'haiku', effort: 'low', dropContext: true, downshifted: true });
+});
+
+test('moderate → sonnet / medium, keeps context', () => {
+  var s = tierToSelection('moderate', { model: 'opus', effort: 'high', variant: '1m' });
+  assert.equal(s.model, 'sonnet');
+  assert.equal(s.effort, 'medium');
+  assert.equal(s.dropContext, false); // moderate keeps 1M
+  assert.equal(s.downshifted, true);
+});
+
+test('complex leaves the user pick untouched', () => {
+  var s = tierToSelection('complex', { model: 'opus', effort: 'high', variant: '1m' });
+  assert.deepEqual(s, { model: 'opus', effort: 'high', dropContext: false, downshifted: false });
+});
+
+test('never upshifts: base sonnet, complex tier stays sonnet', () => {
+  assert.equal(tierToSelection('complex', { model: 'sonnet', effort: 'medium' }).model, 'sonnet');
+});
+
+test('never upshifts: base haiku stays haiku on every tier', () => {
+  for (var t of ['trivial', 'moderate', 'complex']) {
+    assert.equal(tierToSelection(t, { model: 'haiku', effort: 'low' }).model, 'haiku', t);
+  }
+});
+
+test('never upshifts effort: base low + moderate stays low', () => {
+  var s = tierToSelection('moderate', { model: 'opus', effort: 'low' });
+  assert.equal(s.effort, 'low'); // moderate targets medium but base low caps it
+});
+
+test('respects pinned version ids and off-ladder models', () => {
+  var p = tierToSelection('trivial', { model: 'claude-opus-4-8', effort: 'high', variant: '1m' });
+  assert.deepEqual(p, { model: 'claude-opus-4-8', effort: 'high', dropContext: false, downshifted: false });
+  var f = tierToSelection('trivial', { model: 'fable', effort: 'medium' });
+  assert.equal(f.model, 'fable');
+  assert.equal(f.downshifted, false);
+});
+
+test('already at the floor on a trivial turn is a no-op', () => {
+  var s = tierToSelection('trivial', { model: 'haiku', effort: 'low', variant: 'standard' });
+  assert.equal(s.downshifted, false);
 });
