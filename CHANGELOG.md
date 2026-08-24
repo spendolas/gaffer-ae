@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0 — 2026-08-24
+
+**Quote a chat message and reply to it.**
+
+- **Copy or reply on selection** — select any text in the conversation and a small floating control appears: copy it, or reply-quote it. The reply stages the snippet above the input.
+- **Reply-quote tray** — staged quotes sit in a pill above the composer, each with a wavy rule marker, matched 1:1 to the Figma design. Quote several at once; the × to unstage appears on hover and every removal animates cleanly. The tray tracks the A−/A+ text size.
+- **Styling preserved** — a quoted snippet keeps its original formatting (inline code, bold, links), even when the selection spans multiple messages (surrounding UI is stripped out, not carried in).
+- **Carried to Gaffer** — staged quotes are sent along as tagged context so Gaffer knows exactly what you're replying to, and they're stored with the message so they re-render on reload.
+- Dev footer now shows the live git HEAD rather than the frozen release commit.
+
+_Internal:_ a node-level Figma↔panel parity pipeline (`design/scripts`) — auto-discovering extractor, `data-fig` anchoring, and a property diff with a coverage ledger — replaces the hand-authored assertion list.
+
 ## v0.6.1 — 2026-07-30
 
 **Panel polish — chat text sizing, reply sounds, and a colour pass.**
