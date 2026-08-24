@@ -361,6 +361,13 @@ export class ChatHandler {
 
     var env = augmentedEnv();
     console.log('Gaffer chat PATH: ' + env.PATH);
+    // Resolved model/effort actually handed to the CLI this turn — the record
+    // for tracing what a panel selection maps to (and what autoModel changed).
+    console.log('Gaffer chat spawn: --model ' + model
+      + (effort && EFFORTS.indexOf(effort) !== -1 ? ' --effort ' + effort : ' (no --effort)')
+      + ' | variant=' + (msg.variant || 'standard')
+      + ' resume=' + (sessionId ? 'yes' : 'new')
+      + ' autoModel=' + (msg.autoModel ? 'on' : 'off'));
 
     // Cache for the background compaction call.
     this.claudeBin = claudeBin;
