@@ -448,14 +448,19 @@ export class ChatHandler {
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_done', sessionId: this.sessionId }));
       }
-      // If the session is approaching the context wall, summarize it now in
-      // the background so the next user turn can start fresh with continuity.
       // Shed replayed image payloads from the persisted transcript before the
       // next --resume. Safe window: this turn's process has exited. Skipped
       // while a background compaction holds the session. Never throws.
+      // MUST stay synchronous: the atomic rewrite's safety vs. the next
+      // --resume and vs. a background compaction (_compactSession, which also
+      // resumes this session) depends on blocking the event loop until the
+      // rename completes — an async rewrite would reopen a read-during-write
+      // window. Do not convert to fs.promises.
       if (this.sessionId && !this.compacting) {
         pruneSessionFile(this.sessionId);
       }
+      // If the session is approaching the context wall, summarize it now in
+      // the background so the next user turn can start fresh with continuity.
       if (this.sessionId && this.lastInputTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
         this._compactSession(socket);
       }

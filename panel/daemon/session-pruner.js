@@ -104,6 +104,9 @@ export function pruneSessionFile(sessionId, opts) {
     if (!file) return null;
     var st;
     try { st = statSync(file); } catch (e) { return null; }
+    // Floor is measured on total on-disk size (≥ the API-bound bytes), so
+    // this is strictly more conservative than the spec's "API-bound < 512KB"
+    // wording; the no-op guard below still skips a rewrite when nothing stubs.
     if (st.size < FLOOR) return null;
     var raw;
     try { raw = readFileSync(file, 'utf8'); } catch (e) { return null; }

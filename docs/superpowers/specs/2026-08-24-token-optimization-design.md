@@ -143,8 +143,9 @@ which compounds with A. Zero risk.
 
 ### C. Dynamic model/effort — behind a toggle (default off)
 
-Setting `autoModel` persisted in `.gaffer-config.json` (same store as the MCP
-multiselect; never committed).
+Setting `autoModel` persisted in `chat-history.json` (alongside `autoCheckUpdates`;
+distinct from `.gaffer-config.json`, which holds the MCP multiselect and
+claudeBin — never committed).
 
 - **Off (default):** current behaviour — honor explicit `msg.model` / `msg.effort`.
 - **On:** daemon applies a **conservative local heuristic** to the user message
