@@ -132,8 +132,18 @@ function expectedChecks(spec) {
   return checks;
 }
 
+// Intentional, approved deviations from the Figma spec — cases where the panel
+// deliberately differs (a design defect we corrected). Keyed {figId: {cssProp:
+// reason}}. A deviating check is reported separately, not counted as a failure,
+// so the tool stays green while the divergence stays visible and documented.
+const DEVIATIONS = {
+  // (none — the reply tray keeps Figma's 24px padding; it lands flush with the
+  // input by living inside the shared 6px-inset .input-overlays container.)
+};
+
 // ── Diff every anchored node ─────────────────────────────────────────────────
 const rows = [];
+const deviations = []; // intentional, allow-listed differences
 const missingAnchors = []; // data-fig present in DOM but no Figma spec node
 for (const [fig, el] of capById) {
   const spec = specById.get(fig);
@@ -141,6 +151,11 @@ for (const [fig, el] of capById) {
   for (const c of expectedChecks(spec)) {
     const actual = el.style[c.prop];
     const ok = cmp(c.kind, actual, c.expected);
+    const reason = DEVIATIONS[fig] && DEVIATIONS[fig][c.prop];
+    if (!ok && reason) {
+      deviations.push({ fig, name: spec.name, prop: c.prop, actual, expected: c.expected, reason });
+      continue; // approved divergence — not a failure
+    }
     rows.push({ fig, name: spec.name, state: el._state, sel: el.id || el.cls || el.tag, prop: c.prop, ok, actual, expected: c.expected });
   }
 }
@@ -176,11 +191,16 @@ for (const [fig, list] of byNode) {
   for (const r of bad) console.log(`        ✗ ${r.prop}: actual ${JSON.stringify(r.actual)}  expected ${r.expected}`);
 }
 
+if (deviations.length) {
+  console.log(`\n◆ ${deviations.length} intentional deviation(s) from Figma (allow-listed):`);
+  for (const d of deviations) console.log(`   ${d.fig} ${d.name} · ${d.prop}: ${d.actual} (Figma ${d.expected}) — ${d.reason}`);
+}
+
 if (missingAnchors.length) {
   console.log(`\n⚠ ${missingAnchors.length} data-fig anchor(s) reference no Figma node (stale id?):`);
   for (const m of missingAnchors) console.log(`   ${m.fig}  (${m.state}/${m.id || m.cls})`);
 }
 
-console.log(`\nAnchored nodes: ${anchored.size} · props checked: ${rows.length} · mismatches: ${fails.length}`);
+console.log(`\nAnchored nodes: ${anchored.size} · props checked: ${rows.length} · mismatches: ${fails.length} · deviations: ${deviations.length}`);
 console.log(`Coverage ledger → design/refs/json/parity-coverage.json (${coverageGaps.length} un-anchored visual nodes)`);
 process.exit(fails.length || missingAnchors.length ? 1 : 0);

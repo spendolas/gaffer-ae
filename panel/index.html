@@ -120,7 +120,14 @@
       /* area height = row + 4px pads always (overlays are out of flow),
          so the bleed is a constant 28px */
       margin-bottom: -28px;
-      padding: 8px 12px 34px;
+      /* 34px base clears the input pill; --reply-reserve (set live from JS) adds
+         the reply tray's coverage so messages the tray overlaps can be scrolled
+         into view. Padding grows at the bottom only, so it never shifts the
+         scrolled content — no jump when the tray appears/disappears. The reserve
+         is set to its final value up front, so this transition animates the
+         chat's grow/shrink in sync with the tray's open/collapse. */
+      padding: 8px 12px calc(34px + var(--reply-reserve, 0px));
+      transition: padding-bottom 0.2s var(--ease-state);
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -469,7 +476,11 @@
        Anchored at the overlay stack's bottom, so growth extends upward. */
     .reply-quotes {
       align-self: stretch;
-      padding: 0 24px; /* Reply Quote 427:3102 L/R 24 */
+      /* Reply Quote 428:3200 own L/R padding = 24 (Figma). It sits inside the
+         6px-inset .input-overlays (same container as the input row), so the
+         pill lands at 6+24=30 — flush with the input pill's straight top edge,
+         clear of its 24px rounded corners. */
+      padding: 0 24px;
       overflow: hidden;
       max-height: 0;
       opacity: 0;
@@ -530,6 +541,14 @@
       overflow: hidden;
       word-break: break-word;
     }
+    /* A quote is CONTEXT — dim every styled run to the muted quote colour so
+       nothing pops the way it does in live chat. The universal rule covers all
+       inherited-from-.msg-text accents (bold, links, headings, table cells,
+       em, blockquote…); the code backgrounds get toned from amber/dark to a
+       faint neutral. Structure (weight, mono, chip shape, size) is untouched. */
+    .reply-quote-text, .reply-quote-text * { color: var(--color-text-hint) !important; }
+    .reply-quote-text code { background: rgba(255, 255, 255, 0.06); }   /* inline chip: amber → faint */
+    .reply-quote-text pre { background: rgba(255, 255, 255, 0.04); }    /* code block: dim neutral */
     .reply-quote-x { /* DismissBtn 428:3201 — 20x20 r8, icon stroke text/hint #555 */
       flex-shrink: 0;
       align-self: flex-start;
@@ -971,8 +990,12 @@
        resize the area or shift the scroll content. */
     .input-overlays {
       position: absolute;
-      left: 0;
-      right: 0;
+      /* Inset 6 = the InputArea content container the input row also sits in
+         (Figma: overlays are children of the 6px-padded InputArea). The reply
+         tray then adds its own 24 → 6+24=30, flush with the input pill's
+         straight top. Banner/paste are centered so the inset doesn't move them. */
+      left: 6px;
+      right: 6px;
       bottom: calc(var(--row-h, 48px) + 2px);
       z-index: 2; /* above the chat fader — banner/tray must not be washed */
       display: flex;

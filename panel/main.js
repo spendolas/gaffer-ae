@@ -1312,6 +1312,10 @@
     if (row.previousElementSibling) row.style.marginTop = '-12px';
     else row.style.marginBottom = '-12px';
     replyQuotesEl.style.maxHeight = target + 'px';
+    // shrink the chat reserve to its FINAL value now (target = post-removal tray
+    // height) so the padding transition animates the chat growing back in sync
+    // with the row collapsing
+    syncChatReserve(target);
     setTimeout(function () {
       var j = -1;
       for (var k = 0; k < replyQuotes.length; k++) { if (replyQuotes[k].id === id) { j = k; break; } }
@@ -1320,6 +1324,7 @@
       if (row.parentNode) row.parentNode.removeChild(row);
       replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px';
       sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+      syncChatReserve();
     }, 200);
   }
 
@@ -1353,6 +1358,7 @@
       // drop the rows only after the collapse so the shrink animates from
       // real content height, not an emptied box
       setTimeout(function () { if (replyQuotes.length === 0) replyQuotesEl.innerHTML = ''; }, 220);
+      syncChatReserve();
       return;
     }
     replyQuotesEl.innerHTML = '';
@@ -1365,6 +1371,32 @@
     replyQuotesEl.appendChild(pill);
     replyQuotesEl.classList.add('visible');
     replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px'; // animate to content
+    syncChatReserve();
+  }
+
+  // Reserve chat scroll room for the EXTRA the reply tray covers beyond the
+  // input pill. The chat's bottom padding is calc(34px + --reply-reserve): the
+  // 34px base already clears the pill, so the reserve is only how far the tray's
+  // top rises ABOVE that base line — NOT the whole chat-bottom→tray-top distance
+  // (subtracting the base was missing, which over-reserved by 34px). Measured
+  // from settled geometry (anchored bottom + pill content height) so it's right
+  // even mid open/close animation. Padding grows only at the bottom → no jump.
+  var CHAT_BASE_PAD = 34; // must match the 34px in .chat-messages padding-bottom
+  // trayHeight optional: pass the FINAL height (e.g. a removal's measured target)
+  // so the reserve jumps to its end value up front and the CSS padding-bottom
+  // transition animates the chat's grow/shrink in step with the tray. Omit to
+  // measure the current pill height (add / settle).
+  function syncChatReserve(trayHeight) {
+    var reserve = 0;
+    var pill = replyQuotesEl && replyQuotesEl.firstChild;
+    var h = trayHeight != null ? trayHeight : (pill ? pill.scrollHeight : 0);
+    if (h > 0 && replyQuotes.length) {
+      var trayBottom = replyQuotesEl.getBoundingClientRect().bottom; // anchored, stable
+      var settledTop = trayBottom - h;                               // top when settled at h
+      var chatBottom = chatMessagesEl.getBoundingClientRect().bottom;
+      reserve = Math.max(0, Math.round(chatBottom - settledTop) - CHAT_BASE_PAD);
+    }
+    chatMessagesEl.style.setProperty('--reply-reserve', reserve + 'px');
   }
 
   // Re-pin the tray height after the quote text reflows (e.g. an A-/A+ text-size
@@ -1373,6 +1405,7 @@
   function refitReplyQuotes() {
     if (!replyQuotesEl || !replyQuotes.length) return;
     replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px';
+    syncChatReserve();
   }
 
   // Audit/test seam — panel-capture.mjs drives the REAL builders over CDP so the
