@@ -148,21 +148,28 @@ distinct from `.gaffer-config.json`, which holds the MCP multiselect and
 claudeBin — never committed).
 
 - **Off (default):** current behaviour — honor explicit `msg.model` / `msg.effort`.
-- **On:** daemon applies a **conservative local heuristic** to the user message
-  before spawn. On a clearly-trivial turn it lightens **all three levers
-  together** — model → `haiku`, effort → `low`, context → standard (drops the
-  1M suffix; haiku has no 1M and a trivial turn doesn't need it). Trivial =
-  short question, no build/animate/create/expression/keyframe verbs, no code
-  fence or tool mention (follow-ups like "undo that", "what did you do"). Any
-  non-trivial turn falls through unchanged. **Never upshifts, and never
-  overrides an explicit pinned version id** (a deliberate exact choice). The
-  downshift is **per-turn and ephemeral** — nothing is persisted; the next turn
-  re-decides from the panel's current selection.
-- **No extra LLM router call** (would add latency + its own tokens). Pure local
-  heuristic.
-- **Every decision logged** (`[automodel] "…" -> haiku (trivial)`), because —
-  unlike A — this lever is *unmeasured*. Logging is how it earns its place: we
-  measure its real effect after shipping and drop it if it doesn't pay.
+- **On:** a **two-stage classifier** (`model-router.js`) picks a tier per turn.
+  - **Stage 1 — free local score** (`scoreMessage`): confident `trivial` (short
+    greeting/ack or meta like "what did you do"/"undo") or `complex` (authoring
+    verb, expression syntax, code fence, `mcp__`, attached image, or long
+    multi-step), else `unsure`. Verbs only drive complex — domain *nouns* (comp,
+    opacity, easing) stay neutral so plain questions aren't misread.
+  - **Stage 2 — cheap haiku call** (`classifyTurn`), *only* on `unsure`: haiku
+    with `--strict-mcp-config --mcp-config '{}'`, no system prompt, no session,
+    8s cap; returns `trivial|moderate|complex`; any failure/timeout → `complex`
+    (no downshift). So the extra call fires on a minority of turns, never on the
+    confident extremes.
+- **Tier → selection** (`tierToSelection`): `trivial` → `haiku`/`low` + drop 1M;
+  `moderate` → `sonnet`/`medium` (keeps 1M); `complex` → unchanged. **Never
+  upshifts past the user's pick, never touches a pinned version id or an
+  off-ladder model** (e.g. fable). Ladder: haiku < sonnet < opus.
+- **Per-turn and ephemeral** — nothing persisted; each turn re-decides from the
+  panel's current selection.
+- **Every downshift logged** (`[automodel] <tier>: opus/high/1m -> sonnet/medium`),
+  because — unlike A — this lever is *unmeasured*. Logging is how it earns its
+  place: measure the real effect after shipping and drop it if it doesn't pay.
+  (The false-*complex* error is safe — just no downshift; only a false-*trivial*
+  risks under-powering a real task, so Stage 1 biases toward complex/unsure.)
 
 Honesty note: C mixes a price-lever (cost per token) with A/B's count-lever
 (tokens per turn). It ships gated and logged specifically so it can't quietly
