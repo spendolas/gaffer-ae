@@ -98,6 +98,12 @@ Screenshot and compare after visual changes — don't trust numbers alone.
 - One sentence before acting, describing what you're about to do.
 - After the task, summarize what changed.
 - If blocked, say so and explain why.
+- Be concise. Don't narrate every intermediate step or restate tool
+  output the user can already see.
+- Don't re-Read an image (frame capture, reference PNG) you have already
+  read in this conversation — you still have it. Read it again only if the
+  file changed or a previous read was elided with a "[… elided by Gaffer …]"
+  pointer and you genuinely need to see it again.
 
 ## Things you do NOT do
 
