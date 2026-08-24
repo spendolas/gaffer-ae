@@ -317,20 +317,29 @@ export class ChatHandler {
 
     var model = msg.model || 'opus';
     var effort = msg.effort;
-    // Optional, off by default: on trivial turns pick a cheaper model. Never
-    // upshifts, never overrides a pinned id / 1m variant. Logged so the effect
-    // can be measured before this lever earns its keep.
-    if (msg.autoModel && msg.variant !== '1m') {
+    // Optional, off by default: on a trivial turn lighten model + effort +
+    // context together (haiku / low / drop 1M). Never upshifts, never
+    // overrides a pinned version id. Logged so the effect can be measured
+    // before this lever earns its keep.
+    var autoDownshifted = false;
+    if (msg.autoModel) {
       var picked = chooseModel(msg.message, { model: model, effort: effort });
-      if (picked.model !== model) console.log('[automodel] downshift ' + model + ' -> ' + picked.model);
+      autoDownshifted = picked.downshifted;
+      if (autoDownshifted) {
+        console.log('[automodel] downshift ' + model + '/' + (effort || '-')
+          + (msg.variant === '1m' ? '/1m' : '')
+          + ' -> ' + picked.model + '/' + (picked.effort || '-'));
+      }
       model = picked.model;
       effort = picked.effort;
     }
     // Context-window variant: 1M suffix, passed through for ANY model
     // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear
     // API 400 about subscription availability). Never silently strip —
-    // an unsupported combo must surface its error in chat.
-    if (msg.variant === '1m') model += '[1m]';
+    // an unsupported combo must surface its error in chat. Skipped when
+    // autoModel downshifted this turn: haiku has no 1M, and a trivial turn
+    // doesn't need the big context.
+    if (msg.variant === '1m' && !autoDownshifted) model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (effort && EFFORTS.indexOf(effort) !== -1) args.push('--effort', effort);
