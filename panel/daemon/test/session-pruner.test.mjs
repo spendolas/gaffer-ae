@@ -68,3 +68,24 @@ test('bare inline image block is stubbed too', () => {
   assert.equal(res.stubbed, 1);
   assert.equal(JSON.parse(res.lines[0]).message.content[0].type, 'text');
 });
+
+test('keepRecent >= images.length stubs nothing, all images kept', () => {
+  var lines = [toolUseLine('a', '/a.png'), imageResultLine('a', 20), toolUseLine('b', '/b.png'), imageResultLine('b', 20)];
+  var res = pruneTranscriptLines(lines, { keepRecent: 5 });
+  assert.equal(res.images, 2);
+  assert.equal(res.kept, 2);
+  assert.equal(res.stubbed, 0);
+  assert.equal(res.lines.length, lines.length);
+  // All lines should be byte-for-byte identical since nothing was touched
+  for (var i = 0; i < lines.length; i++) {
+    assert.equal(res.lines[i], lines[i], 'line ' + i + ' should be unchanged');
+  }
+});
+
+test('untouched lines with tricky numbers round-trip byte-for-byte', () => {
+  var trickyLine = '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"n"}]},"n":123456789012345678}';
+  var lines = [toolUseLine('a', '/a.png'), imageResultLine('a', 20), trickyLine];
+  var res = pruneTranscriptLines(lines, { keepRecent: 0 });
+  assert.equal(res.lines[2], trickyLine, 'untouched line with bigint must be byte-for-byte identical');
+  assert.equal(res.stubbed, 1);
+});

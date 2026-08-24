@@ -26,25 +26,26 @@ export function pruneTranscriptLines(lines, opts) {
     }
   }
 
-  // Pass 2: collect every image block in chronological (file) order.
+  // Pass 2: collect every image block in chronological (file) order, tracking line index.
   var imgRefs = [];
   for (var j = 0; j < parsed.length; j++) {
     var o = parsed[j];
     if (!o || !o.message || !Array.isArray(o.message.content)) continue;
     for (var blk of o.message.content) {
       if (blk && blk.type === 'image') {
-        imgRefs.push({ block: blk, path: null });
+        imgRefs.push({ block: blk, path: null, lineIdx: j });
       } else if (blk && blk.type === 'tool_result' && Array.isArray(blk.content)) {
         for (var c of blk.content) {
-          if (c && c.type === 'image') imgRefs.push({ block: c, path: pathById[blk.tool_use_id] || null });
+          if (c && c.type === 'image') imgRefs.push({ block: c, path: pathById[blk.tool_use_id] || null, lineIdx: j });
         }
       }
     }
   }
 
-  // Stub everything except the most-recent keepRecent.
+  // Stub everything except the most-recent keepRecent; track which lines we touch.
   var cutoff = imgRefs.length - keepRecent;
   var stubbed = 0;
+  var touched = {};
   for (var k = 0; k < imgRefs.length && k < cutoff; k++) {
     var img = imgRefs[k].block;
     var data = img.source && img.source.data ? img.source.data : '';
@@ -56,13 +57,20 @@ export function pruneTranscriptLines(lines, opts) {
     delete img.source;
     img.type = 'text';
     img.text = '[' + kb + ' KB ' + mt + ' elided by Gaffer — ' + where + ']';
+    touched[imgRefs[k].lineIdx] = true;
     stubbed++;
   }
 
-  // Re-serialize: changed objects re-stringified; unparsed lines verbatim.
+  // Re-serialize: only stringify touched lines; untouched lines round-trip verbatim.
   var out = [];
   for (var m = 0; m < parsed.length; m++) {
-    out.push(parsed[m] === null ? lines[m] : JSON.stringify(parsed[m]));
+    if (parsed[m] === null) {
+      out.push(lines[m]);
+    } else if (touched[m]) {
+      out.push(JSON.stringify(parsed[m]));
+    } else {
+      out.push(lines[m]);
+    }
   }
-  return { lines: out, stubbed: stubbed, kept: Math.min(keepRecent, imgRefs.length), images: imgRefs.length };
+  return { lines: out, stubbed: stubbed, kept: Math.max(0, Math.min(keepRecent, imgRefs.length)), images: imgRefs.length };
 }
