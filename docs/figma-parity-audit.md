@@ -190,7 +190,8 @@ The audit is no longer a hand-picked assertion list. Run, in order (grip + AE
 panel both open):
 
 ```
-node design/scripts/figma-extract.mjs   # auto-discovers roots, walks to disk
+GRIP_BRIDGE=/path/to/Grip/bridge/dist/index.js \
+  node design/scripts/figma-extract.mjs  # auto-discovers roots, walks to disk
 node design/scripts/css-inventory.mjs
 node design/scripts/digest.mjs           # walk-*.json → spec-*.json + tokens
 node design/scripts/panel-capture.mjs    # live CDP capture (:13870)

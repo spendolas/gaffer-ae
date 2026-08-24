@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REFS = join(__dirname, '..', 'refs');
-const GRIP = '/Volumes/Origami/Users/spendolas/Library/CloudStorage/Dropbox/Tools/Figma Plugins/Grip/bridge/dist/index.js';
+// Path to the grip MCP bridge entrypoint — set per-machine via env, e.g.
+//   GRIP_BRIDGE=/path/to/Grip/bridge/dist/index.js node design/scripts/figma-extract.mjs
+const GRIP = process.env.GRIP_BRIDGE || '';
 const CALL_TIMEOUT = 180000;
 const SKIP_EXPORTS = process.argv.includes('--skip-exports');
 
@@ -141,6 +143,11 @@ async function discoverRoots(client) {
 }
 
 async function main() {
+  if (!GRIP) {
+    console.error('GRIP_BRIDGE is not set. Point it at the grip bridge entrypoint:\n' +
+      '  GRIP_BRIDGE=/path/to/Grip/bridge/dist/index.js node design/scripts/figma-extract.mjs');
+    process.exit(1);
+  }
   manifest.startedAt = new Date().toISOString();
   // Pass full env: the SDK sanitizes it by default, dropping TMPDIR — which
   // the grip shim needs to find the leader daemon's IPC socket.
