@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { pruneSessionFile } from './session-pruner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -438,6 +439,12 @@ export class ChatHandler {
       }
       // If the session is approaching the context wall, summarize it now in
       // the background so the next user turn can start fresh with continuity.
+      // Shed replayed image payloads from the persisted transcript before the
+      // next --resume. Safe window: this turn's process has exited. Skipped
+      // while a background compaction holds the session. Never throws.
+      if (this.sessionId && !this.compacting) {
+        pruneSessionFile(this.sessionId);
+      }
       if (this.sessionId && this.lastInputTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
         this._compactSession(socket);
       }
