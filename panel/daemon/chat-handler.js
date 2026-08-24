@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pruneSessionFile } from './session-pruner.js';
-import { resolveTier, tierToSelection } from './model-router.js';
+import { scoreMessage, classifyTurn, tierToSelection } from './model-router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -212,7 +212,11 @@ function augmentedEnv() {
 // One-shot classifier runner for the autoModel middle band: haiku, no MCP, no
 // system prompt, no session. Returns (prompt) => Promise<stdout>. Never
 // rejects — resolves '' on timeout/error so classifyTurn falls back to
-// 'complex' (no downshift). 8s cap so a hung classify can't stall the turn.
+// 'complex' (no downshift). 20s cap: `claude -p` cold-start measured ~10-15s
+// (there is no warm path); a hung classify still can't stall a turn past this.
+// A direct Messages-API classifier would be ~1s but needs an API key the
+// subscription-authed daemon doesn't have — revisit if ANTHROPIC_API_KEY appears.
+var CLASSIFY_TIMEOUT_MS = 20000;
 function makeClassifyRun(claudeBin) {
   return function (prompt) {
     return new Promise(function (resolve) {
@@ -225,7 +229,7 @@ function makeClassifyRun(claudeBin) {
           '--dangerously-skip-permissions',
         ], { stdio: ['pipe', 'pipe', 'pipe'], env: augmentedEnv(), windowsHide: true });
         var out = '';
-        var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, 8000);
+        var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, CLASSIFY_TIMEOUT_MS);
         child.stdout.on('data', function (c) { out += c.toString(); });
         child.on('close', function () { clearTimeout(timer); finish(out); });
         child.on('error', function () { clearTimeout(timer); finish(''); });
@@ -351,7 +355,15 @@ export class ChatHandler {
     // id. Logged so the lever can be measured before it earns its keep.
     var autoDownshifted = false;
     if (msg.autoModel) {
-      var tier = await resolveTier(msg.message, { run: makeClassifyRun(claudeBin) });
+      // Stage 1: free local score. Stage 2 (haiku) only on the ambiguous
+      // middle — logged with its verdict + latency so the lever can be
+      // evaluated from real usage before it earns its keep.
+      var tier = scoreMessage(msg.message);
+      if (tier === 'unsure') {
+        var _t0 = Date.now();
+        tier = await classifyTurn(msg.message, { run: makeClassifyRun(claudeBin) });
+        console.log('[automodel] classify unsure -> ' + tier + ' in ' + (Date.now() - _t0) + 'ms');
+      }
       var sel = tierToSelection(tier, { model: model, effort: effort, variant: msg.variant });
       if (sel.downshifted) {
         console.log('[automodel] ' + tier + ': ' + model + '/' + (effort || '-')
