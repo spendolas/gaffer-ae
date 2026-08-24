@@ -6,7 +6,7 @@
 
 - Panel chat now sheds replayed image payloads from the resumed transcript: frame captures and reference PNGs read earlier in a conversation are stubbed to a one-line pointer once they fall outside a recent window, cutting per-turn input tokens on image-heavy sessions by ~85% while keeping the conversation, thinking, and the most recent images intact. It rewrites the session file atomically and never touches a turn if anything looks off.
 - The chat prompt now avoids re-reading an image it already has in context.
-- New optional "Auto-lighten" setting (off by default): on trivial turns Gaffer uses a lighter model to save tokens; it never downgrades real build/expression work and never overrides a pinned model.
+- New optional "Auto-lighten" setting (off by default): on trivial turns Gaffer lightens all three levers together — a lighter model, lower effort, and standard (non-1M) context — to save tokens. It never touches real build/expression work, never overrides a pinned model version, and is decided fresh each turn (nothing is remembered).
 
 ## v0.7.1 — 2026-08-24
 

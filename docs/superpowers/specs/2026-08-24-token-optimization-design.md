@@ -149,10 +149,15 @@ claudeBin — never committed).
 
 - **Off (default):** current behaviour — honor explicit `msg.model` / `msg.effort`.
 - **On:** daemon applies a **conservative local heuristic** to the user message
-  before spawn. Only *downshifts* when confident (short question; no
-  build/animate/create/expression/keyframe verbs; follow-ups like "undo that",
-  "what did you do"). Otherwise falls back to the user's model. **Never
-  upshifts, never overrides an explicit non-default pick.**
+  before spawn. On a clearly-trivial turn it lightens **all three levers
+  together** — model → `haiku`, effort → `low`, context → standard (drops the
+  1M suffix; haiku has no 1M and a trivial turn doesn't need it). Trivial =
+  short question, no build/animate/create/expression/keyframe verbs, no code
+  fence or tool mention (follow-ups like "undo that", "what did you do"). Any
+  non-trivial turn falls through unchanged. **Never upshifts, and never
+  overrides an explicit pinned version id** (a deliberate exact choice). The
+  downshift is **per-turn and ephemeral** — nothing is persisted; the next turn
+  re-decides from the panel's current selection.
 - **No extra LLM router call** (would add latency + its own tokens). Pure local
   heuristic.
 - **Every decision logged** (`[automodel] "…" -> haiku (trivial)`), because —
