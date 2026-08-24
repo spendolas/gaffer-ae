@@ -1,6 +1,10 @@
 // Rewrites a Claude Code session transcript to shed replayed image payloads.
 // Pure rewriter (pruneTranscriptLines) + safe file layer (added in Task 2).
 
+import { readFileSync, writeFileSync, renameSync, statSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+
 function byteLen(v) {
   return Buffer.byteLength(typeof v === 'string' ? v : JSON.stringify(v), 'utf8');
 }
@@ -73,4 +77,66 @@ export function pruneTranscriptLines(lines, opts) {
     }
   }
   return { lines: out, stubbed: stubbed, kept: Math.max(0, Math.min(keepRecent, imgRefs.length)), images: imgRefs.length };
+}
+
+// Scan ~/.claude/projects/*/<sessionId>.jsonl — session ids are UUIDs, so a
+// filename match is unambiguous. opts.home overrides HOME (tests).
+export function findTranscript(sessionId, opts) {
+  opts = opts || {};
+  if (!sessionId) return null;
+  var base = join(opts.home || homedir(), '.claude', 'projects');
+  var dirs;
+  try { dirs = readdirSync(base); } catch (e) { return null; }
+  for (var d of dirs) {
+    var p = join(base, d, sessionId + '.jsonl');
+    try { statSync(p); return p; } catch (e) { /* miss */ }
+  }
+  return null;
+}
+
+// Prune one session file in place. Never throws — any failure returns null and
+// the caller proceeds untouched.
+export function pruneSessionFile(sessionId, opts) {
+  try {
+    opts = opts || {};
+    var FLOOR = opts.floorBytes == null ? 512 * 1024 : opts.floorBytes;
+    var file = opts.file || findTranscript(sessionId, opts);
+    if (!file) return null;
+    var st;
+    try { st = statSync(file); } catch (e) { return null; }
+    if (st.size < FLOOR) return null;
+    var raw;
+    try { raw = readFileSync(file, 'utf8'); } catch (e) { return null; }
+
+    var lines = raw.split('\n');
+    var trailingNL = lines.length > 0 && lines[lines.length - 1] === '';
+    var body = trailingNL ? lines.slice(0, -1) : lines;
+
+    var res;
+    try { res = pruneTranscriptLines(body, opts); } catch (e) { return null; }
+    if (!res || !res.stubbed) return null;
+
+    // Validate before swapping: line count invariant + every line still parses.
+    if (res.lines.length !== body.length) return null;
+    for (var i = 0; i < res.lines.length; i++) {
+      var l = res.lines[i];
+      if (!l || !l.trim()) continue;
+      try { JSON.parse(l); } catch (e) { return null; }
+    }
+
+    var outText = res.lines.join('\n') + (trailingNL ? '\n' : '');
+    try {
+      writeFileSync(file + '.bak', raw);
+      var tmp = file + '.tmp';
+      writeFileSync(tmp, outText);
+      renameSync(tmp, file);
+    } catch (e) { return null; }
+
+    console.log('[prune] ' + sessionId + ' ' + Math.round(st.size / 1024) + 'KB -> '
+      + Math.round(Buffer.byteLength(outText, 'utf8') / 1024) + 'KB | imgs stubbed '
+      + res.stubbed + ' kept ' + res.kept);
+    return res;
+  } catch (e) {
+    return null; // absolute backstop — the pruner must never take down a turn
+  }
 }
