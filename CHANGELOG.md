@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.0 — 2026-08-24
+
+**Token optimization (under the hood).**
+
+- Panel chat now sheds replayed image payloads from the resumed transcript: frame captures and reference PNGs read earlier in a conversation are stubbed to a one-line pointer once they fall outside a recent window, cutting per-turn input tokens on image-heavy sessions by ~85% while keeping the conversation, thinking, and the most recent images intact. It rewrites the session file atomically and never touches a turn if anything looks off.
+- The chat prompt now avoids re-reading an image it already has in context.
+- New optional "Auto-lighten" setting (off by default): Gaffer sizes the model to the turn. Trivial turns (greetings, "what did you do?") drop to a light model, low effort, and standard context; middle-ground turns use a mid model; real build/animate/expression work is left at your full selection. It classifies each turn with a fast local check and, only for genuinely ambiguous ones, a quick lightweight call — never upshifting, never overriding a pinned model version, and decided fresh each turn (nothing is remembered).
+
 ## v0.7.1 — 2026-08-24
 
 **Reply-quote polish.**

@@ -13,7 +13,7 @@ done
 
 # Prefer binary only if explicitly requested via env var
 if [ -n "$GAFFER_USE_BINARY" ] && [ -x "$DIR/gaffer-daemon" ]; then
-  nohup "$DIR/gaffer-daemon" > /tmp/gaffer-daemon.log 2>&1 &
+  nohup "$DIR/gaffer-daemon" >> /tmp/gaffer-daemon.log 2>&1 &
   echo "pid:$! binary"
   exit 0
 fi
@@ -23,5 +23,5 @@ if [ -z "$NODE" ]; then
   exit 1
 fi
 
-nohup "$NODE" index.js > /tmp/gaffer-daemon.log 2>&1 &
+nohup "$NODE" index.js >> /tmp/gaffer-daemon.log 2>&1 &
 echo "pid:$! node"

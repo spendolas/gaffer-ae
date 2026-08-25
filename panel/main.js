@@ -29,6 +29,7 @@
   var moreLabelEl = document.getElementById('moreLabel');
   var moreChevronEl = document.getElementById('moreChevron');
   var autoCheckEl = document.getElementById('autoCheckUpdates');
+  var autoModelEl = document.getElementById('autoModel');
   var mcpListEl = document.getElementById('mcpList');
   var checkNowBtnEl = document.getElementById('checkNowBtn');
   var versionTextEl = document.getElementById('versionText');
@@ -50,6 +51,7 @@
   var currentVariant = 'standard'; // 'standard' | '1m' (context-window variant)
   var currentEffort = 'high'; // low | medium | high | xhigh | max
   var autoCheckUpdates = true;
+  var autoModel = false; // off by default; persisted in chat-history.json
   var dismissedUpdateCommit = null;
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
@@ -518,6 +520,7 @@
       variant: currentVariant,
       effort: currentEffort,
       autoCheckUpdates: autoCheckUpdates,
+      autoModel: autoModel,
       soundEnabled: soundEnabled,
       soundVariant: soundVariant,
       textScale: textScale,
@@ -565,6 +568,10 @@
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
           autoCheckEl.checked = autoCheckUpdates;
+        }
+        if (typeof data.autoModel === 'boolean') {
+          autoModel = data.autoModel;
+          if (autoModelEl) autoModelEl.checked = autoModel;
         }
         if (typeof data.soundEnabled === 'boolean') {
           soundEnabled = data.soundEnabled;
@@ -1043,6 +1050,7 @@
       effort: currentEffort,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
+      autoModel: autoModel,
     }));
     chatInputEl.value = '';
     resizeChatInput(); // collapse to one (scaled) line
@@ -2282,6 +2290,12 @@
     autoCheckUpdates = autoCheckEl.checked;
     saveChat();
   });
+  if (autoModelEl) {
+    autoModelEl.addEventListener('change', function () {
+      autoModel = autoModelEl.checked;
+      saveChat();
+    });
+  }
   checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
   // Drawer expand/collapse is class-driven with a height transition —
   // native <details> toggling can't animate, so it stays `open` and the

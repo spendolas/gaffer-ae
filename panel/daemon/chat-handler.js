@@ -5,6 +5,8 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { pruneSessionFile } from './session-pruner.js';
+import { scoreMessage, classifyTurn, tierToSelection } from './model-router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -207,6 +209,37 @@ export function augmentedEnv() {
   return { ...process.env, PATH: pathParts.join(':') };
 }
 
+// One-shot classifier runner for the autoModel middle band: haiku, no MCP, no
+// system prompt, no session. Returns (prompt) => Promise<stdout>. Never
+// rejects — resolves '' on timeout/error so classifyTurn falls back to
+// 'complex' (no downshift). 20s cap: `claude -p` cold-start measured ~10-15s
+// (there is no warm path); a hung classify still can't stall a turn past this.
+// A direct Messages-API classifier would be ~1s but needs an API key the
+// subscription-authed daemon doesn't have — revisit if ANTHROPIC_API_KEY appears.
+var CLASSIFY_TIMEOUT_MS = 20000;
+function makeClassifyRun(claudeBin) {
+  return function (prompt) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function (v) { if (!done) { done = true; resolve(v); } };
+      try {
+        var child = spawn(claudeBin, [
+          '-p', '--model', 'haiku',
+          '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+          '--dangerously-skip-permissions',
+        ], { stdio: ['pipe', 'pipe', 'pipe'], env: augmentedEnv(), windowsHide: true });
+        var out = '';
+        var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, CLASSIFY_TIMEOUT_MS);
+        child.stdout.on('data', function (c) { out += c.toString(); });
+        child.on('close', function () { clearTimeout(timer); finish(out); });
+        child.on('error', function () { clearTimeout(timer); finish(''); });
+        child.stdin.write(prompt);
+        child.stdin.end();
+      } catch (e) { finish(''); }
+    });
+  };
+}
+
 export class ChatHandler {
   constructor() {
     this.activeProcess = null;
@@ -314,14 +347,44 @@ export class ChatHandler {
     }
 
     var model = msg.model || 'opus';
+    var effort = msg.effort;
+    // Optional, off by default: a two-stage classifier lightens the turn.
+    // Stage 1 is a free local score; the ambiguous middle escalates to one
+    // cheap haiku call. trivial → haiku/low + drop 1M; moderate → sonnet/medium
+    // (keeps 1M); complex → unchanged. Never upshifts, never touches a pinned
+    // id. Logged so the lever can be measured before it earns its keep.
+    var autoDownshifted = false;
+    if (msg.autoModel) {
+      // Stage 1: free local score. Stage 2 (haiku) only on the ambiguous
+      // middle — logged with its verdict + latency so the lever can be
+      // evaluated from real usage before it earns its keep.
+      var tier = scoreMessage(msg.message);
+      if (tier === 'unsure') {
+        var _t0 = Date.now();
+        tier = await classifyTurn(msg.message, { run: makeClassifyRun(claudeBin) });
+        console.log('[automodel] classify unsure -> ' + tier + ' in ' + (Date.now() - _t0) + 'ms');
+      }
+      var sel = tierToSelection(tier, { model: model, effort: effort, variant: msg.variant });
+      if (sel.downshifted) {
+        console.log('[automodel] ' + tier + ': ' + model + '/' + (effort || '-')
+          + (msg.variant === '1m' ? '/1m' : '')
+          + ' -> ' + sel.model + '/' + (sel.effort || '-')
+          + (sel.dropContext && msg.variant === '1m' ? ' (1m dropped)' : ''));
+        model = sel.model;
+        effort = sel.effort;
+        autoDownshifted = sel.dropContext;
+      }
+    }
     // Context-window variant: 1M suffix, passed through for ANY model
     // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear
     // API 400 about subscription availability). Never silently strip —
-    // an unsupported combo must surface its error in chat.
-    if (msg.variant === '1m') model += '[1m]';
+    // an unsupported combo must surface its error in chat. Skipped when
+    // autoModel downshifted this turn: haiku has no 1M, and a trivial turn
+    // doesn't need the big context.
+    if (msg.variant === '1m' && !autoDownshifted) model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-    if (msg.effort && EFFORTS.indexOf(msg.effort) !== -1) args.push('--effort', msg.effort);
+    if (effort && EFFORTS.indexOf(effort) !== -1) args.push('--effort', effort);
     // Register the gaffer MCP server inline — chat must work even when the
     // installer's `claude mcp add` step never ran (e.g. CLI installed after
     // the panel). Merges with any user-scope registration of the same name.
@@ -349,6 +412,13 @@ export class ChatHandler {
 
     var env = augmentedEnv();
     console.log('Gaffer chat PATH: ' + env.PATH);
+    // Resolved model/effort actually handed to the CLI this turn — the record
+    // for tracing what a panel selection maps to (and what autoModel changed).
+    console.log('Gaffer chat spawn: --model ' + model
+      + (effort && EFFORTS.indexOf(effort) !== -1 ? ' --effort ' + effort : ' (no --effort)')
+      + ' | variant=' + (msg.variant || 'standard')
+      + ' resume=' + (sessionId ? 'yes' : 'new')
+      + ' autoModel=' + (msg.autoModel ? 'on' : 'off'));
 
     // Cache for the background compaction call.
     this.claudeBin = claudeBin;
@@ -438,6 +508,17 @@ export class ChatHandler {
       }
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_done', sessionId: this.sessionId }));
+      }
+      // Shed replayed image payloads from the persisted transcript before the
+      // next --resume. Safe window: this turn's process has exited. Skipped
+      // while a background compaction holds the session. Never throws.
+      // MUST stay synchronous: the atomic rewrite's safety vs. the next
+      // --resume and vs. a background compaction (_compactSession, which also
+      // resumes this session) depends on blocking the event loop until the
+      // rename completes — an async rewrite would reopen a read-during-write
+      // window. Do not convert to fs.promises.
+      if (this.sessionId && !this.compacting) {
+        pruneSessionFile(this.sessionId);
       }
       // If the session is approaching the context wall, summarize it now in
       // the background so the next user turn can start fresh with continuity.
