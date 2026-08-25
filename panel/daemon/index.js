@@ -4,6 +4,9 @@ import { startMcpServer } from './mcp-server.js';
 import { ChatHandler, augmentedEnv } from './chat-handler.js';
 import { authStatus, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
+import { maxSourceMtime, isDevInstall, shouldReload } from './dev-reload.js';
+import { dirname, join as pathJoin } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 var WS_PORT = 9823;
 var MCP_PORT = 9824;
@@ -107,6 +110,33 @@ startMcpServer(MCP_PORT, queue).catch((err) => {
 console.log(
   `Gaffer daemon: MCP on http://127.0.0.1:${MCP_PORT}/mcp, panel bridge on ws://127.0.0.1:${WS_PORT}`
 );
+
+// Dev auto-reload: on a dev install, watch our own sources and step aside when
+// they change so the panel's reconnect boots a fresh daemon from the new code.
+// Idle-gated (never mid-turn/sign-in) and settle-debounced (a branch switch =
+// one reload, not a storm). End users (no repo) never enter this.
+var DAEMON_DIR = dirname(fileURLToPath(import.meta.url));
+var PANEL_DIR = pathJoin(DAEMON_DIR, '..');
+if (isDevInstall(PANEL_DIR)) {
+  var reloadBaseline = maxSourceMtime(DAEMON_DIR);
+  var reloadLastMax = reloadBaseline;
+  var reloadLastChangeAt = Date.now();
+  var reloadArmed = false;
+  console.log('Gaffer: dev auto-reload watching daemon sources');
+  var reloadTimer = setInterval(() => {
+    var cur = maxSourceMtime(DAEMON_DIR);
+    if (cur > reloadLastMax) { reloadLastMax = cur; reloadLastChangeAt = Date.now(); reloadArmed = true; }
+    if (!reloadArmed) return;
+    var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn;
+    if (shouldReload({ baseline: reloadBaseline, currentMax: cur, lastChangeAt: reloadLastChangeAt, settleMs: 1500, idle: idle }, Date.now())) {
+      clearInterval(reloadTimer);
+      console.log('Gaffer: daemon sources changed — reloading');
+      bridge.broadcast({ type: 'daemon_reloading', message: 'Reloading Gaffer for updated code…' });
+      setTimeout(() => process.exit(0), 250); // let the notice flush, then let the panel relaunch us
+    }
+  }, 3000);
+  if (reloadTimer.unref) reloadTimer.unref();
+}
 
 // Graceful shutdown
 process.on('SIGINT', () => {

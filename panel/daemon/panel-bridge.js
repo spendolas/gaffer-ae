@@ -203,6 +203,15 @@ export class PanelBridge {
     return false;
   }
 
+  // Fire-and-forget a message to every connected panel (e.g. daemon_reloading).
+  broadcast(msg) {
+    var data = JSON.stringify(msg);
+    for (var entry of this.panels.values()) {
+      var s = entry.socket;
+      if (s && s.readyState === 1) { try { s.send(data); } catch (e) { /* ignore */ } }
+    }
+  }
+
   stop() {
     if (this.wss) this.wss.close();
   }

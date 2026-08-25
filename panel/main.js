@@ -702,6 +702,13 @@
         showChatNotice(msg.message || msg.event);
         return;
       }
+      if (msg.type === 'daemon_reloading') {
+        // Dev auto-reload: the daemon is stepping aside for updated code; the
+        // onclose handler relaunches it and we reconnect. TODO: swap for a
+        // toast once the toast system lands (Figma pending).
+        showChatNotice(msg.message || 'Reloading Gaffer for updated code…');
+        return;
+      }
       if (msg.type === 'models') {
         // CLI-discovered model/effort options (never hardcoded panel-side)
         applyModelOptions(msg);
