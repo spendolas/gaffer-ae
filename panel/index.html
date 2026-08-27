@@ -663,19 +663,19 @@
       padding: 8px;
       border: none;
       border-radius: 16px;
-      color: var(--color-text-light);
       cursor: pointer;
       flex-shrink: 0;
     }
     .send-btn .gicon, .stop-btn .gicon { width: 16px; height: 16px; display: block; }
-    .send-btn { background: var(--color-btn-primary-bg); opacity: 0.4; }
-    .send-btn.typed { opacity: 1; }
+    /* Prompt Default/Disabled = ghost blue + blue glyph; Hover fills solid + light glyph */
+    .send-btn { background: rgba(74, 125, 201, 0.2); color: var(--color-accent-blue); }
+    .send-btn:hover:not(:disabled):not(.offline) { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
+    .send-btn:disabled { cursor: default; }
     .send-btn.offline { background: var(--color-bg-panel); }
     .send-btn.offline .gicon { visibility: hidden; }
-    .send-btn:hover:not(:disabled):not(.offline) { background: var(--color-btn-primary-hover); opacity: 1; }
-    .send-btn:disabled { opacity: 0.4; cursor: default; }
-    .stop-btn { background: var(--color-btn-danger-bg); }
-    .stop-btn:hover { background: var(--color-btn-danger-hover); }
+    /* Prompt Danger (stop) = ghost dark-red at rest, solid bright red on hover */
+    .stop-btn { background: rgba(154, 74, 74, 0.2); color: var(--color-text-light); }
+    .stop-btn:hover { background: var(--color-btn-danger-bg); }
 
     /* Activity log */
     /* ActivityLog — Figma set 191:1343: collapsed 40h / expanded 144h.
@@ -715,18 +715,25 @@
       align-items: center;
       color: var(--color-text-dimmer);
     }
+    /* Button Type=Icon — 28x28 r8 pad6. Purpose modifiers below. */
     .icon-btn {
-      width: 24px;
-      height: 24px;
-      padding: 4px;
+      width: 28px;
+      height: 28px;
+      padding: 6px;
       border: none;
       border-radius: 8px;
-      background: var(--color-border-default);
+      background: var(--color-bg-panel);
       color: var(--color-text-dimmer);
       cursor: pointer;
     }
     .icon-btn .gicon { width: 16px; height: 16px; display: block; }
-    .icon-btn:hover { color: var(--color-text-light-2); }
+    .icon-btn:hover { background: var(--color-border-input); color: var(--color-text-light-2); }
+    .icon-btn.informed { background: rgba(74, 125, 201, 0.2); color: var(--color-accent-blue); }
+    .icon-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
+    .icon-btn.hollow { background: transparent; }
+    .icon-btn.hollow:hover { background: rgba(255, 255, 255, 0.2); color: var(--color-text-light-2); }
+    .icon-btn.danger { background: rgba(154, 74, 74, 0.2); color: var(--color-accent-red); }
+    .icon-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
     /* Floating selection CTA — copy/reply the highlighted text, positioned
        over the selection (fixed, viewport coords). Buttons reuse .icon-btn. */
     .selection-cta {
@@ -938,19 +945,32 @@
       background: var(--color-text-light);
       transform: translateX(8px);
     }
+    /* Toggle Size=Big — 32x20 track, 16x16 round knob; off track = table-row-hover */
+    .toggle.big { width: 32px; height: 20px; background: var(--color-bg-table-row-hover); }
+    .toggle.big .knob { width: 16px; height: 16px; border-radius: var(--radius-full); }
+    .toggle-label input:checked + .toggle.big { background: var(--color-accent-blue); }
+    .toggle-label input:checked + .toggle.big .knob { transform: translateX(12px); }
+    /* Button Type=Text — 28h r8 pad6/8, ghost by default (bg = panel), fills on hover */
     .text-btn {
-      height: 20px;
-      padding: 2px 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      padding: 6px 8px;
       border: none;
       border-radius: 8px;
-      background: var(--color-border-input);
+      background: var(--color-bg-panel);
       color: var(--color-text-light-2);
       font-size: 10px;
       line-height: 10px;
       cursor: pointer;
     }
-    .text-btn:hover { color: var(--color-text-light); }
+    .text-btn:hover { background: var(--color-border-input); color: var(--color-text-light); }
     .text-btn:disabled { opacity: 0.4; cursor: default; }
+    .text-btn.informed { background: rgba(74, 125, 201, 0.2); color: var(--color-accent-blue); }
+    .text-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
+    .text-btn.danger { background: rgba(154, 74, 74, 0.2); color: var(--color-accent-red); }
+    .text-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
     /* Text-size stepper — Figma "Text Size" 330:1547: one #333 pill (r10,
        24h), three 24x24 cells with 16px line icons. Minus/plus read
        --color-text-dimmer, the centre glyph --color-text-dimmest. */
