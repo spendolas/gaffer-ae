@@ -70,6 +70,7 @@
       --color-btn-primary-ghost: var(--color-btn-primary-ghost);  /* btn/primary-bg @.2 — Informed / send rest */
       --color-btn-danger-ghost: var(--color-btn-danger-ghost);    /* btn/danger-hover @.2 — Danger rest */
       --color-btn-hollow-hover: rgba(255, 255, 255, 0.2);  /* Icon Hollow hover */
+      --color-btn-rest: #292929;  /* bg/panel + border/default@.4 (2 stacked fills) — Icon/Text default */
       /* Space + radius scale */
       --space-2: 2px; --space-4: 4px; --space-6: 6px; --space-8: 8px;
       --space-12: 12px; --space-16: 16px;
@@ -675,12 +676,12 @@
     /* Prompt Default/Disabled = ghost blue + blue glyph; Hover fills solid + light glyph */
     .send-btn { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
     .send-btn:hover:not(:disabled):not(.offline) { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
-    .send-btn:disabled { cursor: default; }
+    .send-btn:disabled, .stop-btn:disabled { opacity: 0.4; cursor: default; } /* Disabled = Default fill @ .4 */
     .send-btn.offline { background: var(--color-bg-panel); }
     .send-btn.offline .gicon { visibility: hidden; }
     /* Prompt Danger (stop) = ghost dark-red at rest, solid bright red on hover */
-    .stop-btn { background: var(--color-btn-danger-ghost); color: var(--color-text-light); }
-    .stop-btn:hover { background: var(--color-btn-danger-bg); }
+    .stop-btn { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
+    .stop-btn:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
 
     /* Activity log */
     /* ActivityLog — Figma set 191:1343: collapsed 40h / expanded 144h.
@@ -727,12 +728,13 @@
       padding: 6px;
       border: none;
       border-radius: 8px;
-      background: var(--color-bg-panel);
+      background: var(--color-btn-rest);
       color: var(--color-text-dimmer);
       cursor: pointer;
     }
     .icon-btn .gicon { width: 16px; height: 16px; display: block; }
     .icon-btn:hover { background: var(--color-border-input); color: var(--color-text-light-2); }
+    .icon-btn:disabled { opacity: 0.4; cursor: default; } /* Disabled = Default fill @ .4 */
     .icon-btn.informed { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
     .icon-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
     .icon-btn.hollow { background: transparent; }
@@ -964,7 +966,7 @@
       padding: 6px 8px;
       border: none;
       border-radius: 8px;
-      background: var(--color-bg-panel);
+      background: var(--color-btn-rest);
       color: var(--color-text-light-2);
       font-size: 10px;
       line-height: 10px;
