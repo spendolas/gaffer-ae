@@ -19,9 +19,16 @@ const STAR = '<svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000
 
 function normalize(svg) {
   return svg
-    .replace(/\s+width="[^"]*"/i, '')
-    .replace(/\s+height="[^"]*"/i, '')
-    .replace(/#DDDDDD/gi, 'currentColor')
+    // Drop Figma clip-path scaffolding (<defs>/<clipPath>/<rect> + the group
+    // wrapper + clip-path refs) — unnecessary for glyphs that fit the viewBox,
+    // and duplicate clip ids would clash once the same icon renders twice.
+    .replace(/<defs>[\s\S]*?<\/defs>/gi, '')
+    .replace(/\s*clip-path="[^"]*"/gi, '')
+    .replace(/<\/?g\b[^>]*>/gi, '')
+    // Drop element dimensions (CSS sizes .gicon) and pin the single design
+    // colour to currentColor so the glyph inherits its context.
+    .replace(/\s+(?:width|height)="[^"]*"/gi, '')
+    .replace(/(stroke|fill)="#[0-9A-Fa-f]{3,8}"/g, '$1="currentColor"')
     .replace(/>\s+</g, '><')
     .replace(/\s*\n\s*/g, ' ')
     .replace(/\s{2,}/g, ' ')
