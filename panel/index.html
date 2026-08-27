@@ -70,7 +70,7 @@
       --color-btn-primary-ghost: var(--color-btn-primary-ghost);  /* btn/primary-bg @.2 — Informed / send rest */
       --color-btn-danger-ghost: var(--color-btn-danger-ghost);    /* btn/danger-hover @.2 — Danger rest */
       --color-btn-hollow-hover: rgba(255, 255, 255, 0.2);  /* Icon Hollow hover */
-      --color-btn-rest: #292929;  /* bg/panel + border/default@.4 (2 stacked fills) — Icon/Text default */
+      --color-btn-rest-overlay: rgba(51, 51, 51, 0.4);  /* border/default @.4 — top fill layered over bg/panel (Icon/Text default; not composited) */
       /* Space + radius scale */
       --space-2: 2px; --space-4: 4px; --space-6: 6px; --space-8: 8px;
       --space-12: 12px; --space-16: 16px;
@@ -728,7 +728,7 @@
       padding: 6px;
       border: none;
       border-radius: 8px;
-      background: var(--color-btn-rest);
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       color: var(--color-text-dimmer);
       cursor: pointer;
     }
@@ -966,7 +966,7 @@
       padding: 6px 8px;
       border: none;
       border-radius: 8px;
-      background: var(--color-btn-rest);
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       color: var(--color-text-light-2);
       font-size: 10px;
       line-height: 10px;
