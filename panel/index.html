@@ -461,13 +461,14 @@
       right: -6px;
       width: 16px;
       height: 16px;
-      padding: 2px;
-      border-radius: 8px;
+      padding: 4px; /* CloseBtn 219:3707 — 8px Close glyph inset in a 16px circle */
+      border-radius: var(--radius-full);
       background: var(--color-btn-icon-bg);
       color: var(--color-text-light);
       cursor: pointer;
       user-select: none;
     }
+    .paste-chip-x .gicon, .paste-chip-x.gicon svg { width: 8px; height: 8px; }
     .paste-chip-x:hover { background: var(--color-accent-red); color: var(--color-text-white); }
 
     /* Reply-quote tray — dedicated area above the input for quoted snippets
@@ -550,18 +551,18 @@
     .reply-quote-text, .reply-quote-text * { color: var(--color-text-hint) !important; }
     .reply-quote-text code { background: rgba(255, 255, 255, 0.06); }   /* inline chip: amber → faint */
     .reply-quote-text pre { background: rgba(255, 255, 255, 0.04); }    /* code block: dim neutral */
-    .reply-quote-x { /* DismissBtn 428:3201 — 20x20 r8, icon stroke text/hint #555 */
+    .reply-quote-x { /* DismissBtn 428:3201 — 28x28 r8, 16px icon, stroke text/hint #555 */
       flex-shrink: 0;
       align-self: flex-start;
-      width: 20px;
-      height: 20px;
-      padding: 2px;
+      width: 28px;
+      height: 28px;
+      padding: 6px;
       border: none;
       border-radius: 8px;
       background: transparent;
       color: var(--color-text-hint);
       cursor: pointer;
-      opacity: 0; /* revealed on row hover / keyboard focus — keeps its 20px slot so nothing reflows */
+      opacity: 0; /* revealed on row hover / keyboard focus — keeps its 28px slot so nothing reflows */
       transition: opacity 0.15s var(--ease-state), color 0.15s var(--ease-state);
     }
     .reply-quote-row:hover .reply-quote-x,
