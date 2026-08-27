@@ -108,6 +108,9 @@
       vertical-align: middle;
     }
     .gicon svg { display: block; width: 100%; height: 100%; }
+    /* keep the Lucide stroke at 1 device px at any icon size (e.g. the 8px
+       CloseBtn glyph, where a 16-unit viewBox would otherwise scale it to .5px) */
+    .gicon svg path { vector-effect: non-scaling-stroke; }
 
     /* Chat */
     .chat-messages {
