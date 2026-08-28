@@ -199,11 +199,7 @@
       keyEl.textContent = 'Bring you API key';
       metaEl.textContent = 'From the Anthropic console';
       metaEl.classList.add('dim'); // Multiline subtitle role, #777 — see .item-sub.dim
-      // Icon-only, Purpose=Default (grey) button — Figma 516:42191, Icon=Ethernet
-      // (component 516:44855). TODO: GafferIcons has no `ethernet` glyph yet —
-      // export it from Figma component 516:44855 and add it to panel/icons.js;
-      // until then this renders an empty icon-only button (correct shape/color,
-      // missing glyph only).
+      // Icon-only, Purpose=Default (grey) button — Figma 516:42191, Icon=Ethernet (516:44855).
       connectBtn.className = 'icon-btn';
       connectBtn.title = 'Add key';
       connectBtn.textContent = '';
