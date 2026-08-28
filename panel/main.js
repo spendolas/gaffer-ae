@@ -624,6 +624,10 @@
         if (data.model) {
           currentModel = data.model;
           updateModelSelect();
+          // Restoring a model must re-resolve the per-model effort list —
+          // otherwise the dot count stays whatever the pre-restore default
+          // was until the next 'models' message happens to arrive.
+          applyEffortsForModel();
         }
         if (data.variant) {
           // migrate the short-lived 'latest' naming
@@ -632,8 +636,11 @@
         }
         if (data.effort) {
           currentEffort = data.effort;
-          renderEffort();
         }
+        // Always (re)render once model/effort restore is settled, even if
+        // data.model/data.effort were both absent — keeps the dot count and
+        // active dot consistent with currentModel/currentEffort as restored.
+        renderEffort();
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
           var acEl = document.getElementById('setAutoCheck'); if (acEl) acEl.checked = autoCheckUpdates;
@@ -2509,16 +2516,37 @@
     // idx..n-1 stay grey) — same ordering renderEffort() builds fresh.
     slider.insertBefore(thumb, dots[idx] || null);
   }
-  // Nearest dot index for a clientX over the track (left edge → 0, right → n-1).
+  // Nearest dot index for a clientX over the track. Measures the LIVE
+  // .e-dot rects rather than assuming an even i/(n-1) split of the track
+  // width: the track's layout is `justify-content: space-between` with the
+  // thumb (18px) as a real flex sibling narrower than a dot (24px), so a
+  // dot's rendered center shifts by a whole gap+thumb-width depending on
+  // whether the thumb currently sits before or after it (same dot index can
+  // land at a different pixel position depending on the CURRENT active
+  // index). A naive linear fraction over the full track therefore snapped
+  // to the wrong neighbor near the thumb's current position; snapping to
+  // the actual measured centers is correct regardless of that shift.
   function effortIndexFromClientX(clientX) {
     var slider = document.getElementById('setEffortDots');
     var n = discoveredEfforts.length;
     if (!slider || n <= 1) return 0;
-    var r = slider.getBoundingClientRect();
-    if (r.width <= 0) return 0;
-    var frac = (clientX - r.left) / r.width;
-    frac = Math.max(0, Math.min(1, frac));
-    return Math.round(frac * (n - 1));
+    var dots = slider.querySelectorAll('.e-dot');
+    if (dots.length !== n) {
+      // Dots not rendered yet / stale — fall back to a linear approximation
+      // over the track width rather than failing outright.
+      var r = slider.getBoundingClientRect();
+      if (r.width <= 0) return 0;
+      var frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+      return Math.round(frac * (n - 1));
+    }
+    var best = 0, bestDist = Infinity;
+    for (var i = 0; i < dots.length; i++) {
+      var dr = dots[i].getBoundingClientRect();
+      var center = dr.left + dr.width / 2;
+      var dist = Math.abs(clientX - center);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    }
+    return best;
   }
   // Set effort from a dot index (drag/click). While a drag is active, update
   // in place (updateEffortVisual) so crossing dots doesn't rebuild the whole
