@@ -78,6 +78,7 @@ window.__audit = (function () {
     var sc = document.querySelector('.selection-cta'); if (sc && sc.parentNode) sc.parentNode.removeChild(sc);
     var ts = document.getElementById('toastStack'); if (ts) ts.innerHTML = '';
     var sm = document.getElementById('settingsModal'); if (sm) sm.hidden = true;
+    var am = document.getElementById('alertModal'); if (am) { am.hidden = true; am.classList.remove('tk-open', 'tk-closing'); }
     var pops = document.querySelectorAll('.select-popup'); for (var pi = 0; pi < pops.length; pi++) pops[pi].hidden = true;
     // The 'disabled' state force-sets .disabled on every button matching this
     // selector (see below) to capture the Figma State=Disabled variant. Undo
@@ -249,6 +250,16 @@ window.__audit = (function () {
       document.querySelector('.activity-log').classList.add('expanded');
       var b = document.getElementById('modelSelectBtn');
       if (b) b.click(); // open the model Dropdown popup
+    },
+    // ModalFullScreen (487:38896) — force the in-panel modal visible so its
+    // anchored nodes are measured shown (otherwise hidden = 0×0 false-fails).
+    'alert-modal': function () {
+      reset();
+      // Plain single-OK modal — matches how the 487:38896 anchors were built
+      // (the confirm/danger variant is a runtime option, verified separately).
+      if (window.__gaffer && window.__gaffer.showModal) {
+        window.__gaffer.showModal('Gaffer is up to date.', { title: 'Updates' });
+      }
     },
   };
   // Interactive elements whose :hover/:focus/:active variants exist in Figma but
