@@ -23,9 +23,11 @@
   var sendBtnEl = document.getElementById('sendBtn');
   var stopBtnEl = document.getElementById('stopBtn');
   var clearBtnEl = document.getElementById('clearBtn');
-  var modelSelectBtnEl = document.getElementById('modelSelectBtn');
-  var modelSelectLabelEl = document.getElementById('modelSelectLabel');
-  var modelSelectPopupEl = document.getElementById('modelSelectPopup');
+  // Model/variant/effort selects live in the Settings modal (the source of
+  // truth); the modal drives currentModel/currentVariant/currentEffort directly.
+  var modelSelectBtnEl = document.getElementById('setModelBtn');
+  var modelSelectLabelEl = document.getElementById('setModelLabel');
+  var modelSelectPopupEl = document.getElementById('setModelPopup');
   var moreLabelEl = document.getElementById('moreLabel');
   var moreChevronEl = document.getElementById('moreChevron');
   var autoCheckEl = document.getElementById('autoCheckUpdates');
@@ -568,7 +570,7 @@
         }
         if (data.effort) {
           currentEffort = data.effort;
-          updateEffortSelect();
+          renderEffort();
         }
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
@@ -2170,7 +2172,11 @@
     });
     return opts;
   }
-  var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'].map(function (v) { return { value: v, label: labelize(v) }; });
+  // Effort is a custom dot-slider (not a popup select). EFFORT_LEVELS is the
+  // full ordered scale; discoveredEfforts is what the current daemon/model
+  // actually allows (defaults to the full scale until the daemon reports).
+  var EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  var discoveredEfforts = EFFORT_LEVELS.slice();
   // Generic popup select: options is [{value,label}], get/set close over the
   // state var. Popup goes position:fixed on open so the drawer's
   // overflow:hidden (animation requirement) can't clip it. Returned handle
@@ -2231,11 +2237,12 @@
     function (v) {
       currentModel = v;
       rebuildVariantSelect(); // versions are family-specific
+      renderEffort(); // keep the effort slider consistent on model switch
     }
   );
   var variantSelect = makeSelect(
-    document.getElementById('variantSelectBtn'), document.getElementById('variantSelectPopup'),
-    document.getElementById('variantSelectLabel'), variantOptionsFor(currentModel),
+    document.getElementById('setVariantBtn'), document.getElementById('setVariantPopup'),
+    document.getElementById('setVariantLabel'), variantOptionsFor(currentModel),
     function () { return currentVariant; }, function (v) { currentVariant = v; }
   );
   function rebuildVariantSelect() {
@@ -2245,26 +2252,130 @@
     if (!valid) currentVariant = 'standard'; // pinned version orphaned by model switch
     variantSelect.setOptions(opts);
   }
-  var effortSelect = makeSelect(
-    document.getElementById('effortSelectBtn'), document.getElementById('effortSelectPopup'),
-    document.getElementById('effortSelectLabel'), EFFORTS,
-    function () { return currentEffort; }, function (v) { currentEffort = v; }
-  );
   var updateModelSelect = modelSelect.update;
   var updateVariantSelect = variantSelect.update;
-  var updateEffortSelect = effortSelect.update;
+  // Given an effort no longer in `levels`, return the closest one on the full
+  // EFFORT_LEVELS scale (so 'max' clamps to the highest still-allowed level).
+  function nearestEffort(target, levels) {
+    if (levels.indexOf(target) >= 0) return target;
+    var ti = EFFORT_LEVELS.indexOf(target);
+    if (ti < 0) return levels[0];
+    var best = levels[0], bestDist = Infinity;
+    for (var i = 0; i < levels.length; i++) {
+      var li = EFFORT_LEVELS.indexOf(levels[i]);
+      if (li < 0) continue;
+      var dist = Math.abs(li - ti);
+      if (dist < bestDist) { bestDist = dist; best = levels[i]; }
+    }
+    return best;
+  }
   function applyModelOptions(data) {
     if (Array.isArray(data.models) && data.models.length) {
       modelSelect.setOptions(data.models.map(function (v) { return { value: v, label: labelize(v) }; }));
     }
     if (Array.isArray(data.efforts) && data.efforts.length) {
-      effortSelect.setOptions(data.efforts.map(function (v) { return { value: v, label: labelize(v) }; }));
+      discoveredEfforts = data.efforts.slice();
+      currentEffort = nearestEffort(currentEffort, discoveredEfforts);
+      renderEffort(); // dot count follows the discovered set
     }
     if (data.versions && typeof data.versions === 'object') {
       modelVersions = data.versions;
       rebuildVariantSelect();
     }
   }
+
+  // ── Effort dot-slider (Settings modal, 484:30131) ──
+  // Custom <div> slider (never a native range): renders exactly
+  // discoveredEfforts.length dots + a thumb inserted after the active index.
+  // Click or drag the thumb; snaps to the nearest dot. Pointer-capture pattern
+  // (preventDefault + setPointerCapture + window-level move/up) keeps the drag
+  // bound to the slider under mouse/pen/touch even as the dots rebuild mid-drag.
+  var DOT_FIG = ['484:30421', '484:31057', '484:31060', '484:31051', '484:31054'];
+  var CIRC_FIG = ['484:30422', '484:31058', '484:31061', '484:31052', '484:31055'];
+  function renderEffort() {
+    var levels = discoveredEfforts;
+    if (levels.indexOf(currentEffort) < 0) currentEffort = nearestEffort(currentEffort, levels);
+    var idx = levels.indexOf(currentEffort); if (idx < 0) idx = 0;
+    var lbl = document.getElementById('setEffortLabel');
+    if (lbl) lbl.textContent = labelize(currentEffort);
+    var slider = document.getElementById('setEffortDots');
+    if (!slider) return;
+    slider.innerHTML = '';
+    var n = levels.length;
+    // Figma tree (default idx=2/high snapshot 484:30131): n Dot frames + 1 Handle,
+    // thumb inserted AFTER `idx` dots. Dots d<idx = on (blue). data-fig anchors
+    // map node-for-node at the default 5-dot idx; extra dots just lack anchors.
+    var dotSeen = 0;
+    for (var d = 0; d < n; d++) {
+      if (d === idx) {
+        var th = document.createElement('span'); th.className = 'e-thumb';
+        th.setAttribute('data-fig', 'I484:27883;484:30631');
+        var f = document.createElement('span'); f.className = 'e-fill';
+        f.setAttribute('data-fig', 'I484:27883;484:30252');
+        var k = document.createElement('span'); k.className = 'e-knob';
+        k.setAttribute('data-fig', 'I484:27883;484:30565');
+        f.appendChild(k); th.appendChild(f); slider.appendChild(th);
+      }
+      var dt = document.createElement('span'); dt.className = 'e-dot' + (d < idx ? ' on' : '');
+      if (DOT_FIG[dotSeen]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[dotSeen]);
+      var circ = document.createElement('span'); circ.className = 'e-circ';
+      if (CIRC_FIG[dotSeen]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[dotSeen]);
+      dt.appendChild(circ); slider.appendChild(dt); dotSeen++;
+    }
+  }
+  // Nearest dot index for a clientX over the track (left edge → 0, right → n-1).
+  function effortIndexFromClientX(clientX) {
+    var slider = document.getElementById('setEffortDots');
+    var n = discoveredEfforts.length;
+    if (!slider || n <= 1) return 0;
+    var r = slider.getBoundingClientRect();
+    if (r.width <= 0) return 0;
+    var frac = (clientX - r.left) / r.width;
+    frac = Math.max(0, Math.min(1, frac));
+    return Math.round(frac * (n - 1));
+  }
+  // Set effort from a dot index (drag/click). Re-renders live; caller saves.
+  function applyEffortIndex(i) {
+    i = Math.max(0, Math.min(discoveredEfforts.length - 1, i));
+    var v = discoveredEfforts[i];
+    if (v && v !== currentEffort) { currentEffort = v; renderEffort(); }
+  }
+  var effortDragging = false;
+  function wireEffortSlider() {
+    var slider = document.getElementById('setEffortDots');
+    if (!slider || slider._effortWired) return;
+    slider._effortWired = true;
+    slider.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      try { slider.setPointerCapture(e.pointerId); } catch (_) {}
+      effortDragging = true;
+      applyEffortIndex(effortIndexFromClientX(e.clientX));
+    });
+    // Move/up on window so the drag survives capture loss while the button is
+    // held (the slider's own children get torn down + rebuilt on each render).
+    window.addEventListener('pointermove', function (e) {
+      if (!effortDragging) return;
+      applyEffortIndex(effortIndexFromClientX(e.clientX));
+    });
+    function endDrag() {
+      if (!effortDragging) return;
+      effortDragging = false;
+      saveChat();
+    }
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  }
+
+  // Sounds cue picker (Settings modal) — a real dropdown over the cue
+  // candidates; choosing one previews it (if sound is on) and persists.
+  var soundSelect = makeSelect(
+    document.getElementById('setSoundBtn'), document.getElementById('setSoundPopup'),
+    document.getElementById('setSoundLabel'),
+    SOUND_CANDIDATES.map(function (c) { return { value: c.id, label: c.label }; }),
+    function () { return soundVariant; },
+    function (v) { soundVariant = v; if (soundEnabled) playSelectedCue(); }
+  );
+
   var soundCycleBtnEl = document.getElementById('soundCycleBtn');
   function updateSoundCycleLabel() {
     if (!soundCycleBtnEl) return;
@@ -2439,48 +2550,20 @@
   }
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
-  var EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
   function syncSettings() {
     var vt = document.getElementById('versionText');
-    var sv = document.getElementById('setVersion'); if (sv && vt) sv.textContent = vt.textContent;
+    var sv = document.getElementById('setVersion'); if (sv && vt && sv !== vt) sv.textContent = vt.textContent;
     var lce = document.getElementById('setLastCheck');
     if (lce && !lce.textContent) lce.textContent = 'Not checked yet';
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
-    var sl = ''; for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) sl = SOUND_CANDIDATES[i].label;
-    document.getElementById('setSoundLabel').textContent = sl || soundVariant;
-    var ml = document.getElementById('modelSelectLabel');
-    var vl = document.getElementById('variantSelectLabel');
-    var el = document.getElementById('effortSelectLabel');
-    if (ml) document.getElementById('setModelLabel').textContent = ml.textContent;
-    if (vl) document.getElementById('setVariantLabel').textContent = vl.textContent;
-    if (el) document.getElementById('setEffortLabel').textContent = el.textContent;
-    var idx = EFFORT_LEVELS.indexOf(currentEffort); if (idx < 0) idx = 0;
-    var n = EFFORT_LEVELS.length;
-    var slider = document.getElementById('setEffortDots'); slider.innerHTML = '';
-    // Figma tree (default idx=2/high snapshot 484:30131): 5 Dot frames + 1 Handle,
-    // thumb inserted AFTER `idx` dots, all n dots kept. Dots d<idx = on (blue).
-    // data-fig anchors map to the Figma snapshot node-for-node at the default idx.
-    var DOT_FIG = ['484:30421', '484:31057', '484:31060', '484:31051', '484:31054'];
-    var CIRC_FIG = ['484:30422', '484:31058', '484:31061', '484:31052', '484:31055'];
-    var dotSeen = 0;
-    for (var d = 0; d < n; d++) {
-      if (d === idx) {
-        var th = document.createElement('span'); th.className = 'e-thumb';
-        th.setAttribute('data-fig', 'I484:27883;484:30631');
-        var f = document.createElement('span'); f.className = 'e-fill';
-        f.setAttribute('data-fig', 'I484:27883;484:30252');
-        var k = document.createElement('span'); k.className = 'e-knob';
-        k.setAttribute('data-fig', 'I484:27883;484:30565');
-        f.appendChild(k); th.appendChild(f); slider.appendChild(th);
-      }
-      var dt = document.createElement('span'); dt.className = 'e-dot' + (d < idx ? ' on' : '');
-      if (DOT_FIG[dotSeen]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[dotSeen]);
-      var circ = document.createElement('span'); circ.className = 'e-circ';
-      if (CIRC_FIG[dotSeen]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[dotSeen]);
-      dt.appendChild(circ); slider.appendChild(dt); dotSeen++;
-    }
+    // Labels + effort dots are owned by their controls (makeSelect / renderEffort);
+    // refresh them so the modal opens reflecting current state.
+    updateModelSelect();
+    updateVariantSelect();
+    soundSelect.update();
+    renderEffort();
     // Account / CLI from last auth status
     var em = document.getElementById('setCliEmail'), meta = document.getElementById('setCliMeta');
     var so = document.getElementById('setSignOutBtn');
@@ -2498,23 +2581,24 @@
   // Wire the modal controls back to existing state/handlers.
   document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; if (autoCheckEl) autoCheckEl.checked = autoCheckUpdates; saveChat(); });
   document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; if (autoModelEl) autoModelEl.checked = autoModel; saveChat(); });
-  document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; saveChat(); });
-  document.getElementById('setSoundPreview').addEventListener('click', function () { playReplySound(soundVariant); });
-  document.getElementById('setSoundBtn').addEventListener('click', function () {
-    var idx = 0; for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) idx = i;
-    var next = SOUND_CANDIDATES[(idx + 1) % SOUND_CANDIDATES.length]; soundVariant = next.id;
-    document.getElementById('setSoundLabel').textContent = next.label; saveChat();
-  });
+  // Enabling sound previews the selected cue (mirrors the reply-sound toggle).
+  document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; if (soundEnabled) playSelectedCue(); saveChat(); });
+  // Preview button plays the currently SELECTED cue (not a cue type) — gated by
+  // the sound toggle, ungated by focus so you can audition it.
+  document.getElementById('setSoundPreview').addEventListener('click', function () { if (soundEnabled) playSelectedCue(); });
+  // (setSoundBtn is now a real dropdown wired via soundSelect/makeSelect above.)
   document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
   document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
   document.getElementById('setSignOutBtn').addEventListener('click', function () { sendWs({ type: 'sign_out' }); closeSettings(); });
-  // Model / variant selects reuse the inline popups (functional today); the
-  // effort dots + API-card wiring are follow-ups. Clicking proxies to inline.
-  document.getElementById('setModelBtn').addEventListener('click', function () { var b = document.getElementById('modelSelectBtn'); if (b) b.click(); });
-  document.getElementById('setVariantBtn').addEventListener('click', function () { var b = document.getElementById('variantSelectBtn'); if (b) b.click(); });
+  // Model / variant / effort / sound controls are wired natively (makeSelect +
+  // renderEffort) — no proxying to inline.
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
   updateModelSelect();
+  updateVariantSelect();
+  soundSelect.update();
+  wireEffortSlider();
+  renderEffort();
   restoreChat();
   loadVersion();
   if (autoCheckUpdates) {

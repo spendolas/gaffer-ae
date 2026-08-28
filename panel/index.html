@@ -995,6 +995,7 @@
       border-radius: 16px;
       background: var(--color-bg-input);
       transition: background 0.15s;
+      cursor: pointer; /* every toggle variant is clickable — finger cursor on hover */
     }
     .toggle .knob {
       display: block;
@@ -1198,7 +1199,10 @@
     #setSoundBtn { width: 96px; } /* Sounds Dropdown fixed 96; padding cascades from .select-btn (6/4/6/8) */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
-    .settings-item .account-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; } /* Controls 475:10191/478:11963 — Connect<->Forget gap 4, +8 on top of row1's 8 = Figma's 16 Left-Block<->Controls gap */
+    /* Shared Stubs/Menu item (475:10304) skeleton: Left Block grows to fill and
+       left-aligns its label + control(s); Controls slot hugs on the right. */
+    .settings-item .row1-left { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; } /* Left Block 475:10304 — layoutGrow 1, Line 1 itemSpacing 8 */
+    .settings-item .row1-controls, .settings-item .account-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; } /* Controls slot 475:10191 — gap 4, +8 on top of row1's 8 = Figma's 16 Left-Block<->Controls gap */
     #setSignOutBtn { margin-left: 8px; } /* single-button Controls (475:10191, CLI): same +8 to reach Figma's 16 text<->button gap */
     /* Account avatars (ImageChip 475:10182, image-fill override) — per-account
        galaxy raster: amber = CLI, white = API. r8, cover. */
@@ -1216,6 +1220,9 @@
       height: 28px; padding: 0;
       background: var(--color-bg-table-row-hover);
       border-radius: 8px; overflow: hidden;
+      cursor: pointer;
+      touch-action: none; /* custom pointer-drag slider — stop ancestor pan/scroll stealing the drag (pointercancel) */
+      user-select: none; -webkit-user-select: none;
     }
     .effort-slider .e-dot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
     .effort-slider .e-circ { width: 4px; height: 4px; border-radius: var(--radius-full); background: var(--color-text-dimmest); }
@@ -1370,15 +1377,22 @@
             <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
           </div>
         </div>
-        <!-- Sounds -->
+        <!-- Sounds — Stubs/Menu item 475:10304: Left Block (grow:1, Line 1 holds
+             label + Sound Selector) + Controls slot (Toggle), same shared
+             row1-left / row1-controls pair the account rows use. -->
         <div class="settings-item" data-fig="I478:19413;478:11850">
           <div class="row1">
-            <span class="item-title" data-fig="I478:19413;478:11850;475:10185">Sounds</span>
-            <span class="sound-selector">
-              <button id="setSoundPreview" class="icon-btn" title="Preview" data-fig="I478:19413;478:11850;475:10189"></button>
-              <button id="setSoundBtn" class="select-btn" data-fig="I478:19413;478:11850;475:10190"><span id="setSoundLabel">Squeak</span></button>
+            <span class="row1-left">
+              <span class="item-title" data-fig="I478:19413;478:11850;475:10185">Sounds</span>
+              <span class="sound-selector">
+                <button id="setSoundPreview" class="icon-btn" title="Preview" data-fig="I478:19413;478:11850;475:10189"></button>
+                <button id="setSoundBtn" class="select-btn" data-fig="I478:19413;478:11850;475:10190"><span id="setSoundLabel">Squeak</span></button>
+                <div id="setSoundPopup" class="select-popup" hidden></div>
+              </span>
             </span>
-            <label class="toggle-label"><input type="checkbox" id="setSoundOn"><span class="toggle big" data-fig="I478:19413;478:11850;475:10192"><span class="knob"></span></span></label>
+            <span class="row1-controls">
+              <label class="toggle-label"><input type="checkbox" id="setSoundOn"><span class="toggle big" data-fig="I478:19413;478:11850;475:10192"><span class="knob"></span></span></label>
+            </span>
           </div>
         </div>
         <!-- Account / CLI -->
@@ -1413,9 +1427,11 @@
             <span class="select-group">
               <span class="select-wrap">
                 <button id="setModelBtn" class="select-btn" data-fig="I484:27883;484:35254"><span id="setModelLabel">Opus</span></button>
+                <div id="setModelPopup" class="select-popup" hidden></div>
               </span>
               <span class="select-wrap">
                 <button id="setVariantBtn" class="select-btn" data-fig="I484:27883;484:35448"><span id="setVariantLabel">Standard</span></button>
+                <div id="setVariantPopup" class="select-popup" hidden></div>
               </span>
             </span>
           </div>
