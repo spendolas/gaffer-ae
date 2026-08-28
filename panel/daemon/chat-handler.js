@@ -38,6 +38,29 @@ var GAFFER_TOOLS = [
   'mcp__gaffer__getProjectSettings',
 ];
 
+// Per-model effort overrides — MAINTAINED MAP, not CLI-derived.
+//
+// `claude --help` prints a single global `--effort <level>` enum
+// (low, medium, high, xhigh, max) with no per-model breakdown, and it is
+// IDENTICAL regardless of `--model` (verified: `claude --model haiku --help`
+// and `claude --model opus --help` produce the same --effort line). Live
+// `-p` calls at every effort level for haiku, sonnet, and opus all
+// succeeded with no rejection, and usage.output_tokens_details.thinking_tokens
+// varied with effort (e.g. haiku: 67 tokens at low vs 92 at max), confirming
+// every currently-aliased model accepts the full effort range rather than
+// silently capping it. (Tested against Claude CLI 2.1.236, 2026-08-28.)
+//
+// So today there is no known model that supports a narrower effort set than
+// the global list — this map exists as the single place to record one if
+// that ever changes (e.g. a future fast/non-thinking model alias that only
+// takes low/medium). Keyed by the same bare alias `listModelOptions()`
+// resolves from `--help` (e.g. 'opus', 'sonnet', 'haiku'), value is the
+// ordered effort list for that alias. Any model NOT listed here falls back
+// to the global `efforts` list — see `listModelOptions()` below.
+var MODEL_EFFORT_OVERRIDES = {
+  // 'haiku': ['low', 'medium'], // example shape — add real overrides here
+};
+
 // Build a human-readable label for tool pills. Strips mcp__gaffer__ prefix
 // and appends a hint from the tool's input args.
 function shortToolLabel(name, input) {
@@ -316,7 +339,16 @@ export class ChatHandler {
         });
       }
     } catch (e) { /* no state file — versions stay empty */ }
-    self.modelOptions = { models: models, efforts: efforts, versions: versions };
+    // Per-model efforts: MODEL_EFFORT_OVERRIDES is the maintained source of
+    // truth (see comment above it); any model absent from it — i.e. every
+    // model today — falls back to the global `efforts` list so the panel
+    // never renders an empty slider for an unmapped model.
+    var effortsByModel = {};
+    for (var mi = 0; mi < models.length; mi++) {
+      var modelName = models[mi];
+      effortsByModel[modelName] = MODEL_EFFORT_OVERRIDES[modelName] || efforts;
+    }
+    self.modelOptions = { models: models, efforts: efforts, effortsByModel: effortsByModel, versions: versions };
     return self.modelOptions;
   }
 

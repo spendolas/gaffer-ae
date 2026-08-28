@@ -31,7 +31,7 @@ bridge.onListMcps = async (socket) => {
   // options on the same trigger.
   chatHandler.listModelOptions().then((opts) => {
     if (socket && socket.readyState === 1) {
-      socket.send(JSON.stringify({ type: 'models', models: opts.models, efforts: opts.efforts, versions: opts.versions }));
+      socket.send(JSON.stringify({ type: 'models', models: opts.models, efforts: opts.efforts, effortsByModel: opts.effortsByModel, versions: opts.versions }));
     }
   }).catch(() => {});
   var result = await chatHandler.listMcps(function (icons) {
