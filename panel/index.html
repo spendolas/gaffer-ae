@@ -997,8 +997,8 @@
        controls (status star, clear, reload); Hint/Dim-10 (10/15) dimmest */
     .action-spell {
       padding: 0 2px;
-      font-size: 10px;
-      line-height: 15px;
+      font-size: calc(10px * var(--chat-text, 1));
+      line-height: calc(15px * var(--chat-text, 1));
       color: var(--color-text-dimmest);
       white-space: nowrap;
       opacity: 0;
