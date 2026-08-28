@@ -1184,7 +1184,10 @@
       background: var(--color-bg-panel);
       border-radius: 12px;
     }
-    .settings-item.gap8 { gap: 8px; } /* Models+Effort section (484:27834) uses gap 8 */
+    /* Models section — its OWN 2-col grid (484:27797), NOT the row skeleton.
+       label col (grow) + control col (hug 184); shared across both grid rows so
+       the dropdowns align with the effort slider below. gap 8 = Figma itemSpacing. */
+    .settings-item.models-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
     .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
     .settings-item .row2 .row2-grow { flex: 1 1 auto; min-width: 0; } /* Row 2 version/last-check slot grows, pushing Update button right (475:10197) */
@@ -1408,28 +1411,26 @@
             </span>
           </div>
         </div>
-        <!-- Models + Effort -->
-        <div class="settings-item gap8" data-fig="I484:27883;484:27834">
-          <div class="row1">
-            <span class="item-title muted" data-fig="I484:27883;484:35778">Models</span>
-            <span class="select-group">
-              <span class="select-wrap">
-                <button id="setModelBtn" class="select-btn" data-fig="I484:27883;484:35254"><span id="setModelLabel">Opus</span></button>
-                <div id="setModelPopup" class="select-popup" hidden></div>
-              </span>
-              <span class="select-wrap">
-                <button id="setVariantBtn" class="select-btn" data-fig="I484:27883;484:35448"><span id="setVariantLabel">Standard</span></button>
-                <div id="setVariantPopup" class="select-popup" hidden></div>
-              </span>
+        <!-- Models + Effort — its OWN 2-col grid (484:27797, EXCEPTION to the
+             canonical row skeleton): label col + control col shared across two
+             rows so the dropdowns align with the effort slider below. -->
+        <div class="settings-item models-grid" data-fig="I484:27883;484:27834">
+          <span class="item-title muted" data-fig="I484:27883;484:35778">Models</span>
+          <span class="select-group">
+            <span class="select-wrap">
+              <button id="setModelBtn" class="select-btn" data-fig="I484:27883;484:35254"><span id="setModelLabel">Opus</span></button>
+              <div id="setModelPopup" class="select-popup" hidden></div>
             </span>
-          </div>
-          <div class="row2">
-            <span class="effort-head">
-              <span class="item-sub" data-fig="I484:27883;484:31624">Effort</span>
-              <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
+            <span class="select-wrap">
+              <button id="setVariantBtn" class="select-btn" data-fig="I484:27883;484:35448"><span id="setVariantLabel">Standard</span></button>
+              <div id="setVariantPopup" class="select-popup" hidden></div>
             </span>
-            <span class="effort-slider" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
-          </div>
+          </span>
+          <span class="effort-head">
+            <span class="item-sub" data-fig="I484:27883;484:31624">Effort</span>
+            <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
+          </span>
+          <span class="effort-slider" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
         </div>
       </div>
     </div>
