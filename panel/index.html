@@ -413,10 +413,12 @@
     .toast.visible { opacity: 1; transform: translateY(0); }
     .toast .icon-btn { color: var(--color-text-default); } /* action icon = text/default (matches head icon), overriding the icon-btn dimmer default */
     .toast > .gicon { width: 16px; height: 16px; flex-shrink: 0; } /* Head Icon 16, currentColor text/default */
-    .toast-label { /* Framing 462:10025 pad4 + label text/default 12/16 */
+    .toast-label { /* Framing 462:10025 pad4 + label text/default 12/16;
+         scales with the chat text-size factor (--chat-text) like the rest
+         of the reading surface — 1x values match the original px at factor 1 */
       padding: 4px;
-      font-size: 12px;
-      line-height: 16px;
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
       white-space: nowrap;
     }
 
@@ -704,9 +706,10 @@
       cursor: default;
     }
     .alert-message { display: flex; flex-direction: column; gap: var(--space-12); }
-    .alert-title {
+    .alert-title { /* scales with --chat-text; line-height:1.3 is a unitless
+         ratio so it tracks font-size automatically, no calc() needed */
       margin: 0;
-      font-size: 14px;
+      font-size: calc(14px * var(--chat-text, 1));
       font-weight: 600;
       line-height: 1.3;
       color: var(--color-text-light);
@@ -714,8 +717,8 @@
     .alert-title[hidden] { display: none; }
     .alert-body {
       margin: 0;
-      font-size: 12px;
-      line-height: 16px;
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
       color: var(--color-text-dim);
       white-space: pre-wrap;
     }
@@ -730,8 +733,8 @@
       border-radius: var(--radius-8);
       background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       color: var(--color-text-dimmer);
-      font-size: 10px;
-      line-height: 16px;
+      font-size: calc(10px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
       cursor: pointer;
       text-align: center;
     }
@@ -1226,12 +1229,20 @@
       background: var(--color-overlay-lightbox);
     }
     .settings-modal[hidden] { display: none; }
-    .settings-card { /* ModalContainer 447:4824 — bg/input, r16, 280w, pad4 gap4 */
+    .settings-card { /* ModalContainer 447:4824 — bg/input, r16, pad4 gap4.
+         Hugs its widest .settings-item's real content (usually the Models
+         row's fixed 184px control column, or an account row's label) —
+         280 is now a floor (the Figma spec width), not a hardcoded width,
+         so a genuinely wider row can grow the card instead of every row
+         squeezing to fit a fixed 280. Every .settings-item then fills this
+         resolved width (see .settings-item width:100% below). */
       display: flex;
       flex-direction: column;
       align-items: center; /* counterAxis CENTER */
       gap: 4px;
-      width: 280px;
+      width: max-content;
+      min-width: 280px; /* Figma ModalContainer 447:4824 floor */
+      max-width: 100%; /* never exceed settings-modal's padded box, at any panel width */
       max-height: 100%;
       overflow-y: auto;
       padding: 4px;
@@ -1247,7 +1258,7 @@
       width: 100%; /* fill the card content width (card is align-items:center) */
     }
     #settingsSections { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-    .settings-title { font-size: 12px; line-height: 15.6px; font-weight: 600; color: var(--color-text-light); } /* #DDDDDD SemiBold */
+    .settings-title { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(15.6px * var(--chat-text, 1)); font-weight: 600; color: var(--color-text-light); } /* #DDDDDD SemiBold */
     .settings-item { /* Menu item — transparent by default; bg only on hover (Figma Menu item "Hovered" property) */
       display: flex;
       flex-direction: column;
@@ -1256,6 +1267,9 @@
       background: transparent;
       border-radius: 12px;
       transition: background 0.1s ease;
+      width: 100%; /* fill the hugged card width so every row equalizes to
+        the widest one (see .settings-card); box-sizing:border-box is
+        already global (line ~81) so padding is included */
     }
     .settings-item:hover { background: var(--color-bg-panel); }
     /* Models section — its OWN 2-col grid (484:27797), NOT the row skeleton.
@@ -1266,15 +1280,23 @@
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
     .settings-item .row2 .row2-grow { flex: 1 1 auto; min-width: 0; } /* Row 2 version/last-check slot grows, pushing Update button right (475:10197) */
     .settings-item .row2 .row2-controls { display: inline-flex; align-items: center; gap: 4px; } /* Row 2 Controls slot (Toggle/Buttons) */
-    .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-light-2); } /* Main Label #CCC */
+    .settings-item .item-title { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-light-2); } /* Main Label #CCC */
     .settings-item .item-title.muted { color: var(--color-text-muted); } /* Models label #AAA */
-    .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmest); } /* Secondary Pt #666 */
-    .settings-item .item-sub.lg { font-size: 12px; line-height: 16px; } /* version #666 T12 */
-    .settings-item .item-sub.dim { font-size: 12px; line-height: 16px; color: var(--color-text-dim); } /* Multiline subtitle #777 T12 */
+    .settings-item .item-sub { font-size: calc(10px * var(--chat-text, 1)); line-height: calc(15px * var(--chat-text, 1)); color: var(--color-text-dimmest); } /* Secondary Pt #666 */
+    .settings-item .item-sub.lg { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); } /* version #666 T12 */
+    .settings-item .item-sub.dim {
+      font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-dim); /* Multiline subtitle #777 T12 */
+      width: 0; min-width: 100%; /* Scrooge's description is a long single-
+        line string that would otherwise want ~500px unwrapped, dominating
+        the settings-card hug-to-widest sizing above; width:0 makes it
+        contribute nothing to that intrinsic pass (min-width:100% is a
+        no-op while the ancestor's own width is still indefinite there),
+        then it fills + wraps normally once the card's real width settles. */
+    }
     .settings-item .item-sub.meta { display: inline-flex; gap: 2px; } /* Secondary label frame gap 2 */
     .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
     .settings-item .item-col .item-sub { white-space: normal; }
-    .beta-badge { display: inline-block; margin-left: 8px; font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); background: var(--color-code-inline-bg); border-radius: var(--radius-8); padding: 1px 6px; } /* beta = amber code badge, pill bg 475:10186 */
+    .beta-badge { display: inline-block; margin-left: 8px; font-size: calc(9px * var(--chat-text, 1)); line-height: calc(13.5px * var(--chat-text, 1)); letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); background: var(--color-code-inline-bg); border-radius: var(--radius-8); padding: 1px 6px; } /* beta = amber code badge, pill bg 475:10186 */
     #setSoundBtn { width: 96px; } /* Sounds Dropdown fixed 96; padding cascades from .select-btn (6/4/6/8) */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
