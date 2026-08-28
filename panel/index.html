@@ -1185,22 +1185,24 @@
     .settings-item .item-sub.meta { display: inline-flex; gap: 2px; } /* Secondary label frame gap 2 */
     .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
     .settings-item .item-col .item-sub { white-space: normal; }
-    .beta-badge { font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); } /* beta = amber code badge */
-    #setSoundBtn { width: 96px; padding: 6px; } /* Sounds Dropdown fixed 96, uniform pad 6 */
+    .beta-badge { display: inline-block; margin-left: 8px; font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); background: var(--color-code-inline-bg); border-radius: var(--radius-8); padding: 1px 6px; } /* beta = amber code badge, pill bg 475:10186 */
+    #setSoundBtn { width: 96px; } /* Sounds Dropdown fixed 96; padding cascades from .select-btn (6/4/6/8) */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
-    .select-group { display: inline-flex; gap: 4px; }
+    .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
+    .settings-item .account-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; } /* Controls 475:10191/478:11963 — Connect<->Forget gap 4, +8 on top of row1's 8 = Figma's 16 Left-Block<->Controls gap */
+    #setSignOutBtn { margin-left: 8px; } /* single-button Controls (475:10191, CLI): same +8 to reach Figma's 16 text<->button gap */
     /* Account avatars (ImageChip 475:10182, image-fill override) — per-account
        galaxy raster: amber = CLI, white = API. r8, cover. */
     .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg) center/cover no-repeat; flex-shrink: 0; }
     #setCliAvatar { background-color: transparent; background-image: url("img/account-galaxy-cli.png"); }
     #setApiAvatar { background-color: transparent; background-image: url("img/account-galaxy-api.png"); }
-    .effort-head { display: flex; flex-direction: column; gap: 2px; }
+    .effort-head { display: flex; flex-direction: column; gap: 0; } /* 484:31616 itemSpacing 0 */
     /* Effort slider (484:30131) — #000@.5 r8 track, 5 dot-frames + 1 thumb,
        space-between. Mirrors Figma tree exactly: Dot(24w)>Circle(4px);
        Handle(18w)>fill(224w, clipped)>knob(16x24 r6). Dots left of thumb blue,
        right grey. Ghost-blue fill overflows left, clipped by track. */
     .effort-slider {
-      position: relative; flex: 1;
+      position: relative; flex: 0 0 184px; width: 184px; /* 484:30131 fixed 184, matches dropdown row */
       display: flex; align-items: center; justify-content: space-between; gap: 2px;
       height: 28px; padding: 0;
       background: var(--color-bg-table-row-hover);
@@ -1352,7 +1354,7 @@
         <div class="settings-item" data-fig="I478:18268;478:11752">
           <div class="row1">
             <div class="item-col">
-              <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode <span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
+              <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode<span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
               <span class="item-sub dim" data-fig="I478:18268;478:11752;478:11726">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
             </div>
             <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
@@ -1388,8 +1390,10 @@
               <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Not connected</span>
               <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">API</span>
             </div>
-            <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Connect</button>
-            <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194"></button>
+            <span class="account-controls" data-fig="I480:20902;478:12027;475:10191">
+              <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Connect</button>
+              <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194"></button>
+            </span>
           </div>
         </div>
         <!-- Models + Effort -->
