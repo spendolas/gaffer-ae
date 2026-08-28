@@ -1024,8 +1024,8 @@
       border-radius: 8px;
       background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       color: var(--color-text-dimmer);
-      font-size: 10px;
-      line-height: 10px;
+      font-size: calc(10px * var(--chat-text, 1)); /* Figma dropdown label 10px (183:1070); rides --chat-text */
+      line-height: calc(10px * var(--chat-text, 1));
       cursor: pointer;
     }
     /* Dropdown label (183:1070): layoutGrow 1 + LEFT — fills width, hugs left,
@@ -1058,9 +1058,11 @@
     }
     .select-popup .option {
       display: block;
-      padding: 7px 6px; /* option row 24h, pad L6 (195:1367) */
+      padding: 7px 6px; /* option row 24h (10px label + 7px t/b), pad L/R6 (195:1367) */
       border-radius: 6px;
-      color: var(--color-text-light-2);
+      color: var(--color-text-light-2); /* #CCC label (195:1370) */
+      font-size: calc(10px * var(--chat-text, 1)); /* Figma option label 10px; rides --chat-text */
+      line-height: calc(10px * var(--chat-text, 1));
       cursor: pointer;
       white-space: nowrap;
     }
