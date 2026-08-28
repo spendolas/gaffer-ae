@@ -145,7 +145,9 @@
 
   // ── Auth ──
 
+  var lastAuth = {}; // last auth_status payload — feeds the Settings CLI card
   function renderAuth(s) {
+    lastAuth = s || {};
     authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
     var card = document.getElementById('signInCard');
     var chip = document.getElementById('accountChip');
@@ -1492,6 +1494,7 @@
       window.__gaffer.clearReplyQuotes = clearReplyQuotes;
       window.__gaffer.currentSelectionQuote = currentSelectionQuote;
       window.__gaffer.showToast = showToast;
+      window.__gaffer.openSettings = openSettings;
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -2421,11 +2424,58 @@
     document.getElementById('settingsBtn').appendChild(icon('settings'));
     document.getElementById('settingsDismissBtn').appendChild(icon('close'));
   }
-  // Settings full-screen takeover open/close.
+  // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
-  document.getElementById('settingsBtn').addEventListener('click', function () { settingsModalEl.hidden = false; });
-  document.getElementById('settingsDismissBtn').addEventListener('click', function () { settingsModalEl.hidden = true; });
-  settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) settingsModalEl.hidden = true; });
+  var EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  function syncSettings() {
+    var vt = document.getElementById('versionText');
+    var sv = document.getElementById('setVersion'); if (sv && vt) sv.textContent = vt.textContent;
+    var lc = document.getElementById('versionText'); // last-check text lives with version; leave as-is
+    document.getElementById('setAutoCheck').checked = autoCheckUpdates;
+    document.getElementById('setScrooge').checked = autoModel;
+    document.getElementById('setSoundOn').checked = soundEnabled;
+    var sl = ''; for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) sl = SOUND_CANDIDATES[i].label;
+    document.getElementById('setSoundLabel').textContent = sl || soundVariant;
+    var ml = document.getElementById('modelSelectLabel');
+    var vl = document.getElementById('variantSelectLabel');
+    var el = document.getElementById('effortSelectLabel');
+    if (ml) document.getElementById('setModelLabel').textContent = ml.textContent;
+    if (vl) document.getElementById('setVariantLabel').textContent = vl.textContent;
+    if (el) document.getElementById('setEffortLabel').textContent = el.textContent;
+    var idx = EFFORT_LEVELS.indexOf(currentEffort);
+    var dots = document.getElementById('setEffortDots'); dots.innerHTML = '';
+    for (var d = 0; d < EFFORT_LEVELS.length; d++) { var s = document.createElement('span'); s.className = 'dot' + (d <= idx ? ' on' : ''); dots.appendChild(s); }
+    // Account / CLI from last auth status
+    var em = document.getElementById('setCliEmail'), meta = document.getElementById('setCliMeta');
+    var so = document.getElementById('setSignOutBtn');
+    if (lastAuth && lastAuth.loggedIn) {
+      em.textContent = lastAuth.email || 'Signed in';
+      meta.textContent = ['CLI', lastAuth.org, lastAuth.plan].filter(Boolean).join(' • ');
+      so.hidden = false;
+    } else { em.textContent = 'Signed out'; meta.textContent = 'CLI'; so.hidden = true; }
+  }
+  function openSettings() { syncSettings(); settingsModalEl.hidden = false; }
+  function closeSettings() { settingsModalEl.hidden = true; }
+  document.getElementById('settingsBtn').addEventListener('click', openSettings);
+  document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
+  settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) closeSettings(); });
+  // Wire the modal controls back to existing state/handlers.
+  document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; if (autoCheckEl) autoCheckEl.checked = autoCheckUpdates; saveChat(); });
+  document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; if (autoModelEl) autoModelEl.checked = autoModel; saveChat(); });
+  document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; saveChat(); });
+  document.getElementById('setSoundPreview').addEventListener('click', function () { playReplySound(soundVariant); });
+  document.getElementById('setSoundBtn').addEventListener('click', function () {
+    var idx = 0; for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) idx = i;
+    var next = SOUND_CANDIDATES[(idx + 1) % SOUND_CANDIDATES.length]; soundVariant = next.id;
+    document.getElementById('setSoundLabel').textContent = next.label; saveChat();
+  });
+  document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
+  document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
+  document.getElementById('setSignOutBtn').addEventListener('click', function () { sendWs({ type: 'sign_out' }); closeSettings(); });
+  // Model / variant selects reuse the inline popups (functional today); the
+  // effort dots + API-card wiring are follow-ups. Clicking proxies to inline.
+  document.getElementById('setModelBtn').addEventListener('click', function () { var b = document.getElementById('modelSelectBtn'); if (b) b.click(); });
+  document.getElementById('setVariantBtn').addEventListener('click', function () { var b = document.getElementById('variantSelectBtn'); if (b) b.click(); });
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
   updateModelSelect();

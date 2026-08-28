@@ -204,7 +204,8 @@ window.__audit = (function () {
     },
     'settings': function () {
       reset();
-      document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
     },
   };
   // Interactive elements whose :hover/:focus/:active variants exist in Figma but

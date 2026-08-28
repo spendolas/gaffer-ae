@@ -1173,10 +1173,20 @@
       background: var(--color-bg-panel);
       border-radius: 12px;
     }
+    .settings-item.gap8 { gap: 8px; } /* Models+Effort section (484:27834) uses gap 8 */
     .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
     .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-default); }
     .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmer); }
+    .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+    .settings-item .item-col .item-sub { white-space: normal; }
+    .beta-badge { font-size: 9px; line-height: 12px; color: var(--color-accent-blue); }
+    .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
+    .select-group { display: inline-flex; gap: 4px; }
+    .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg); flex-shrink: 0; }
+    .effort-dots { display: inline-flex; align-items: center; gap: 4px; }
+    .effort-dots .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--color-text-hint); }
+    .effort-dots .dot.on { background: var(--color-accent-blue); }
   </style>
 </head>
 <body>
@@ -1297,7 +1307,85 @@
         <span class="settings-title" data-fig="I475:10068;475:10043">Settings</span>
         <button id="settingsDismissBtn" class="icon-btn hollow" title="Close settings" data-fig="I475:10068;475:10044"></button>
       </div>
-      <div id="settingsSections"></div>
+      <div id="settingsSections">
+        <!-- Update -->
+        <div class="settings-item" data-fig="I478:14383;475:10505">
+          <div class="row1">
+            <div class="item-col">
+              <span class="item-title">Auto-check for updates</span>
+              <span class="item-sub" id="setVersion">v0.0.0</span>
+            </div>
+            <label class="toggle-label"><input type="checkbox" id="setAutoCheck"><span class="toggle big"><span class="knob"></span></span></label>
+          </div>
+          <div class="row2">
+            <button id="setCheckNowBtn" class="text-btn">Check now</button>
+            <span class="item-sub" id="setLastCheck"></span>
+            <button id="setUpdateBtn" class="text-btn informed" hidden>Update</button>
+          </div>
+        </div>
+        <!-- Scrooge -->
+        <div class="settings-item" data-fig="I478:18268;478:11752">
+          <div class="row1">
+            <div class="item-col">
+              <span class="item-title">Scrooge mode <span class="beta-badge">beta</span></span>
+              <span class="item-sub">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
+            </div>
+            <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big"><span class="knob"></span></span></label>
+          </div>
+        </div>
+        <!-- Sounds -->
+        <div class="settings-item" data-fig="I478:19413;478:11850">
+          <div class="row1">
+            <span class="item-title">Sounds</span>
+            <span class="sound-selector">
+              <button id="setSoundPreview" class="icon-btn" title="Preview"></button>
+              <button id="setSoundBtn" class="select-btn"><span id="setSoundLabel">Squeak</span></button>
+            </span>
+            <label class="toggle-label"><input type="checkbox" id="setSoundOn"><span class="toggle big"><span class="knob"></span></span></label>
+          </div>
+        </div>
+        <!-- Account / CLI -->
+        <div class="settings-item" data-fig="I478:13117;478:11902">
+          <div class="row1">
+            <span class="account-avatar" id="setCliAvatar"></span>
+            <div class="item-col">
+              <span class="item-title" id="setCliEmail">Signed out</span>
+              <span class="item-sub" id="setCliMeta">CLI</span>
+            </div>
+            <button id="setSignOutBtn" class="text-btn danger">Sign out</button>
+          </div>
+        </div>
+        <!-- Account / API (scaffold — no live key handling yet) -->
+        <div class="settings-item" data-fig="I480:20902;478:12027">
+          <div class="row1">
+            <span class="account-avatar" id="setApiAvatar"></span>
+            <div class="item-col">
+              <span class="item-title" id="setApiKey">Not connected</span>
+              <span class="item-sub" id="setApiMeta">API</span>
+            </div>
+            <button id="setApiConnectBtn" class="text-btn informed">Connect</button>
+            <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" hidden></button>
+          </div>
+        </div>
+        <!-- Models + Effort -->
+        <div class="settings-item gap8" data-fig="I484:27883;484:27834">
+          <div class="row1">
+            <span class="item-title">Models</span>
+            <span class="select-group">
+              <span class="select-wrap">
+                <button id="setModelBtn" class="select-btn"><span id="setModelLabel">Opus</span></button>
+              </span>
+              <span class="select-wrap">
+                <button id="setVariantBtn" class="select-btn"><span id="setVariantLabel">Standard</span></button>
+              </span>
+            </span>
+          </div>
+          <div class="row2">
+            <span class="item-title">Effort <span class="item-sub" id="setEffortLabel">High</span></span>
+            <span class="effort-dots" id="setEffortDots"></span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
