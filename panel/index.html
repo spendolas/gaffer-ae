@@ -739,6 +739,9 @@
       flex-shrink: 0;
       font-size: 10px;
     }
+    /* expanded=true (191:1341) padding is 4/0/0/0 — bottom collapses to 0
+       once the body row is visible, unlike the collapsed 4/0/4/0 */
+    .activity-log.expanded { padding-bottom: 0; }
     .activity-log summary {
       color: var(--color-text-dimmer);
       cursor: pointer;
@@ -834,7 +837,7 @@
     /* MCP tiles row (audit §4.6): 40h tiles, min 45w, equal-fill when few,
        horizontal scroll when many. Fill = state: blue enabled, none
        available, amber needs-auth, red failed. */
-    .activity-mcps { padding: 4px 0 4px 0; min-height: 48px; }
+    .activity-mcps { padding: 4px 2px; min-height: 48px; }
     .mcp-tiles {
       flex: 1;
       display: flex;
@@ -1264,12 +1267,12 @@
         </span>
         <button id="clearBtn" class="icon-btn" title="Clear chat" data-fig="191:1264"></button>
         <button id="reloadBtn" class="icon-btn" title="Reload panel" data-fig="191:1266"></button>
+        <button id="settingsBtn" class="icon-btn" title="Settings" data-fig="432:4316"></button>
         <span class="text-size" data-fig="330:1548">
           <button id="textDecBtn" class="icon-btn hollow" aria-label="Smaller chat text" title="Smaller chat text" data-fig="330:1501"></button>
           <button id="textResetBtn" class="icon-btn hollow" title="Reset chat text size" data-fig="509:41095"></button>
           <button id="textIncBtn" class="icon-btn hollow" aria-label="Larger chat text" title="Larger chat text" data-fig="330:1541"></button>
         </span>
-        <button id="settingsBtn" class="icon-btn" title="Settings" data-fig="432:4316"></button>
         <span id="actionSpell" class="action-spell" data-fig="291:11938"></span>
       </span>
       <span class="activity-more">
