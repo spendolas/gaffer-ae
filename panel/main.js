@@ -42,6 +42,10 @@
   var dropOverlayEl = document.getElementById('dropOverlay');
   var lightboxEl = document.getElementById('imgLightbox');
   var lightboxImgEl = lightboxEl ? lightboxEl.querySelector('img') : null;
+  var alertModalEl = document.getElementById('alertModal');
+  var alertModalTitleEl = document.getElementById('alertModalTitle');
+  var alertModalBodyEl = document.getElementById('alertModalBody');
+  var alertModalOkEl = document.getElementById('alertModalOk');
 
   // Chat state
   var currentSessionId = null;
@@ -992,6 +996,53 @@
     });
   }
 
+  // In-panel replacement for native alert() — native OS alerts look out of
+  // place inside the panel chrome. showModal(message, opts) sets the text,
+  // unhides the modal, and resolves via opts.onClose when dismissed (OK
+  // click, backdrop click, or Esc). opts: { title, okLabel, onClose }.
+  var alertModalOnClose = null;
+
+  function showModal(message, opts) {
+    opts = opts || {};
+    if (!alertModalEl || !alertModalBodyEl || !alertModalOkEl) {
+      // Should never happen, but never silently swallow a message the
+      // caller needed the user to see.
+      window.alert(message);
+      if (typeof opts.onClose === 'function') opts.onClose();
+      return;
+    }
+    if (alertModalTitleEl) {
+      if (opts.title) {
+        alertModalTitleEl.textContent = opts.title;
+        alertModalTitleEl.hidden = false;
+      } else {
+        alertModalTitleEl.hidden = true;
+      }
+    }
+    alertModalBodyEl.textContent = message;
+    alertModalOkEl.textContent = opts.okLabel || 'OK';
+    alertModalOnClose = typeof opts.onClose === 'function' ? opts.onClose : null;
+    alertModalEl.hidden = false;
+  }
+
+  function hideModal() {
+    if (!alertModalEl || alertModalEl.hidden) return;
+    alertModalEl.hidden = true;
+    var cb = alertModalOnClose;
+    alertModalOnClose = null;
+    if (cb) cb();
+  }
+
+  if (alertModalEl && alertModalOkEl) {
+    alertModalOkEl.addEventListener('click', hideModal);
+    alertModalEl.addEventListener('click', function (e) {
+      if (e.target === alertModalEl) hideModal(); // backdrop only, not the card
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !alertModalEl.hidden) hideModal();
+    });
+  }
+
   // Paste — best-effort. AE may intercept Cmd+V at app level; in that
   // case the event never fires. Drag-drop is the reliable path.
   chatInputEl.addEventListener('paste', function (e) {
@@ -1524,6 +1575,7 @@
         apiState.status = status;
         renderApi();
       };
+      window.__gaffer.showModal = showModal;
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -1981,7 +2033,7 @@
 
   function checkForUpdate(silent) {
     if (isDevInstall) {
-      if (!silent) alert('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      if (!silent) showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       return;
     }
     // Fetch remote version.json directly — content match means same release.
@@ -1991,11 +2043,11 @@
       .then(function (remote) {
         if (!remote || !remote.commit) return;
         if (!versionData.commit) {
-          if (!silent) alert('Local version unknown. Reinstall to enable updates.');
+          if (!silent) showModal('Local version unknown. Reinstall to enable updates.');
           return;
         }
         if (remote.commit === versionData.commit) {
-          if (!silent) alert('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
+          if (!silent) showModal('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
           return;
         }
         if (remote.commit === dismissedUpdateCommit) return;
@@ -2003,18 +2055,18 @@
         updateBannerEl.classList.add('visible');
         updateBannerEl._latestCommit = remote.commit;
       }).catch(function (e) {
-        if (!silent) alert('Update check failed: ' + e.message);
+        if (!silent) showModal('Update check failed: ' + e.message);
       });
   }
 
   function runUpdate() {
     if (isDevInstall) {
-      alert('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       updateBannerEl.classList.remove('visible');
       return;
     }
     if (chatBusy) {
-      alert('Please wait for current response to finish before updating.');
+      showModal('Please wait for current response to finish before updating.');
       return;
     }
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
