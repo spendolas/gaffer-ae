@@ -923,23 +923,24 @@
     /* ModelSelect atom — closed 20h r8 on border/input; popup r8 pad 2,
        options 20h, selected on btn/primary r6 */
     .select-wrap { position: relative; display: flex; flex: 1; }
-    .select-btn {
+    .select-btn { /* Dropdown state=closed (183:1072) — bg/panel + rest-overlay, #888 label; hover → border-input + #CCC */
       display: inline-flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: center;
       gap: 2px;
       flex: 1;
       min-width: 0;
-      height: 20px;
-      padding: 2px 4px 2px 8px;
+      height: 28px;
+      padding: 6px 4px 6px 8px;
       border: none;
       border-radius: 8px;
-      background: var(--color-border-input);
-      color: var(--color-text-light-2);
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
+      color: var(--color-text-dimmer);
       font-size: 10px;
       line-height: 10px;
       cursor: pointer;
     }
+    .select-btn:hover:not(:disabled) { background: var(--color-border-input); color: var(--color-text-light-2); } /* state=hover 450:5444 */
     .select-btn:disabled { opacity: 0.4; cursor: default; }
     .select-btn::after {
       content: "";
@@ -966,7 +967,7 @@
     }
     .select-popup .option {
       display: block;
-      padding: 5px 6px;
+      padding: 7px 6px; /* option row 24h, pad L6 (195:1367) */
       border-radius: 6px;
       color: var(--color-text-light-2);
       cursor: pointer;
@@ -1185,9 +1186,7 @@
     .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
     .settings-item .item-col .item-sub { white-space: normal; }
     .beta-badge { font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); } /* beta = amber code badge */
-    .settings-item .select-btn { padding: 6px; justify-content: center; background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel); } /* ModelSelect = bg/panel + rest-overlay, pad6, centred */
-    .settings-item.gap8 .select-btn { padding: 6px 4px 6px 8px; } /* model/variant selects pad R4 L8 */
-    #setSoundBtn { width: 96px; } /* Sounds ModelSelect fixed 96 */
+    #setSoundBtn { width: 96px; padding: 6px; } /* Sounds Dropdown fixed 96, uniform pad 6 */
     .effort-dots { background: var(--color-bg-table-row-hover); border-radius: 8px; padding: 0; } /* effort slider pill 484:30131 = #000@.5 r8, pad 0 */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; }
@@ -1264,8 +1263,8 @@
     <div class="activity-settings">
       <span class="row-label">Model:</span>
       <span class="select-wrap">
-        <button id="modelSelectBtn" class="select-btn"><span id="modelSelectLabel">Opus</span></button>
-        <div id="modelSelectPopup" class="select-popup" hidden></div>
+        <button id="modelSelectBtn" class="select-btn" data-fig="183:1072"><span id="modelSelectLabel">Opus</span></button>
+        <div id="modelSelectPopup" class="select-popup" hidden data-fig="195:1366"></div>
       </span>
       <span class="select-wrap">
         <button id="variantSelectBtn" class="select-btn" title="Context window"><span id="variantSelectLabel">Standard</span></button>

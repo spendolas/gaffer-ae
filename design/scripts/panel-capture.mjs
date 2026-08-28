@@ -78,6 +78,7 @@ window.__audit = (function () {
     var sc = document.querySelector('.selection-cta'); if (sc && sc.parentNode) sc.parentNode.removeChild(sc);
     var ts = document.getElementById('toastStack'); if (ts) ts.innerHTML = '';
     var sm = document.getElementById('settingsModal'); if (sm) sm.hidden = true;
+    var pops = document.querySelectorAll('.select-popup'); for (var pi = 0; pi < pops.length; pi++) pops[pi].hidden = true;
   }
   function bubble(role, text) {
     var m = el('div', 'chat-msg ' + role);
@@ -206,6 +207,17 @@ window.__audit = (function () {
       reset();
       if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
       else document.getElementById('settingsModal').hidden = false;
+      // Match Figma's depicted toggle states so the diff compares like-for-like
+      // (design = off #000@.5 / on primary-ghost; state is runtime).
+      document.getElementById('setAutoCheck').checked = false;
+      document.getElementById('setScrooge').checked = false;
+      document.getElementById('setSoundOn').checked = true;
+    },
+    'dropdown': function () {
+      reset();
+      document.querySelector('.activity-log').classList.add('expanded');
+      var b = document.getElementById('modelSelectBtn');
+      if (b) b.click(); // open the model Dropdown popup
     },
   };
   // Interactive elements whose :hover/:focus/:active variants exist in Figma but
