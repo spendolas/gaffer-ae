@@ -2498,7 +2498,7 @@
     // thumb can follow the pointer freely during a drag and ease into the nearest
     // dot on release. Dots d<idx are "on" (blue); the thumb sits over dot[idx].
     for (var d = 0; d < n; d++) {
-      var dt = document.createElement('span'); dt.className = 'e-dot' + (d < idx ? ' on' : '');
+      var dt = document.createElement('span'); dt.className = 'e-dot' + (d <= idx ? ' on' : '');
       if (DOT_FIG[d]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[d]);
       var circ = document.createElement('span'); circ.className = 'e-circ';
       if (CIRC_FIG[d]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[d]);
@@ -2557,7 +2557,10 @@
     var thumb = slider.querySelector('.e-thumb');
     var fill = slider.querySelector('.e-fill');
     if (thumb) thumb.style.left = px + 'px';
-    if (fill) fill.style.width = px + 'px';
+    // Fill wraps the knob on its right too: extend past the thumb centre by the
+    // knob half-width (8) + Figma's 2px pad, so the knob sits INSIDE the fill
+    // pill with an even 2px margin on top/right/bottom (Figma 484:30252 pad 2).
+    if (fill) fill.style.width = Math.min(w, px + 10) + 'px';
   }
   // Snap the thumb to dot `idx` — animated (ease into place) or instant.
   function settleEffortToIdx(idx, animate) {
@@ -2585,7 +2588,7 @@
       var lbl = document.getElementById('setEffortLabel'); if (lbl) lbl.textContent = labelize(v);
       var slider = document.getElementById('setEffortDots');
       var dots = slider ? slider.querySelectorAll('.e-dot') : [];
-      for (var d = 0; d < dots.length; d++) dots[d].classList.toggle('on', d < idx);
+      for (var d = 0; d < dots.length; d++) dots[d].classList.toggle('on', d <= idx);
     }
     return idx;
   }
