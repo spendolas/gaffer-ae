@@ -1187,6 +1187,8 @@
     .settings-item.gap8 { gap: 8px; } /* Models+Effort section (484:27834) uses gap 8 */
     .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
+    .settings-item .row2 .row2-grow { flex: 1 1 auto; min-width: 0; } /* Row 2 version/last-check slot grows, pushing Update button right (475:10197) */
+    .settings-item .row2 .row2-controls { display: inline-flex; align-items: center; gap: 4px; } /* Row 2 Controls slot (Toggle/Buttons) */
     .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-light-2); } /* Main Label #CCC */
     .settings-item .item-title.muted { color: var(--color-text-muted); } /* Models label #AAA */
     .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmest); } /* Secondary Pt #666 */
@@ -1201,9 +1203,11 @@
     .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
     /* Shared Stubs/Menu item (475:10304) skeleton: Left Block grows to fill and
        left-aligns its label + control(s); Controls slot hugs on the right. */
+    /* Shared canonical row pair (475:10304), reused by every settings row:
+       Left Block grows to fill + left-aligns its label/avatar + control(s);
+       Controls slot hugs on the right. */
     .settings-item .row1-left { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; } /* Left Block 475:10304 — layoutGrow 1, Line 1 itemSpacing 8 */
-    .settings-item .row1-controls, .settings-item .account-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; } /* Controls slot 475:10191 — gap 4, +8 on top of row1's 8 = Figma's 16 Left-Block<->Controls gap */
-    #setSignOutBtn { margin-left: 8px; } /* single-button Controls (475:10191, CLI): same +8 to reach Figma's 16 text<->button gap */
+    .settings-item .row1-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; } /* Controls slot 475:10191 — gap 4, +8 on top of row1's 8 = Figma's 16 Left-Block<->Controls gap */
     /* Account avatars (ImageChip 475:10182, image-fill override) — per-account
        galaxy raster: amber = CLI, white = API. r8, cover. */
     .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg) center/cover no-repeat; flex-shrink: 0; }
@@ -1314,29 +1318,42 @@
         <button id="settingsDismissBtn" class="icon-btn hollow" title="Close settings" data-fig="I475:10068;475:10044"></button>
       </div>
       <div id="settingsSections">
-        <!-- Update -->
+        <!-- Update — canonical row (475:10304): Left Block (label + version sub)
+             + Controls (Auto-check toggle); Row 2 = Check-now + last-check(grow)
+             + Update button in Row-2 controls. -->
         <div class="settings-item" data-fig="I478:14383;475:10505">
           <div class="row1">
-            <div class="item-col">
-              <span class="item-title" data-fig="I478:14383;475:10505;475:10185">Auto-check for updates</span>
-              <span class="item-sub" id="setVersion" data-fig="I478:14383;475:10505;475:10570">v0.0.0</span>
-            </div>
-            <label class="toggle-label"><input type="checkbox" id="setAutoCheck"><span class="toggle big" data-fig="I478:14383;475:10505;475:10192"><span class="knob"></span></span></label>
+            <span class="row1-left">
+              <div class="item-col">
+                <span class="item-title" data-fig="I478:14383;475:10505;475:10185">Auto-check for updates</span>
+                <span class="item-sub" id="setVersion" data-fig="I478:14383;475:10505;475:10570">v0.0.0</span>
+              </div>
+            </span>
+            <span class="row1-controls">
+              <label class="toggle-label"><input type="checkbox" id="setAutoCheck"><span class="toggle big" data-fig="I478:14383;475:10505;475:10192"><span class="knob"></span></span></label>
+            </span>
           </div>
           <div class="row2">
             <button id="setCheckNowBtn" class="text-btn" data-fig="I478:14383;475:10505;475:10196">Check now</button>
-            <span class="item-sub lg" id="setLastCheck" data-fig="I478:14383;475:10505;475:10197"></span>
-            <button id="setUpdateBtn" class="text-btn informed" data-fig="I478:14383;475:10505;475:10200" hidden>Update</button>
+            <span class="item-sub lg row2-grow" id="setLastCheck" data-fig="I478:14383;475:10505;475:10197"></span>
+            <span class="row2-controls">
+              <button id="setUpdateBtn" class="text-btn informed" data-fig="I478:14383;475:10505;475:10200" hidden>Update</button>
+            </span>
           </div>
         </div>
-        <!-- Scrooge -->
+        <!-- Scrooge — canonical row: Left Block (label + beta badge + multiline
+             description) + Controls (Scrooge toggle). -->
         <div class="settings-item" data-fig="I478:18268;478:11752">
           <div class="row1">
-            <div class="item-col">
-              <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode<span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
-              <span class="item-sub dim" data-fig="I478:18268;478:11752;478:11726">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
-            </div>
-            <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
+            <span class="row1-left">
+              <div class="item-col">
+                <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode<span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
+                <span class="item-sub dim" data-fig="I478:18268;478:11752;478:11726">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
+              </div>
+            </span>
+            <span class="row1-controls">
+              <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
+            </span>
           </div>
         </div>
         <!-- Sounds — Stubs/Menu item 475:10304: Left Block (grow:1, Line 1 holds
@@ -1357,26 +1374,35 @@
             </span>
           </div>
         </div>
-        <!-- Account / CLI -->
+        <!-- Account / CLI — canonical row: Left Block (avatar chip + email +
+             "CLI • team" secondary) + Controls (Sign out). -->
         <div class="settings-item" data-fig="I478:13117;478:11902">
           <div class="row1">
-            <span class="account-avatar" id="setCliAvatar" data-fig="I478:13117;478:11902;475:10182"></span>
-            <div class="item-col">
-              <span class="item-title" id="setCliEmail" data-fig="I478:13117;478:11902;475:10185">Signed out</span>
-              <span class="item-sub meta" id="setCliMeta" data-fig="I478:13117;478:11902;475:10557">CLI</span>
-            </div>
-            <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
+            <span class="row1-left">
+              <span class="account-avatar" id="setCliAvatar" data-fig="I478:13117;478:11902;475:10182"></span>
+              <div class="item-col">
+                <span class="item-title" id="setCliEmail" data-fig="I478:13117;478:11902;475:10185">Signed out</span>
+                <span class="item-sub meta" id="setCliMeta" data-fig="I478:13117;478:11902;475:10557">CLI</span>
+              </div>
+            </span>
+            <span class="row1-controls">
+              <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
+            </span>
           </div>
         </div>
-        <!-- Account / API (scaffold — no live key handling yet) -->
+        <!-- Account / API (scaffold — no live key handling yet) — canonical row:
+             Left Block (avatar chip + status + "API" secondary) + Controls
+             (Connect + Forget/shred). -->
         <div class="settings-item" data-fig="I480:20902;478:12027">
           <div class="row1">
-            <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
-            <div class="item-col">
-              <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Not connected</span>
-              <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">API</span>
-            </div>
-            <span class="account-controls" data-fig="I480:20902;478:12027;475:10191">
+            <span class="row1-left">
+              <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
+              <div class="item-col">
+                <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Not connected</span>
+                <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">API</span>
+              </div>
+            </span>
+            <span class="row1-controls" data-fig="I480:20902;478:12027;475:10191">
               <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Connect</button>
               <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194"></button>
             </span>
