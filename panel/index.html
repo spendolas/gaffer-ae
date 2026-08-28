@@ -79,6 +79,11 @@
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* The hidden attribute must win over any explicit display (flex/inline-flex
+       on buttons etc.) — otherwise hidden=true elements like a gated #setUpdateBtn
+       stay visible. tkShow/tkHide remove [hidden] before animating, so takeovers
+       are unaffected. */
+    [hidden] { display: none !important; }
     html, body { height: 100%; overflow: hidden; }
     body {
       font-family: "Source Sans 3", "Segoe UI", sans-serif;
