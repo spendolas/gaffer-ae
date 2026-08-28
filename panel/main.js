@@ -2368,6 +2368,15 @@
   function activityExpanded() {
     return activityEl && activityEl.classList.contains('expanded');
   }
+  // Hover-spell for the two summary-row cluster buttons that lacked it: the
+  // Settings gear, and the now-icon-only expand chevron (its More/Less label
+  // moved from inline text to the hover-spell).
+  wireSpell(document.getElementById('settingsBtn'), function () {
+    return document.getElementById('settingsBtn').title || 'Settings';
+  });
+  wireSpell(document.querySelector('.activity-more'), function () {
+    return activityExpanded() ? 'Less' : 'More';
+  });
   // No refresh button — the list refreshes under the hood: on expand,
   // then every 60s while the drawer stays open (silent, no flicker).
   setInterval(function () {
