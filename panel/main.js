@@ -2425,6 +2425,7 @@
     document.getElementById('settingsDismissBtn').appendChild(icon('close'));
     document.getElementById('setSoundPreview').appendChild(icon('speak'));
     document.getElementById('setApiForgetBtn').appendChild(icon('shred'));
+    // Avatars are per-account galaxy rasters via CSS background-image (see .account-avatar).
   }
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
@@ -2445,9 +2446,31 @@
     if (ml) document.getElementById('setModelLabel').textContent = ml.textContent;
     if (vl) document.getElementById('setVariantLabel').textContent = vl.textContent;
     if (el) document.getElementById('setEffortLabel').textContent = el.textContent;
-    var idx = EFFORT_LEVELS.indexOf(currentEffort);
-    var dots = document.getElementById('setEffortDots'); dots.innerHTML = '';
-    for (var d = 0; d < EFFORT_LEVELS.length; d++) { var s = document.createElement('span'); s.className = 'dot' + (d <= idx ? ' on' : ''); dots.appendChild(s); }
+    var idx = EFFORT_LEVELS.indexOf(currentEffort); if (idx < 0) idx = 0;
+    var n = EFFORT_LEVELS.length;
+    var slider = document.getElementById('setEffortDots'); slider.innerHTML = '';
+    // Figma tree (default idx=2/high snapshot 484:30131): 5 Dot frames + 1 Handle,
+    // thumb inserted AFTER `idx` dots, all n dots kept. Dots d<idx = on (blue).
+    // data-fig anchors map to the Figma snapshot node-for-node at the default idx.
+    var DOT_FIG = ['484:30421', '484:31057', '484:31060', '484:31051', '484:31054'];
+    var CIRC_FIG = ['484:30422', '484:31058', '484:31061', '484:31052', '484:31055'];
+    var dotSeen = 0;
+    for (var d = 0; d < n; d++) {
+      if (d === idx) {
+        var th = document.createElement('span'); th.className = 'e-thumb';
+        th.setAttribute('data-fig', 'I484:27883;484:30631');
+        var f = document.createElement('span'); f.className = 'e-fill';
+        f.setAttribute('data-fig', 'I484:27883;484:30252');
+        var k = document.createElement('span'); k.className = 'e-knob';
+        k.setAttribute('data-fig', 'I484:27883;484:30565');
+        f.appendChild(k); th.appendChild(f); slider.appendChild(th);
+      }
+      var dt = document.createElement('span'); dt.className = 'e-dot' + (d < idx ? ' on' : '');
+      if (DOT_FIG[dotSeen]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[dotSeen]);
+      var circ = document.createElement('span'); circ.className = 'e-circ';
+      if (CIRC_FIG[dotSeen]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[dotSeen]);
+      dt.appendChild(circ); slider.appendChild(dt); dotSeen++;
+    }
     // Account / CLI from last auth status
     var em = document.getElementById('setCliEmail'), meta = document.getElementById('setCliMeta');
     var so = document.getElementById('setSignOutBtn');

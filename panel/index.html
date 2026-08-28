@@ -790,14 +790,14 @@
     .icon-btn.danger:hover:not(:disabled) { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
     /* Floating selection CTA — copy/reply the highlighted text, positioned
        over the selection (fixed, viewport coords). Buttons reuse .icon-btn. */
-    .selection-cta { /* SelectedTextActions 507:40583 — r8 pill, bg/panel + btn/icon-bg overlay, 5-layer elevation, flush hollow buttons */
+    .selection-cta { /* SelectedTextActions 507:40583 — r8 pill, bg/panel + rest-overlay tint, 5-layer elevation, flush hollow buttons */
       position: fixed;
       z-index: 3000;
       display: flex;
       gap: 0;
       padding: 0;
       overflow: hidden; /* clipsContent — clip the flush buttons to the r8 pill */
-      background: linear-gradient(var(--color-btn-icon-bg), var(--color-btn-icon-bg)), var(--color-bg-panel);
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       border-radius: 8px;
       box-shadow: 0 1px 3px rgba(0,0,0,0.29), 0 5px 6px rgba(0,0,0,0.26), 0 10px 8px rgba(0,0,0,0.15), 0 18px 9px rgba(0,0,0,0.04), 0 28px 10px rgba(0,0,0,0.01);
       /* Subtle rise+fade in/out — stays in layout so offset* still measures */
@@ -1187,13 +1187,31 @@
     .settings-item .item-col .item-sub { white-space: normal; }
     .beta-badge { font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); } /* beta = amber code badge */
     #setSoundBtn { width: 96px; padding: 6px; } /* Sounds Dropdown fixed 96, uniform pad 6 */
-    .effort-dots { background: var(--color-bg-table-row-hover); border-radius: 8px; padding: 0; } /* effort slider pill 484:30131 = #000@.5 r8, pad 0 */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; }
-    .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg); flex-shrink: 0; }
-    .effort-dots { display: inline-flex; align-items: center; justify-content: space-between; gap: 2px; }
-    .effort-dots .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--color-text-hint); }
-    .effort-dots .dot.on { background: var(--color-accent-blue); }
+    /* Account avatars (ImageChip 475:10182, image-fill override) — per-account
+       galaxy raster: amber = CLI, white = API. r8, cover. */
+    .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg) center/cover no-repeat; flex-shrink: 0; }
+    #setCliAvatar { background-color: transparent; background-image: url("img/account-galaxy-cli.png"); }
+    #setApiAvatar { background-color: transparent; background-image: url("img/account-galaxy-api.png"); }
+    .effort-head { display: flex; flex-direction: column; gap: 2px; }
+    /* Effort slider (484:30131) — #000@.5 r8 track, 5 dot-frames + 1 thumb,
+       space-between. Mirrors Figma tree exactly: Dot(24w)>Circle(4px);
+       Handle(18w)>fill(224w, clipped)>knob(16x24 r6). Dots left of thumb blue,
+       right grey. Ghost-blue fill overflows left, clipped by track. */
+    .effort-slider {
+      position: relative; flex: 1;
+      display: flex; align-items: center; justify-content: space-between; gap: 2px;
+      height: 28px; padding: 0;
+      background: var(--color-bg-table-row-hover);
+      border-radius: 8px; overflow: hidden;
+    }
+    .effort-slider .e-dot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
+    .effort-slider .e-circ { width: 4px; height: 4px; border-radius: var(--radius-full); background: var(--color-text-dimmest); }
+    .effort-slider .e-dot.on .e-circ { background: var(--color-accent-blue); }
+    .effort-slider .e-thumb { flex: 0 0 auto; position: relative; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; width: 18px; height: 28px; cursor: pointer; }
+    .effort-slider .e-fill { position: absolute; right: 0; top: 0; bottom: 0; width: 224px; display: flex; align-items: center; justify-content: flex-end; padding: 2px; box-sizing: border-box; background: var(--color-btn-primary-ghost); border-radius: 8px; }
+    .effort-slider .e-knob { flex: 0 0 auto; width: 16px; height: 24px; border-radius: 6px; background: var(--color-accent-blue); }
   </style>
 </head>
 <body>
@@ -1388,9 +1406,11 @@
             </span>
           </div>
           <div class="row2">
-            <span class="item-sub" data-fig="I484:27883;484:31624">Effort</span>
-            <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
-            <span class="effort-dots" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
+            <span class="effort-head">
+              <span class="item-sub" data-fig="I484:27883;484:31624">Effort</span>
+              <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
+            </span>
+            <span class="effort-slider" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
           </div>
         </div>
       </div>
