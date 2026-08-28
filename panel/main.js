@@ -2687,6 +2687,15 @@
   // 8-line ceiling stays 8 lines at any text size.
   function resizeChatInput() {
     if (!chatInputEl) return;
+    // Pin the composer's font to the FINAL scaled px, bypassing the animated
+    // --chat-text var. Otherwise, when text-size changes, the var is still
+    // easing (0.18s @property transition) and scrollHeight is measured against
+    // a transient font — on shrink that fakes an overflow, wrongly latches
+    // `.wrapped` (bottom-align) on the empty field, and the placeholder sits
+    // low. The reading surface still animates; the JS-driven textarea can't
+    // smoothly animate its height anyway, so an instant composer resize is fine.
+    chatInputEl.style.fontSize = (14 * textScale) + 'px';
+    chatInputEl.style.lineHeight = (18 * textScale) + 'px';
     var line = Math.round(18 * textScale);
     var cap = Math.round(144 * textScale); // 8 lines
     chatInputEl.style.height = line + 'px';
