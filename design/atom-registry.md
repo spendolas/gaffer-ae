@@ -22,13 +22,13 @@ Status legend: ⬜ unverified · ✅ verified default+variants · ⚠️ finding
 | # | Atom (Figma set) | id | Variant axes | Code construct | Variant→code mapping | Status |
 |---|---|---|---|---|---|---|
 | A1 | Icon | 246:4094 | Icon (21: Brush…Galaxy) | `icons.js` keys | each variant = one icon key (path data) | ⬜ |
-| A2 | Button | 183:1054 | Type{Icon,Text,Prompt} × Purpose{Default,Informed,Danger,Hollow} × State{Default,Hover,Disabled} | `.icon-btn` / `.text-btn` / `.send-btn`+`.stop-btn` (Prompt) | Purpose: Default=base, `.informed`, `.danger`, `.hollow`; State: `:hover`, `:disabled` | ⬜ |
-| A3 | Toggle | 284:1298 | Selected{false,true} × Size{Small,Big} | `.toggle` | Selected→`:checked`/`.on`; Size→small default / big modifier | ⬜ |
+| A2 | Button | 183:1054 | Type{Icon,Text,Prompt} × Purpose{Default,Informed,Danger,Hollow} × State{Default,Hover,Disabled} | `.icon-btn` / `.text-btn` / `.send-btn`+`.stop-btn` (Prompt) | Purpose: Default=base, `.informed`, `.danger`, `.hollow`; State: `:hover`, `:disabled` | ✅ 26/27 exact; fixed text-btn.danger:hover→text-light. Figma-side anomalies (code correct, flag to fix in Figma): Text/Danger/Disabled 452:5749 label=accent/blue (s/b red); Prompt/Danger/Disabled 193:1352 uses Hover colors |
+| A3 | Toggle | 284:1298 | Selected{false,true} × Size{Small,Big} | `.toggle` | Selected→`:checked`/`.on`; Size→small default / big modifier | ✅ 4/4 variants exact (track/knob/radius/fills/travel 8·12px) |
 | A4 | Checkbox | 183:1052 | state{checked,unchecked} | native `<input type=checkbox>` (MCP rows) | state→`:checked` | ⬜ |
 | A5 | Pill (tool call) | 183:1053 | state{default,done,error,running} + text | tool-pill class (TBD: grep busy-pills) | state→color modifier | ⬜ |
-| A6 | Dropdown | 195:1373 | state{closed,open,hover} | `.select-btn` (closed) + `.select-popup` (open) | closed=base, open=`.select-popup` shown, hover=`:hover` | ⬜ **FLAGGED: label placement** |
+| A6 | Dropdown | 195:1373 | state{closed,open,hover} | `.select-btn` (closed) + `.select-popup` (open) | closed=base, open=`.select-popup` shown, hover=`:hover` | ⚠️→✅ closed default FIXED (label fill+left, 54d2304); open/hover variants still ⬜; label token text-dimmer≈text-muted both #888 (minor) |
 | A7 | InputField | 183:1068 | state{default,disabled,focused} | `.chat-input` / textarea | state→`:disabled`/`:focus` | ⬜ |
-| A8 | Toast | 464:10032 | Type{Info,Success,Warning,Error,Neutral} + label + trailing icon | `.toast` | Type→`.info/.success/.warning/.error/.neutral` | ⬜ |
+| A8 | Toast | 464:10032 | Type{Info,Success,Warning,Error,Neutral} + label + trailing icon | `.toast` | Type→`.info/.success/.warning/.error/.neutral` | ✅ 5/5 types exact (composited tints, shadow stack, label, trailing-icon color) |
 | A9 | Bubble | 183:1055 | role{user,assistant,error} × hasImages × withCopy | `.chat-msg` | role→`.user/.assistant/.error`; hasImages/withCopy→structural | ⬜ |
 | A10 | LED (conn status) | 183:1050 | state{red,amber,green} | status LED (TBD grep) | state→color | ⬜ |
 | A11 | StatusDot (MCP) | 183:1051 | status{auth,connected,failed} | mcp status dot (TBD grep) | status→color | ⬜ |
