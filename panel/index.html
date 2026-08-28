@@ -69,7 +69,7 @@
          node; CEP Chrome 99 has no color-mix, so named here). */
       --color-btn-primary-ghost: rgba(74, 125, 201, 0.2);  /* btn/primary-bg @.2 — Informed / send rest */
       --color-btn-danger-ghost: rgba(154, 74, 74, 0.2);    /* btn/danger-hover @.2 — Danger rest */
-      --color-btn-hollow-hover: rgba(255, 255, 255, 0.2);  /* Icon Hollow hover */
+      --color-btn-hollow-hover: rgba(255, 255, 255, 0.125);  /* Icon Hollow hover — white @12.5% */
       --color-btn-rest-overlay: rgba(51, 51, 51, 0.4);  /* border/default @.4 — top fill layered over bg/panel (Icon/Text default; not composited) */
       /* Space + radius scale */
       --space-2: 2px; --space-4: 4px; --space-6: 6px; --space-8: 8px;
@@ -411,6 +411,7 @@
     .toast.error   { background: linear-gradient(var(--color-accent-red), var(--color-accent-red)), var(--color-bg-table-row-hover); }
     .toast.neutral { background: linear-gradient(var(--color-bubble-assistant-border), var(--color-bubble-assistant-border)), var(--color-bg-table-row-hover); }
     .toast.visible { opacity: 1; transform: translateY(0); }
+    .toast .icon-btn { color: var(--color-text-default); } /* action icon = text/default (matches head icon), overriding the icon-btn dimmer default */
     .toast > .gicon { width: 16px; height: 16px; flex-shrink: 0; } /* Head Icon 16, currentColor text/default */
     .toast-label { /* Framing 462:10025 pad4 + label text/default 12/16 */
       padding: 4px;
@@ -1027,42 +1028,13 @@
     /* Text-size stepper — Figma "Text Size" 330:1547: one #333 pill (r10,
        24h), three 24x24 cells with 16px line icons. Minus/plus read
        --color-text-dimmer, the centre glyph --color-text-dimmest. */
-    .text-size { /* Text Size 330:1548 — 28h r10 pill, bg/panel + rest-overlay */
+    .text-size { /* Text Size 330:1547 — 28h r10 pill, bg/panel + rest-overlay; holds three Icon/Hollow buttons (−, AA, +) */
       display: inline-flex;
       align-items: center;
       height: 28px;
       background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       border-radius: 10px;
     }
-    .ts-btn { /* -/+ = Button 28x28 r8 pad6, bg/panel + rest-overlay (330:1501/1541) */
-      width: 28px;
-      height: 28px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 6px;
-      border: none;
-      border-radius: 8px;
-      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
-      cursor: pointer;
-    }
-    .ts-glyph { /* AA = bare 24x24 icon (330:1493), no button bg */
-      width: 24px;
-      height: 24px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px;
-      border: none;
-      background: transparent;
-      cursor: pointer;
-    }
-    .ts-btn .gicon, .ts-glyph .gicon { width: 16px; height: 16px; }
-    .ts-btn .gicon { color: var(--color-text-dimmer); }
-    .ts-glyph .gicon { color: var(--color-text-dimmest); }
-    .ts-btn:hover .gicon { color: var(--color-text-light); }
-    .ts-btn:disabled { cursor: default; }
-    .ts-btn:disabled .gicon { opacity: 0.4; }
     .model-select {
       background: var(--color-bg-input);
       border: 1px solid var(--color-border-input);
@@ -1157,6 +1129,54 @@
     .signin-error { font-size: 12px; color: var(--color-accent-red); margin-top: 8px; }
     .account-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-dimmer); }
     .account-chip[hidden] { display: none; }
+
+    /* Settings full-screen takeover — SettingsFullScreen 447:4826.
+       Backdrop (overlay/lightbox) + centered modal card (bg/input r16). */
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px; /* SettingsFullScreen pad 40 */
+      background: var(--color-overlay-lightbox);
+    }
+    .settings-modal[hidden] { display: none; }
+    .settings-card { /* ModalContainer 447:4824 — bg/input, r16, 280w, pad4 gap4 */
+      display: flex;
+      flex-direction: column;
+      align-items: center; /* counterAxis CENTER */
+      gap: 4px;
+      width: 280px;
+      max-height: 100%;
+      overflow-y: auto;
+      padding: 4px;
+      background: var(--color-bg-input);
+      border-radius: 16px;
+    }
+    .settings-header { /* Settings Header 475:10068 — pad 8/12, gap 24, space-between */
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 8px 12px;
+      width: 100%; /* fill the card content width (card is align-items:center) */
+    }
+    #settingsSections { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+    .settings-title { font-size: 12px; line-height: 15.6px; font-weight: 600; color: var(--color-text-light); } /* #DDDDDD SemiBold */
+    .settings-item { /* Menu item — bg/panel, r12, pad 12, gap 12 */
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 12px;
+      background: var(--color-bg-panel);
+      border-radius: 12px;
+    }
+    .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
+    .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-default); }
+    .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmer); }
   </style>
 </head>
 <body>
@@ -1205,10 +1225,11 @@
         <button id="clearBtn" class="icon-btn" title="Clear chat" data-fig="191:1264"></button>
         <button id="reloadBtn" class="icon-btn" title="Reload panel" data-fig="191:1266"></button>
         <span class="text-size" data-fig="330:1548">
-          <button id="textDecBtn" class="ts-btn" aria-label="Smaller chat text" title="Smaller chat text" data-fig="330:1501"></button>
-          <button id="textResetBtn" class="ts-glyph" title="Reset chat text size" data-fig="330:1493"></button>
-          <button id="textIncBtn" class="ts-btn" aria-label="Larger chat text" title="Larger chat text" data-fig="330:1541"></button>
+          <button id="textDecBtn" class="icon-btn hollow" aria-label="Smaller chat text" title="Smaller chat text" data-fig="330:1501"></button>
+          <button id="textResetBtn" class="icon-btn hollow" title="Reset chat text size" data-fig="509:41095"></button>
+          <button id="textIncBtn" class="icon-btn hollow" aria-label="Larger chat text" title="Larger chat text" data-fig="330:1541"></button>
         </span>
+        <button id="settingsBtn" class="icon-btn" title="Settings" data-fig="432:4316"></button>
         <span id="actionSpell" class="action-spell" data-fig="291:11938"></span>
       </span>
       <span class="activity-more">
@@ -1270,6 +1291,15 @@
   <div class="drop-overlay" id="dropOverlay" data-fig="191:1275"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
   <div class="img-lightbox" id="imgLightbox" hidden data-fig="191:1276"><img></div>
   <div class="toast-stack" id="toastStack" data-fig="480:23820"></div>
+  <div class="settings-modal" id="settingsModal" hidden data-fig="447:4826">
+    <div class="settings-card" data-fig="447:4824">
+      <div class="settings-header" data-fig="475:10068">
+        <span class="settings-title" data-fig="I475:10068;475:10043">Settings</span>
+        <button id="settingsDismissBtn" class="icon-btn hollow" title="Close settings" data-fig="I475:10068;475:10044"></button>
+      </div>
+      <div id="settingsSections"></div>
+    </div>
+  </div>
 
   <script src="lib/CSInterface.js"></script>
   <script src="lib/marked.min.js"></script>

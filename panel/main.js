@@ -2342,7 +2342,7 @@
   // controls (native CEF title tooltips don't render in the panel). The
   // centre glyph doubles as the readout — it shows the current percent.
   wireSpell(textDecEl, function () { return 'Smaller text'; });
-  wireSpell(textResetEl, function () { return 'Text size ' + Math.round(textScale * 100) + '% — tap to reset'; });
+  wireSpell(textResetEl, function () { return 'Text size ' + Math.round(textScale * 100) + '% · tap to reset'; });
   wireSpell(textIncEl, function () { return 'Larger text'; });
   applyTextScale(); // initialize label + disabled states at load
 
@@ -2418,7 +2418,14 @@
     dismissUpdateBtnEl.appendChild(icon('close'));
     var dropIconEl = document.getElementById('dropIcon');
     if (dropIconEl) dropIconEl.innerHTML = GafferIcons.drop;
+    document.getElementById('settingsBtn').appendChild(icon('settings'));
+    document.getElementById('settingsDismissBtn').appendChild(icon('close'));
   }
+  // Settings full-screen takeover open/close.
+  var settingsModalEl = document.getElementById('settingsModal');
+  document.getElementById('settingsBtn').addEventListener('click', function () { settingsModalEl.hidden = false; });
+  document.getElementById('settingsDismissBtn').addEventListener('click', function () { settingsModalEl.hidden = true; });
+  settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) settingsModalEl.hidden = true; });
   stopBtnEl.style.display = 'none';
   autoCheckEl.checked = autoCheckUpdates;
   updateModelSelect();
