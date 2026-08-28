@@ -2390,6 +2390,36 @@
     }
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
+    // Mouse + touch fallbacks: CEP's Chromium 99 delivers only real MouseEvents
+    // (and touch) for real HID input — NOT PointerEvents — so the pointer-only
+    // handlers above never fire for a real drag in the AE panel (CDP synthesizes
+    // pointer events, which masked this under automated capture/testing). The
+    // effortDragging guard makes double-firing harmless, and pointerdown's
+    // preventDefault suppresses the compat mousedown where pointer events ARE
+    // supported, so there's no double-processing either way.
+    slider.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      effortDragging = true;
+      applyEffortIndex(effortIndexFromClientX(e.clientX));
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!effortDragging) return;
+      applyEffortIndex(effortIndexFromClientX(e.clientX));
+    });
+    window.addEventListener('mouseup', endDrag);
+    slider.addEventListener('touchstart', function (e) {
+      if (!e.touches[0]) return;
+      e.preventDefault();
+      effortDragging = true;
+      applyEffortIndex(effortIndexFromClientX(e.touches[0].clientX));
+    }, { passive: false });
+    window.addEventListener('touchmove', function (e) {
+      if (!effortDragging || !e.touches[0]) return;
+      e.preventDefault();
+      applyEffortIndex(effortIndexFromClientX(e.touches[0].clientX));
+    }, { passive: false });
+    window.addEventListener('touchend', endDrag);
+    window.addEventListener('touchcancel', endDrag);
   }
 
   // Sounds cue picker (Settings modal) — a real dropdown over the cue
