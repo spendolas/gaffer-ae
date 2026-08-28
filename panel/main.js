@@ -2255,6 +2255,12 @@
   // actually allows (defaults to the full scale until the daemon reports).
   var EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
   var discoveredEfforts = EFFORT_LEVELS.slice();
+  // globalEfforts: the daemon's back-compat/fallback list (data.efforts), used
+  // when effortsByModel is absent or has no entry for the current model.
+  var globalEfforts = EFFORT_LEVELS.slice();
+  // effortsByModel: optional per-model efforts map from the daemon
+  // ({ modelId: [efforts...] }). Null until/unless the daemon sends it.
+  var effortsByModel = null;
   // Generic popup select: options is [{value,label}], get/set close over the
   // state var. Popup goes position:fixed on open so the drawer's
   // overflow:hidden (animation requirement) can't clip it. Returned handle
@@ -2315,6 +2321,7 @@
     function (v) {
       currentModel = v;
       rebuildVariantSelect(); // versions are family-specific
+      applyEffortsForModel(); // dot count + clamp follow the new model
       renderEffort(); // keep the effort slider consistent on model switch
     }
   );
@@ -2347,14 +2354,31 @@
     }
     return best;
   }
+  // Resolve discoveredEfforts for the CURRENT model: prefer
+  // effortsByModel[currentModel] (daemon-supplied, per-model) when present and
+  // non-empty, else fall back to the global list. Re-clamps currentEffort to
+  // the nearest level still valid on the resolved list. Safe to call even
+  // when effortsByModel is null (old daemon) — falls straight through to
+  // globalEfforts, same behavior as before this per-model wiring existed.
+  function applyEffortsForModel() {
+    var perModel = effortsByModel && effortsByModel[currentModel];
+    var levels = (Array.isArray(perModel) && perModel.length) ? perModel : globalEfforts;
+    discoveredEfforts = levels.slice();
+    currentEffort = nearestEffort(currentEffort, discoveredEfforts);
+  }
   function applyModelOptions(data) {
     if (Array.isArray(data.models) && data.models.length) {
       modelSelect.setOptions(data.models.map(function (v) { return { value: v, label: labelize(v) }; }));
     }
+    if (data.effortsByModel && typeof data.effortsByModel === 'object') {
+      effortsByModel = data.effortsByModel;
+    }
     if (Array.isArray(data.efforts) && data.efforts.length) {
-      discoveredEfforts = data.efforts.slice();
-      currentEffort = nearestEffort(currentEffort, discoveredEfforts);
-      renderEffort(); // dot count follows the discovered set
+      globalEfforts = data.efforts.slice();
+    }
+    if (effortsByModel || (Array.isArray(data.efforts) && data.efforts.length)) {
+      applyEffortsForModel(); // dot count follows the current model's set
+      renderEffort();
     }
     if (data.versions && typeof data.versions === 'object') {
       modelVersions = data.versions;
@@ -2401,6 +2425,32 @@
       dt.appendChild(circ); slider.appendChild(dt); dotSeen++;
     }
   }
+  // In-place visual update for the drag path: moves the existing thumb node
+  // and toggles .e-dot .on classes WITHOUT tearing down/rebuilding the dot
+  // tree (renderEffort() does a full innerHTML='' rebuild, which is fine for
+  // infrequent changes but caused flicker/instability when called on every
+  // dot crossed during a drag). Assumes the slider's current DOM already has
+  // exactly discoveredEfforts.length dots + one thumb (true whenever nothing
+  // besides the active index changed since the last full renderEffort()) —
+  // if that assumption doesn't hold (structure stale/mismatched), it falls
+  // back to a full renderEffort() so correctness always wins over smoothness.
+  function updateEffortVisual() {
+    var levels = discoveredEfforts;
+    var idx = levels.indexOf(currentEffort); if (idx < 0) idx = 0;
+    var lbl = document.getElementById('setEffortLabel');
+    if (lbl) lbl.textContent = labelize(currentEffort);
+    var slider = document.getElementById('setEffortDots');
+    if (!slider) return;
+    var dots = slider.querySelectorAll('.e-dot');
+    var thumb = slider.querySelector('.e-thumb');
+    if (!thumb || dots.length !== levels.length) { renderEffort(); return; }
+    for (var d = 0; d < dots.length; d++) {
+      dots[d].classList.toggle('on', d < idx);
+    }
+    // Thumb sits immediately before dot[idx] (dots 0..idx-1 are "on"/blue,
+    // idx..n-1 stay grey) — same ordering renderEffort() builds fresh.
+    slider.insertBefore(thumb, dots[idx] || null);
+  }
   // Nearest dot index for a clientX over the track (left edge → 0, right → n-1).
   function effortIndexFromClientX(clientX) {
     var slider = document.getElementById('setEffortDots');
@@ -2412,11 +2462,16 @@
     frac = Math.max(0, Math.min(1, frac));
     return Math.round(frac * (n - 1));
   }
-  // Set effort from a dot index (drag/click). Re-renders live; caller saves.
+  // Set effort from a dot index (drag/click). While a drag is active, update
+  // in place (updateEffortVisual) so crossing dots doesn't rebuild the whole
+  // tree each step; otherwise do a full renderEffort(). Caller saves.
   function applyEffortIndex(i) {
     i = Math.max(0, Math.min(discoveredEfforts.length - 1, i));
     var v = discoveredEfforts[i];
-    if (v && v !== currentEffort) { currentEffort = v; renderEffort(); }
+    if (v && v !== currentEffort) {
+      currentEffort = v;
+      if (effortDragging) { updateEffortVisual(); } else { renderEffort(); }
+    }
   }
   var effortDragging = false;
   function wireEffortSlider() {
