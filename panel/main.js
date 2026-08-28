@@ -1893,6 +1893,28 @@
     return { el: t, dismiss: dismiss };
   }
 
+  // Dev-only toast trigger: Cmd/Ctrl+Shift+T fires a demo toast, cycling
+  // info -> success -> warning -> error -> neutral on repeat presses. Gated on a
+  // localStorage flag so end users never trigger it; enable it (persists across
+  // reloads) with:  localStorage.setItem('gafferDevToasts', '1')
+  var DEMO_TOASTS = [
+    ['info', 'Gaffer updated'],
+    ['success', 'Added to render queue'],
+    ['warning', 'Conversation compacted'],
+    ['error', 'Render failed — check the output module'],
+    ['neutral', 'Reloading Gaffer for updated code…']
+  ];
+  var demoToastIdx = 0;
+  document.addEventListener('keydown', function (e) {
+    if (!e.shiftKey || !(e.metaKey || e.ctrlKey)) return;
+    if ((e.key || '').toLowerCase() !== 't') return;
+    try { if (localStorage.getItem('gafferDevToasts') !== '1') return; } catch (_) { return; }
+    e.preventDefault();
+    var d = DEMO_TOASTS[demoToastIdx % DEMO_TOASTS.length];
+    demoToastIdx++;
+    showToast(d[0], d[1]);
+  });
+
   function showChatError(error) {
     var el = document.getElementById('currentResponse');
     if (!el) startAssistantMessage();
