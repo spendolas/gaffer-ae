@@ -1176,14 +1176,16 @@
     }
     #settingsSections { display: flex; flex-direction: column; gap: 4px; width: 100%; }
     .settings-title { font-size: 12px; line-height: 15.6px; font-weight: 600; color: var(--color-text-light); } /* #DDDDDD SemiBold */
-    .settings-item { /* Menu item — bg/panel, r12, pad 12, gap 12 */
+    .settings-item { /* Menu item — transparent by default; bg only on hover (Figma Menu item "Hovered" property) */
       display: flex;
       flex-direction: column;
       gap: 12px;
       padding: 12px;
-      background: var(--color-bg-panel);
+      background: transparent;
       border-radius: 12px;
+      transition: background 0.1s ease;
     }
+    .settings-item:hover { background: var(--color-bg-panel); }
     /* Models section — its OWN 2-col grid (484:27797), NOT the row skeleton.
        label col (grow) + control col (hug 184); shared across both grid rows so
        the dropdowns align with the effort slider below. gap 8 = Figma itemSpacing. */

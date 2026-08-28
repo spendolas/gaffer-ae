@@ -2509,6 +2509,9 @@
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
     var lce = document.getElementById('setLastCheck');
     if (lce && !lce.textContent) lce.textContent = 'Not checked yet';
+    // Update CTA only when an update is actually available (banner visible).
+    var ub = document.getElementById('setUpdateBtn');
+    if (ub) ub.hidden = !(updateBannerEl && updateBannerEl.classList.contains('visible'));
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
@@ -2523,7 +2526,7 @@
     var so = document.getElementById('setSignOutBtn');
     if (lastAuth && lastAuth.loggedIn) {
       em.textContent = lastAuth.email || 'Signed in';
-      meta.textContent = ['CLI', lastAuth.org, lastAuth.plan].filter(Boolean).join(' • ');
+      meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
       so.hidden = false;
     } else { em.textContent = 'Signed out'; meta.textContent = 'CLI'; so.hidden = true; }
   }
