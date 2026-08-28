@@ -2472,148 +2472,152 @@
     if (!slider) return;
     slider.innerHTML = '';
     var n = levels.length;
-    // Figma tree (default idx=2/high snapshot 484:30131): n Dot frames + 1 Handle,
-    // thumb inserted AFTER `idx` dots. Dots d<idx = on (blue). data-fig anchors
-    // map node-for-node at the default 5-dot idx; extra dots just lack anchors.
-    var dotSeen = 0;
+    // n dots, evenly space-between; the thumb + fill are ABSOLUTE overlays so the
+    // thumb can follow the pointer freely during a drag and ease into the nearest
+    // dot on release. Dots d<idx are "on" (blue); the thumb sits over dot[idx].
     for (var d = 0; d < n; d++) {
-      if (d === idx) {
-        var th = document.createElement('span'); th.className = 'e-thumb';
-        th.setAttribute('data-fig', 'I484:27883;484:30631');
-        var f = document.createElement('span'); f.className = 'e-fill';
-        f.setAttribute('data-fig', 'I484:27883;484:30252');
-        var k = document.createElement('span'); k.className = 'e-knob';
-        k.setAttribute('data-fig', 'I484:27883;484:30565');
-        f.appendChild(k); th.appendChild(f); slider.appendChild(th);
-      }
       var dt = document.createElement('span'); dt.className = 'e-dot' + (d < idx ? ' on' : '');
-      if (DOT_FIG[dotSeen]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[dotSeen]);
+      if (DOT_FIG[d]) dt.setAttribute('data-fig', 'I484:27883;' + DOT_FIG[d]);
       var circ = document.createElement('span'); circ.className = 'e-circ';
-      if (CIRC_FIG[dotSeen]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[dotSeen]);
-      dt.appendChild(circ); slider.appendChild(dt); dotSeen++;
+      if (CIRC_FIG[d]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[d]);
+      dt.appendChild(circ); slider.appendChild(dt);
     }
+    var fill = document.createElement('span'); fill.className = 'e-fill';
+    fill.setAttribute('data-fig', 'I484:27883;484:30252');
+    var thumb = document.createElement('span'); thumb.className = 'e-thumb';
+    thumb.setAttribute('data-fig', 'I484:27883;484:30631');
+    var knob = document.createElement('span'); knob.className = 'e-knob';
+    knob.setAttribute('data-fig', 'I484:27883;484:30565');
+    thumb.appendChild(knob);
+    slider.appendChild(fill); slider.appendChild(thumb);
+    settleEffortToIdx(idx, false); // instant placement on a full render
   }
-  // In-place visual update for the drag path: moves the existing thumb node
-  // and toggles .e-dot .on classes WITHOUT tearing down/rebuilding the dot
-  // tree (renderEffort() does a full innerHTML='' rebuild, which is fine for
-  // infrequent changes but caused flicker/instability when called on every
-  // dot crossed during a drag). Assumes the slider's current DOM already has
-  // exactly discoveredEfforts.length dots + one thumb (true whenever nothing
-  // besides the active index changed since the last full renderEffort()) —
-  // if that assumption doesn't hold (structure stale/mismatched), it falls
-  // back to a full renderEffort() so correctness always wins over smoothness.
-  function updateEffortVisual() {
-    var levels = discoveredEfforts;
-    var idx = levels.indexOf(currentEffort); if (idx < 0) idx = 0;
-    var lbl = document.getElementById('setEffortLabel');
-    if (lbl) lbl.textContent = labelize(currentEffort);
+  // Track-relative center x of dot `idx` (measured live; even-split fallback).
+  function effortDotCenterPx(idx) {
     var slider = document.getElementById('setEffortDots');
-    if (!slider) return;
+    if (!slider) return 0;
+    var sr = slider.getBoundingClientRect();
     var dots = slider.querySelectorAll('.e-dot');
-    var thumb = slider.querySelector('.e-thumb');
-    if (!thumb || dots.length !== levels.length) { renderEffort(); return; }
-    for (var d = 0; d < dots.length; d++) {
-      dots[d].classList.toggle('on', d < idx);
+    if (dots[idx] && sr.width > 0) {
+      var dr = dots[idx].getBoundingClientRect();
+      return (dr.left + dr.width / 2) - sr.left;
     }
-    // Thumb sits immediately before dot[idx] (dots 0..idx-1 are "on"/blue,
-    // idx..n-1 stay grey) — same ordering renderEffort() builds fresh.
-    slider.insertBefore(thumb, dots[idx] || null);
+    var n = discoveredEfforts.length;
+    return n > 1 ? (idx / (n - 1)) * (sr.width || 184) : 0;
   }
-  // Nearest dot index for a clientX over the track. Measures the LIVE
-  // .e-dot rects rather than assuming an even i/(n-1) split of the track
-  // width: the track's layout is `justify-content: space-between` with the
-  // thumb (18px) as a real flex sibling narrower than a dot (24px), so a
-  // dot's rendered center shifts by a whole gap+thumb-width depending on
-  // whether the thumb currently sits before or after it (same dot index can
-  // land at a different pixel position depending on the CURRENT active
-  // index). A naive linear fraction over the full track therefore snapped
-  // to the wrong neighbor near the thumb's current position; snapping to
-  // the actual measured centers is correct regardless of that shift.
-  function effortIndexFromClientX(clientX) {
+  // Nearest dot index to a track-relative x (measures live dot centers).
+  function effortNearestIdx(px) {
     var slider = document.getElementById('setEffortDots');
     var n = discoveredEfforts.length;
     if (!slider || n <= 1) return 0;
+    var sr = slider.getBoundingClientRect();
     var dots = slider.querySelectorAll('.e-dot');
-    if (dots.length !== n) {
-      // Dots not rendered yet / stale — fall back to a linear approximation
-      // over the track width rather than failing outright.
-      var r = slider.getBoundingClientRect();
-      if (r.width <= 0) return 0;
-      var frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-      return Math.round(frac * (n - 1));
+    if (dots.length !== n || sr.width <= 0) {
+      return Math.round(Math.max(0, Math.min(1, px / (sr.width || 184))) * (n - 1));
     }
-    var best = 0, bestDist = Infinity;
+    var best = 0, bd = Infinity;
     for (var i = 0; i < dots.length; i++) {
       var dr = dots[i].getBoundingClientRect();
-      var center = dr.left + dr.width / 2;
-      var dist = Math.abs(clientX - center);
-      if (dist < bestDist) { bestDist = dist; best = i; }
+      var c = (dr.left + dr.width / 2) - sr.left;
+      var dist = Math.abs(px - c);
+      if (dist < bd) { bd = dist; best = i; }
     }
     return best;
   }
-  // Set effort from a dot index (drag/click). While a drag is active, update
-  // in place (updateEffortVisual) so crossing dots doesn't rebuild the whole
-  // tree each step; otherwise do a full renderEffort(). Caller saves.
+  // Place the thumb + fill at track-x `px` (clamped). Does not change the effort.
+  function positionEffortThumb(px) {
+    var slider = document.getElementById('setEffortDots');
+    if (!slider) return;
+    var w = slider.clientWidth || 184;
+    px = Math.max(0, Math.min(w, px));
+    var thumb = slider.querySelector('.e-thumb');
+    var fill = slider.querySelector('.e-fill');
+    if (thumb) thumb.style.left = px + 'px';
+    if (fill) fill.style.width = px + 'px';
+  }
+  // Snap the thumb to dot `idx` — animated (ease into place) or instant.
+  function settleEffortToIdx(idx, animate) {
+    var slider = document.getElementById('setEffortDots');
+    if (!slider) return;
+    var thumb = slider.querySelector('.e-thumb'), fill = slider.querySelector('.e-fill');
+    var px = effortDotCenterPx(idx);
+    if (!animate) {
+      if (thumb) thumb.style.transition = 'none';
+      if (fill) fill.style.transition = 'none';
+      positionEffortThumb(px);
+      if (thumb) { void thumb.offsetWidth; thumb.style.transition = ''; }
+      if (fill) fill.style.transition = '';
+    } else {
+      positionEffortThumb(px); // CSS transition eases it into place
+    }
+  }
+  // Live-update currentEffort + label + dot colors to the level nearest track-x
+  // `px` during a drag (the thumb itself follows the finger, not the dot).
+  function updateEffortFromPx(px) {
+    var idx = effortNearestIdx(px);
+    var v = discoveredEfforts[idx];
+    if (v) {
+      currentEffort = v;
+      var lbl = document.getElementById('setEffortLabel'); if (lbl) lbl.textContent = labelize(v);
+      var slider = document.getElementById('setEffortDots');
+      var dots = slider ? slider.querySelectorAll('.e-dot') : [];
+      for (var d = 0; d < dots.length; d++) dots[d].classList.toggle('on', d < idx);
+    }
+    return idx;
+  }
+  // Programmatic set (model clamp / restore): snap to a dot, full render.
   function applyEffortIndex(i) {
     i = Math.max(0, Math.min(discoveredEfforts.length - 1, i));
     var v = discoveredEfforts[i];
-    if (v && v !== currentEffort) {
-      currentEffort = v;
-      if (effortDragging) { updateEffortVisual(); } else { renderEffort(); }
-    }
+    if (v && v !== currentEffort) { currentEffort = v; renderEffort(); }
+  }
+  // Re-place the thumb once the modal is actually laid out (measurement needs a
+  // visible track) — call after opening Settings.
+  function relayoutEffort() {
+    var i = discoveredEfforts.indexOf(currentEffort); if (i < 0) i = 0;
+    settleEffortToIdx(i, false);
   }
   var effortDragging = false;
   function wireEffortSlider() {
     var slider = document.getElementById('setEffortDots');
     if (!slider || slider._effortWired) return;
     slider._effortWired = true;
-    slider.addEventListener('pointerdown', function (e) {
-      e.preventDefault();
-      try { slider.setPointerCapture(e.pointerId); } catch (_) {}
+    function trackX(clientX) { return clientX - slider.getBoundingClientRect().left; }
+    function startDrag(clientX) {
       effortDragging = true;
-      applyEffortIndex(effortIndexFromClientX(e.clientX));
-    });
-    // Move/up on window so the drag survives capture loss while the button is
-    // held (the slider's own children get torn down + rebuilt on each render).
-    window.addEventListener('pointermove', function (e) {
+      slider.classList.add('dragging'); // transition off → thumb tracks the finger 1:1
+      var px = trackX(clientX);
+      positionEffortThumb(px); updateEffortFromPx(px);
+    }
+    function moveDrag(clientX) {
       if (!effortDragging) return;
-      applyEffortIndex(effortIndexFromClientX(e.clientX));
-    });
+      var px = trackX(clientX);
+      positionEffortThumb(px); updateEffortFromPx(px);
+    }
     function endDrag() {
       if (!effortDragging) return;
       effortDragging = false;
+      slider.classList.remove('dragging'); // restore transition
+      var idx = discoveredEfforts.indexOf(currentEffort); if (idx < 0) idx = 0;
+      settleEffortToIdx(idx, true); // ease the thumb into the nearest dot
       saveChat();
     }
+    slider.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      try { slider.setPointerCapture(e.pointerId); } catch (_) {}
+      startDrag(e.clientX);
+    });
+    window.addEventListener('pointermove', function (e) { moveDrag(e.clientX); });
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
     // Mouse + touch fallbacks: CEP's Chromium 99 delivers only real MouseEvents
-    // (and touch) for real HID input — NOT PointerEvents — so the pointer-only
-    // handlers above never fire for a real drag in the AE panel (CDP synthesizes
-    // pointer events, which masked this under automated capture/testing). The
-    // effortDragging guard makes double-firing harmless, and pointerdown's
-    // preventDefault suppresses the compat mousedown where pointer events ARE
-    // supported, so there's no double-processing either way.
-    slider.addEventListener('mousedown', function (e) {
-      e.preventDefault();
-      effortDragging = true;
-      applyEffortIndex(effortIndexFromClientX(e.clientX));
-    });
-    window.addEventListener('mousemove', function (e) {
-      if (!effortDragging) return;
-      applyEffortIndex(effortIndexFromClientX(e.clientX));
-    });
+    // (and touch) for real HID input — NOT PointerEvents. The effortDragging guard
+    // + pointerdown's preventDefault prevent double-processing where pointer fires.
+    slider.addEventListener('mousedown', function (e) { e.preventDefault(); startDrag(e.clientX); });
+    window.addEventListener('mousemove', function (e) { moveDrag(e.clientX); });
     window.addEventListener('mouseup', endDrag);
-    slider.addEventListener('touchstart', function (e) {
-      if (!e.touches[0]) return;
-      e.preventDefault();
-      effortDragging = true;
-      applyEffortIndex(effortIndexFromClientX(e.touches[0].clientX));
-    }, { passive: false });
-    window.addEventListener('touchmove', function (e) {
-      if (!effortDragging || !e.touches[0]) return;
-      e.preventDefault();
-      applyEffortIndex(effortIndexFromClientX(e.touches[0].clientX));
-    }, { passive: false });
+    slider.addEventListener('touchstart', function (e) { if (!e.touches[0]) return; e.preventDefault(); startDrag(e.touches[0].clientX); }, { passive: false });
+    window.addEventListener('touchmove', function (e) { if (!effortDragging || !e.touches[0]) return; e.preventDefault(); moveDrag(e.touches[0].clientX); }, { passive: false });
     window.addEventListener('touchend', endDrag);
     window.addEventListener('touchcancel', endDrag);
   }
@@ -2815,7 +2819,12 @@
     // status whenever it's opened (see renderApi() / apiState above).
     renderApi();
   }
-  function openSettings() { syncSettings(); tkShow(settingsModalEl); }
+  function openSettings() {
+    syncSettings(); tkShow(settingsModalEl);
+    // Thumb placement measures live dot centers — re-run once the modal is
+    // actually laid out (syncSettings' renderEffort ran while it was hidden).
+    requestAnimationFrame(relayoutEffort);
+  }
   function closeSettings() { tkHide(settingsModalEl); }
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);

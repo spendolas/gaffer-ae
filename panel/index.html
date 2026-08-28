@@ -1339,9 +1339,13 @@
     .effort-slider .e-dot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
     .effort-slider .e-circ { width: 4px; height: 4px; border-radius: var(--radius-full); background: var(--color-text-dimmest); }
     .effort-slider .e-dot.on .e-circ { background: var(--color-accent-blue); }
-    .effort-slider .e-thumb { flex: 0 0 auto; position: relative; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; width: 18px; height: 28px; cursor: pointer; }
-    .effort-slider .e-fill { position: absolute; right: 0; top: 0; bottom: 0; width: 224px; display: flex; align-items: center; justify-content: flex-end; padding: 2px; box-sizing: border-box; background: var(--color-btn-primary-ghost); border-radius: 8px; }
-    .effort-slider .e-knob { flex: 0 0 auto; width: 16px; height: 24px; border-radius: 6px; background: var(--color-accent-blue); }
+    /* Thumb + fill are ABSOLUTE overlays (not flex items) so the thumb can follow
+       the pointer freely during a drag, then ease into the nearest dot on release
+       (transition). .dragging disables the transition for 1:1 finger-follow. */
+    .effort-slider .e-fill { position: absolute; left: 0; top: 2px; bottom: 2px; width: 0; background: var(--color-btn-primary-ghost); border-radius: 8px; pointer-events: none; transition: width 0.16s ease; }
+    .effort-slider .e-thumb { position: absolute; top: 2px; left: 0; width: 16px; height: 24px; transform: translateX(-50%); pointer-events: none; z-index: 1; transition: left 0.16s ease; }
+    .effort-slider .e-knob { width: 16px; height: 24px; border-radius: 6px; background: var(--color-accent-blue); }
+    .effort-slider.dragging .e-thumb, .effort-slider.dragging .e-fill { transition: none; }
   </style>
 </head>
 <body>
