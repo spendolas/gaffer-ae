@@ -13,9 +13,19 @@
     @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-SemiboldIt.woff2") format("woff2"); font-weight: 600; font-style: italic; }
     @font-face { font-family: "Source Code Pro"; src: url("fonts/SourceCodePro-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; }
 
+    /* Registering --chat-text as a real <number> makes it interpolate, so a
+       single value change on :root animates and cascades to every
+       calc(px * var(--chat-text)) consumer at once (CEP Chromium 99 supports
+       @property + registered custom-prop interpolation). */
+    @property --chat-text { syntax: '<number>'; inherits: true; initial-value: 1; }
+
     /* Design tokens — generated from design/tokens.json (Figma "Gaffer"
        collection). Edit there, not here; see docs/figma-parity-audit.md §3. */
     :root {
+      /* Text-size scale animates in one place — the whole app's text eases to
+         the new size instead of jumping. Matches the panel's 0.18s takeovers.
+         Do NOT add per-element font-size transitions (reflow storm). */
+      transition: --chat-text 0.18s ease-out;
       --color-bg-panel: #232323;
       --color-bg-input: #121212;
       --color-bg-banner: #173658;
@@ -1108,7 +1118,7 @@
       border-radius: 8px;
       background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       color: var(--color-text-dimmer);
-      font-size: 10px;
+      font-size: calc(10px * var(--chat-text, 1));
       line-height: 10px;
       cursor: pointer;
     }
