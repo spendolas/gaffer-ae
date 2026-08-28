@@ -23,11 +23,29 @@ test('scoreMessage: confident complex', () => {
   }
 });
 
-test('scoreMessage: ambiguous middle → unsure', () => {
+// A reading/answering turn with no authoring verb: route to sonnet locally,
+// never paying the classifier. This is the band that used to fall to 'unsure'
+// on nearly every real question.
+test('scoreMessage: confident moderate (questions / short lookups)', () => {
   for (var m of [
     'is the spinner comp using the right easing?',
     'tell me about the layers in this project',
     'which of those two looks closer to the reference',
+    'how does the loop expression read again',
+    'what easing is on the title',
+    'any idea why it looks soft',
+    'closer look at the second option',
+  ]) {
+    assert.equal(scoreMessage(m), 'moderate', m);
+  }
+});
+
+// Only a mid-length, verbless, question-less statement is genuinely ambiguous —
+// the narrow band the haiku classifier still earns its keep on.
+test('scoreMessage: genuinely ambiguous → unsure', () => {
+  for (var m of [
+    'the intro doesn\'t feel quite right yet, something about the pacing through the middle stretch',
+    'the last version was a lot closer to what the client had in their head for the lower third area',
   ]) {
     assert.equal(scoreMessage(m), 'unsure', m);
   }
@@ -61,7 +79,9 @@ test('resolveTier: confident score never calls the runner', async () => {
 
 test('resolveTier: unsure escalates to the runner', async () => {
   var run = async () => 'moderate';
-  assert.equal(await resolveTier('tell me about the layers in this project', { run }), 'moderate');
+  var ambiguous = 'the last version was a lot closer to what the client had in their head for the lower third area';
+  assert.equal(scoreMessage(ambiguous), 'unsure'); // guard: still in the unsure band
+  assert.equal(await resolveTier(ambiguous, { run }), 'moderate');
 });
 
 // ── Tier → selection: ladder, never-upshift, context ──────────────────

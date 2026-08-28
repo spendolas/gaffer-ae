@@ -27,8 +27,16 @@ var UNITS = /\b\d+(\.\d+)?\s*(px|pt|%|deg|degrees?|frames?|fps|s|sec|seconds?|ms
 // real inspection task, so those fall to 'unsure' for the classifier to judge.
 var GREETING = /^(hi|hey|hello|yo|sup|thanks|thank you|ty|cheers|ok|okay|k|got it|nice|cool|great|perfect|awesome|nvm|never ?mind)\b/i;
 var META = /\b(what did you (do|change|say)|what have you done|recap|status|undo|redo)\b/i;
+// Interrogative / lookup openers → a reading-and-answering turn (with no
+// authoring verb, checked first). These are the bulk of what used to fall to
+// 'unsure'; a lookup/explanation is sonnet-sized, so score it 'moderate'
+// locally and skip the classifier. A false 'moderate' only costs opus→sonnet
+// (mild), never the dangerous opus→haiku.
+var QUESTION = /^(what|how|why|which|where|when|who|whose|is|are|was|were|do|does|did|can|could|should|would|will|list|show|tell|explain|describe|find|check|count|any|has|have|look|closer)\b/i;
+// A very short statement is a light aside/lookup, not multi-step authoring.
+var SHORT_WORDS = 12;
 
-// Stage 1: free local score. 'trivial' | 'complex' | 'unsure'.
+// Stage 1: free local score. 'trivial' | 'moderate' | 'complex' | 'unsure'.
 export function scoreMessage(message) {
   var raw = String(message || '');
   var text = raw.trim();
@@ -38,9 +46,15 @@ export function scoreMessage(message) {
   if (/```|mcp__/.test(raw)) return 'complex';    // code fence or tool payload
   if (EXPR.test(raw)) return 'complex';           // expression syntax
   if (MUTATE.test(raw)) return 'complex';         // authoring/action verb
-  if (text.split(/\s+/).length > 40) return 'complex'; // long, multi-step
+  var words = text.split(/\s+/).length;
+  if (words > 40) return 'complex';               // long, multi-step
   // Hard TRIVIAL — short greeting/ack or meta, no numeric spec.
   if (text.length <= 80 && !UNITS.test(text) && (GREETING.test(text) || META.test(text))) return 'trivial';
+  // Confident MODERATE — a question or short lookup with no authoring verb:
+  // reading/answering work, routes to sonnet without a classifier spawn.
+  if (text.indexOf('?') >= 0 || QUESTION.test(text)) return 'moderate';
+  if (words <= SHORT_WORDS) return 'moderate';    // short aside/lookup
+  // Genuinely ambiguous — a mid-length, verbless, question-less statement.
   return 'unsure';
 }
 
