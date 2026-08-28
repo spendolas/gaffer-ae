@@ -79,6 +79,17 @@ window.__audit = (function () {
     var ts = document.getElementById('toastStack'); if (ts) ts.innerHTML = '';
     var sm = document.getElementById('settingsModal'); if (sm) sm.hidden = true;
     var pops = document.querySelectorAll('.select-popup'); for (var pi = 0; pi < pops.length; pi++) pops[pi].hidden = true;
+    // The 'disabled' state force-sets .disabled on every button matching this
+    // selector (see below) to capture the Figma State=Disabled variant. Undo
+    // it here so it doesn't bleed into every state captured afterward (e.g.
+    // 'settings' would otherwise render its close button / Check now / etc.
+    // stuck at opacity .4, contaminating the parity capture with a state the
+    // real app never produces for these controls). Excludes .send-btn/.stop-btn
+    // — those two carry real reactive disabled logic (hasContent/chatBusy,
+    // main.js) that other states rely on being left alone.
+    var dsel = '.icon-btn, .text-btn, #updateBtn, #dismissUpdateBtn, #checkNowBtn';
+    var dels = document.querySelectorAll(dsel);
+    for (var di = 0; di < dels.length; di++) dels[di].disabled = false;
   }
   function bubble(role, text) {
     var m = el('div', 'chat-msg ' + role);
