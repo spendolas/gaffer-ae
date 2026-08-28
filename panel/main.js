@@ -141,6 +141,7 @@
     chatInputEl.disabled = !ok;                             // input: connected+auth only — preserve type-ahead while busy
     sendBtnEl.disabled = !ok || chatBusy || !hasContent;   // nothing to send = disabled (Figma send State=Disabled @ .4)
     sendBtnEl.classList.toggle('typed', hasContent);       // kept in sync as the "has content" style hook
+    chatInputEl.classList.toggle('typed', hasContent);     // InputField typed variant (240:1464) bottom-aligns text; idle/busy stay centered
   }
 
   // ── Auth ──

@@ -697,10 +697,13 @@
          painting a phantom scrollbar in the empty field; JS flips to auto
          only when content truly exceeds the cap */
       overflow-y: hidden;
-      align-self: center;
+      align-self: center; /* idle/busy InputField counterAxisAlignItems: CENTER (185:1132 / 195:1423) */
       resize: none;
       outline: none;
     }
+    /* typed InputField (240:1465) counterAxisAlignItems: MAX — bottom-align
+       so a grown multi-line composer keeps its last line flush with Send */
+    .chat-input.typed { align-self: flex-end; }
     .chat-input::placeholder {
       color: var(--color-text-dim);
       opacity: 0.5; /* Figma placeholder 183:1062 = text/dim @ 50% layer opacity (effective ~#444 over the pill) */
@@ -1240,7 +1243,7 @@
 
   <div class="chat-input-area">
     <div class="input-overlays">
-      <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
+      <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
       <div id="updateBanner" class="update-banner">
         <div class="banner-pill" data-fig="284:1631">
           <span id="updateText" class="banner-text" data-fig="191:1231">Update available</span>
@@ -1250,7 +1253,9 @@
           </span>
         </div>
       </div>
-      <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
+      <!-- Paste preview last = topmost paint (Figma InputArea itemReverseZIndex:
+           first-listed child [Preview Row Wrapper] paints on top) -->
+      <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
     </div>
     <div class="chat-input-row" data-fig="185:1132">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
