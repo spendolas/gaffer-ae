@@ -926,7 +926,7 @@
     .select-btn { /* Dropdown state=closed (183:1072) — bg/panel + rest-overlay, #888 label; hover → border-input + #CCC */
       display: inline-flex;
       align-items: center;
-      justify-content: center;
+      justify-content: center; /* Figma frame primaryAxis CENTER; moot once the label grows (below) */
       gap: 2px;
       flex: 1;
       min-width: 0;
@@ -940,6 +940,9 @@
       line-height: 10px;
       cursor: pointer;
     }
+    /* Dropdown label (183:1070): layoutGrow 1 + LEFT — fills width, hugs left,
+       so the chevron ::after pins to the right edge (not centered as a clump). */
+    .select-btn > span { flex: 1; min-width: 0; text-align: left; }
     .select-btn:hover:not(:disabled) { background: var(--color-border-input); color: var(--color-text-light-2); } /* state=hover 450:5444 */
     .select-btn:disabled { opacity: 0.4; cursor: default; }
     .select-btn::after {
