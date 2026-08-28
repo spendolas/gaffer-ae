@@ -1176,15 +1176,23 @@
     .settings-item.gap8 { gap: 8px; } /* Models+Effort section (484:27834) uses gap 8 */
     .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
-    .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-default); }
-    .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmer); }
+    .settings-item .item-title { font-size: 12px; line-height: 16px; color: var(--color-text-light-2); } /* Main Label #CCC */
+    .settings-item .item-title.muted { color: var(--color-text-muted); } /* Models label #AAA */
+    .settings-item .item-sub { font-size: 10px; line-height: 15px; color: var(--color-text-dimmest); } /* Secondary Pt #666 */
+    .settings-item .item-sub.lg { font-size: 12px; line-height: 16px; } /* version #666 T12 */
+    .settings-item .item-sub.dim { font-size: 12px; line-height: 16px; color: var(--color-text-dim); } /* Multiline subtitle #777 T12 */
+    .settings-item .item-sub.meta { display: inline-flex; gap: 2px; } /* Secondary label frame gap 2 */
     .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
     .settings-item .item-col .item-sub { white-space: normal; }
-    .beta-badge { font-size: 9px; line-height: 12px; color: var(--color-accent-blue); }
+    .beta-badge { font-size: 9px; line-height: 13.5px; letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); } /* beta = amber code badge */
+    .settings-item .select-btn { padding: 6px; justify-content: center; background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel); } /* ModelSelect = bg/panel + rest-overlay, pad6, centred */
+    .settings-item.gap8 .select-btn { padding: 6px 4px 6px 8px; } /* model/variant selects pad R4 L8 */
+    #setSoundBtn { width: 96px; } /* Sounds ModelSelect fixed 96 */
+    .effort-dots { background: var(--color-bg-table-row-hover); border-radius: 8px; padding: 0; } /* effort slider pill 484:30131 = #000@.5 r8, pad 0 */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; }
     .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg); flex-shrink: 0; }
-    .effort-dots { display: inline-flex; align-items: center; gap: 4px; }
+    .effort-dots { display: inline-flex; align-items: center; justify-content: space-between; gap: 2px; }
     .effort-dots .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--color-text-hint); }
     .effort-dots .dot.on { background: var(--color-accent-blue); }
   </style>
@@ -1312,77 +1320,78 @@
         <div class="settings-item" data-fig="I478:14383;475:10505">
           <div class="row1">
             <div class="item-col">
-              <span class="item-title">Auto-check for updates</span>
-              <span class="item-sub" id="setVersion">v0.0.0</span>
+              <span class="item-title" data-fig="I478:14383;475:10505;475:10185">Auto-check for updates</span>
+              <span class="item-sub" id="setVersion" data-fig="I478:14383;475:10505;475:10570">v0.0.0</span>
             </div>
-            <label class="toggle-label"><input type="checkbox" id="setAutoCheck"><span class="toggle big"><span class="knob"></span></span></label>
+            <label class="toggle-label"><input type="checkbox" id="setAutoCheck"><span class="toggle big" data-fig="I478:14383;475:10505;475:10192"><span class="knob"></span></span></label>
           </div>
           <div class="row2">
-            <button id="setCheckNowBtn" class="text-btn">Check now</button>
-            <span class="item-sub" id="setLastCheck"></span>
-            <button id="setUpdateBtn" class="text-btn informed" hidden>Update</button>
+            <button id="setCheckNowBtn" class="text-btn" data-fig="I478:14383;475:10505;475:10196">Check now</button>
+            <span class="item-sub lg" id="setLastCheck" data-fig="I478:14383;475:10505;475:10197"></span>
+            <button id="setUpdateBtn" class="text-btn informed" data-fig="I478:14383;475:10505;475:10200" hidden>Update</button>
           </div>
         </div>
         <!-- Scrooge -->
         <div class="settings-item" data-fig="I478:18268;478:11752">
           <div class="row1">
             <div class="item-col">
-              <span class="item-title">Scrooge mode <span class="beta-badge">beta</span></span>
-              <span class="item-sub">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
+              <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode <span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
+              <span class="item-sub dim" data-fig="I478:18268;478:11752;478:11726">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
             </div>
-            <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big"><span class="knob"></span></span></label>
+            <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
           </div>
         </div>
         <!-- Sounds -->
         <div class="settings-item" data-fig="I478:19413;478:11850">
           <div class="row1">
-            <span class="item-title">Sounds</span>
+            <span class="item-title" data-fig="I478:19413;478:11850;475:10185">Sounds</span>
             <span class="sound-selector">
-              <button id="setSoundPreview" class="icon-btn" title="Preview"></button>
-              <button id="setSoundBtn" class="select-btn"><span id="setSoundLabel">Squeak</span></button>
+              <button id="setSoundPreview" class="icon-btn" title="Preview" data-fig="I478:19413;478:11850;475:10189"></button>
+              <button id="setSoundBtn" class="select-btn" data-fig="I478:19413;478:11850;475:10190"><span id="setSoundLabel">Squeak</span></button>
             </span>
-            <label class="toggle-label"><input type="checkbox" id="setSoundOn"><span class="toggle big"><span class="knob"></span></span></label>
+            <label class="toggle-label"><input type="checkbox" id="setSoundOn"><span class="toggle big" data-fig="I478:19413;478:11850;475:10192"><span class="knob"></span></span></label>
           </div>
         </div>
         <!-- Account / CLI -->
         <div class="settings-item" data-fig="I478:13117;478:11902">
           <div class="row1">
-            <span class="account-avatar" id="setCliAvatar"></span>
+            <span class="account-avatar" id="setCliAvatar" data-fig="I478:13117;478:11902;475:10182"></span>
             <div class="item-col">
-              <span class="item-title" id="setCliEmail">Signed out</span>
-              <span class="item-sub" id="setCliMeta">CLI</span>
+              <span class="item-title" id="setCliEmail" data-fig="I478:13117;478:11902;475:10185">Signed out</span>
+              <span class="item-sub meta" id="setCliMeta" data-fig="I478:13117;478:11902;475:10557">CLI</span>
             </div>
-            <button id="setSignOutBtn" class="text-btn danger">Sign out</button>
+            <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
           </div>
         </div>
         <!-- Account / API (scaffold — no live key handling yet) -->
         <div class="settings-item" data-fig="I480:20902;478:12027">
           <div class="row1">
-            <span class="account-avatar" id="setApiAvatar"></span>
+            <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
             <div class="item-col">
-              <span class="item-title" id="setApiKey">Not connected</span>
-              <span class="item-sub" id="setApiMeta">API</span>
+              <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Not connected</span>
+              <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">API</span>
             </div>
-            <button id="setApiConnectBtn" class="text-btn informed">Connect</button>
-            <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" hidden></button>
+            <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Connect</button>
+            <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194"></button>
           </div>
         </div>
         <!-- Models + Effort -->
         <div class="settings-item gap8" data-fig="I484:27883;484:27834">
           <div class="row1">
-            <span class="item-title">Models</span>
+            <span class="item-title muted" data-fig="I484:27883;484:35778">Models</span>
             <span class="select-group">
               <span class="select-wrap">
-                <button id="setModelBtn" class="select-btn"><span id="setModelLabel">Opus</span></button>
+                <button id="setModelBtn" class="select-btn" data-fig="I484:27883;484:35254"><span id="setModelLabel">Opus</span></button>
               </span>
               <span class="select-wrap">
-                <button id="setVariantBtn" class="select-btn"><span id="setVariantLabel">Standard</span></button>
+                <button id="setVariantBtn" class="select-btn" data-fig="I484:27883;484:35448"><span id="setVariantLabel">Standard</span></button>
               </span>
             </span>
           </div>
           <div class="row2">
-            <span class="item-title">Effort <span class="item-sub" id="setEffortLabel">High</span></span>
-            <span class="effort-dots" id="setEffortDots"></span>
+            <span class="item-sub" data-fig="I484:27883;484:31624">Effort</span>
+            <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
+            <span class="effort-dots" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
           </div>
         </div>
       </div>

@@ -2423,6 +2423,8 @@
     if (dropIconEl) dropIconEl.innerHTML = GafferIcons.drop;
     document.getElementById('settingsBtn').appendChild(icon('settings'));
     document.getElementById('settingsDismissBtn').appendChild(icon('close'));
+    document.getElementById('setSoundPreview').appendChild(icon('speak'));
+    document.getElementById('setApiForgetBtn').appendChild(icon('shred'));
   }
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
@@ -2430,7 +2432,8 @@
   function syncSettings() {
     var vt = document.getElementById('versionText');
     var sv = document.getElementById('setVersion'); if (sv && vt) sv.textContent = vt.textContent;
-    var lc = document.getElementById('versionText'); // last-check text lives with version; leave as-is
+    var lce = document.getElementById('setLastCheck');
+    if (lce && !lce.textContent) lce.textContent = 'Not checked yet';
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
