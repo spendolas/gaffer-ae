@@ -46,6 +46,7 @@
   var alertModalTitleEl = document.getElementById('alertModalTitle');
   var alertModalBodyEl = document.getElementById('alertModalBody');
   var alertModalOkEl = document.getElementById('alertModalOk');
+  var alertModalCancelEl = document.getElementById('alertModalCancel');
 
   // Chat state
   var currentSessionId = null;
@@ -1001,6 +1002,7 @@
   // unhides the modal, and resolves via opts.onClose when dismissed (OK
   // click, backdrop click, or Esc). opts: { title, okLabel, onClose }.
   var alertModalOnClose = null;
+  var alertModalOnConfirm = null;
 
   function showModal(message, opts) {
     opts = opts || {};
@@ -1020,8 +1022,18 @@
       }
     }
     alertModalBodyEl.textContent = message;
-    alertModalOkEl.textContent = opts.okLabel || 'OK';
     alertModalOnClose = typeof opts.onClose === 'function' ? opts.onClose : null;
+    alertModalOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
+    if (alertModalOnConfirm) {
+      // Confirm mode: Cancel (neutral) + a confirm action (danger-styled for destructive ops like Clear chat).
+      alertModalOkEl.textContent = opts.confirmLabel || 'Confirm';
+      alertModalOkEl.classList.toggle('danger', !!opts.danger);
+      if (alertModalCancelEl) { alertModalCancelEl.textContent = opts.cancelLabel || 'Cancel'; alertModalCancelEl.hidden = false; }
+    } else {
+      alertModalOkEl.textContent = opts.okLabel || 'OK';
+      alertModalOkEl.classList.remove('danger');
+      if (alertModalCancelEl) alertModalCancelEl.hidden = true;
+    }
     alertModalEl.hidden = false;
   }
 
@@ -1034,12 +1046,18 @@
   }
 
   if (alertModalEl && alertModalOkEl) {
-    alertModalOkEl.addEventListener('click', hideModal);
+    alertModalOkEl.addEventListener('click', function () {
+      var f = alertModalOnConfirm; // capture before hideModal clears state
+      alertModalOnConfirm = null;
+      hideModal();
+      if (f) f(); // confirm action runs after the modal is dismissed
+    });
+    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () { alertModalOnConfirm = null; hideModal(); });
     alertModalEl.addEventListener('click', function (e) {
-      if (e.target === alertModalEl) hideModal(); // backdrop only, not the card
+      if (e.target === alertModalEl) { alertModalOnConfirm = null; hideModal(); } // backdrop = cancel
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !alertModalEl.hidden) hideModal();
+      if (e.key === 'Escape' && !alertModalEl.hidden) { alertModalOnConfirm = null; hideModal(); }
     });
   }
 
@@ -2214,7 +2232,10 @@
 
   clearBtnEl.addEventListener('click', function (e) {
     e.preventDefault();
-    clearChat();
+    showModal("This clears the current conversation and can't be undone.", {
+      title: 'Clear chat?', confirmLabel: 'Clear', cancelLabel: 'Cancel',
+      danger: true, onConfirm: clearChat
+    });
   });
   document.getElementById('reloadBtn').addEventListener('click', function (e) {
     e.preventDefault();

@@ -736,6 +736,10 @@
       text-align: center;
     }
     .alert-btn:hover { background: var(--color-border-default); color: var(--color-text-light-2); }
+    .alert-btn[hidden] { display: none; }
+    /* Danger (destructive) variant — the confirm action of a safeguard (e.g. Clear chat) */
+    .alert-btn.danger { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
+    .alert-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
     .chat-input {
       flex: 1;
       background: transparent;
@@ -1515,6 +1519,7 @@
         <p class="alert-body" id="alertModalBody" data-fig="487:38596"></p>
       </div>
       <div class="alert-controls" data-fig="487:38638">
+        <button class="alert-btn" id="alertModalCancel" hidden>Cancel</button>
         <button class="alert-btn" id="alertModalOk" data-fig="487:38639">OK</button>
       </div>
     </div>
