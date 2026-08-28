@@ -806,7 +806,7 @@
     .activity-log.expanded { padding-bottom: 0; }
     .activity-log summary {
       color: var(--color-text-dimmer);
-      cursor: pointer;
+      cursor: default; /* expand is button-only now (.activity-more); the row surface isn't clickable */
       user-select: none;
       display: flex;
       justify-content: space-between;
@@ -883,7 +883,7 @@
       overflow: hidden;
       max-height: 0;
       opacity: 0;
-      transition: max-height 0.28s ease, opacity 0.2s ease;
+      transition: max-height 0.28s ease-out, opacity 0.2s ease-out; /* clean deceleration, no overshoot/spring */
     }
     .activity-log.expanded .activity-body { max-height: 240px; opacity: 1; }
     .activity-settings {
