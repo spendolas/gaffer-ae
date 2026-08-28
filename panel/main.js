@@ -30,11 +30,10 @@
   var modelSelectPopupEl = document.getElementById('setModelPopup');
   var moreLabelEl = document.getElementById('moreLabel');
   var moreChevronEl = document.getElementById('moreChevron');
-  var autoCheckEl = document.getElementById('autoCheckUpdates');
-  var autoModelEl = document.getElementById('autoModel');
   var mcpListEl = document.getElementById('mcpList');
-  var checkNowBtnEl = document.getElementById('checkNowBtn');
-  var versionTextEl = document.getElementById('versionText');
+  // Version now lives in the Settings modal (#setVersion is the source of truth);
+  // loadVersion/detectDevInstall write straight to it.
+  var versionTextEl = document.getElementById('setVersion');
   var updateBannerEl = document.getElementById('updateBanner');
   var updateTextEl = document.getElementById('updateText');
   var updateBtnEl = document.getElementById('updateBtn');
@@ -153,17 +152,12 @@
     lastAuth = s || {};
     authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
     var card = document.getElementById('signInCard');
-    var chip = document.getElementById('accountChip');
     var signedOut = authLoggedIn === false;
     if (card) card.classList.toggle('visible', signedOut);
     if (card) { card.hidden = false; } // display controlled by .visible
-    if (chip) {
-      chip.hidden = !(authLoggedIn === true);
-      if (authLoggedIn === true) {
-        document.getElementById('accountLabel').textContent =
-          [s.email, s.orgName, s.plan].filter(Boolean).join(' · ');
-      }
-    }
+    // The account identity now lives in the Settings modal's CLI card (fed from
+    // lastAuth via syncSettings); refresh it if the modal is open.
+    if (typeof settingsModalEl !== 'undefined' && settingsModalEl && !settingsModalEl.hidden) syncSettings();
     updateChatEnabled();
   }
 
@@ -574,22 +568,21 @@
         }
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
-          autoCheckEl.checked = autoCheckUpdates;
+          var acEl = document.getElementById('setAutoCheck'); if (acEl) acEl.checked = autoCheckUpdates;
         }
         if (typeof data.autoModel === 'boolean') {
           autoModel = data.autoModel;
-          if (autoModelEl) autoModelEl.checked = autoModel;
+          var scEl = document.getElementById('setScrooge'); if (scEl) scEl.checked = autoModel;
         }
         if (typeof data.soundEnabled === 'boolean') {
           soundEnabled = data.soundEnabled;
-          var rsEl = document.getElementById('replySound');
-          if (rsEl) rsEl.checked = soundEnabled;
+          var soEl = document.getElementById('setSoundOn'); if (soEl) soEl.checked = soundEnabled;
         }
         if (typeof data.soundVariant === 'string') {
           soundVariant = data.soundVariant;
           if (soundVariant.indexOf('walkie') === 0) soundVariant = 'walkie';
           if (soundVariant === 'barn-door' || soundVariant === 'tape' || soundVariant === 'c47' || soundVariant === 'scrim') soundVariant = 'squeak';
-          updateSoundCycleLabel();
+          soundSelect.update();
         }
         if (typeof data.textScale === 'number') {
           textScale = data.textScale;
@@ -2376,37 +2369,8 @@
     function (v) { soundVariant = v; if (soundEnabled) playSelectedCue(); }
   );
 
-  var soundCycleBtnEl = document.getElementById('soundCycleBtn');
-  function updateSoundCycleLabel() {
-    if (!soundCycleBtnEl) return;
-    var label = soundVariant;
-    for (var i = 0; i < SOUND_CANDIDATES.length; i++) {
-      if (SOUND_CANDIDATES[i].id === soundVariant) label = SOUND_CANDIDATES[i].label;
-    }
-    soundCycleBtnEl.textContent = '\u266a ' + label;
-  }
-  if (soundCycleBtnEl) {
-    updateSoundCycleLabel();
-    soundCycleBtnEl.addEventListener('click', function () {
-      var idx = 0;
-      for (var i = 0; i < SOUND_CANDIDATES.length; i++) if (SOUND_CANDIDATES[i].id === soundVariant) idx = i;
-      var next = SOUND_CANDIDATES[(idx + 1) % SOUND_CANDIDATES.length];
-      soundVariant = next.id;
-      updateSoundCycleLabel();
-      if (soundEnabled) next.play(); // hear what you just selected
-      saveChat();
-    });
-  }
-
-  var replySoundEl = document.getElementById('replySound');
-  if (replySoundEl) {
-    replySoundEl.checked = soundEnabled;
-    replySoundEl.addEventListener('change', function () {
-      soundEnabled = replySoundEl.checked;
-      saveChat();
-      if (soundEnabled) playSelectedCue(); // hear what you enabled
-    });
-  }
+  // (Legacy inline sound cue-cycle button + reply-sound toggle removed \u2014 the
+  //  Settings modal's soundSelect dropdown + setSoundOn toggle own this now.)
 
   // Text-size stepper: scales the chat reading surface via --chat-text.
   var textDecEl = document.getElementById('textDecBtn');
@@ -2461,17 +2425,8 @@
   wireSpell(textIncEl, function () { return 'Larger text'; });
   applyTextScale(); // initialize label + disabled states at load
 
-  autoCheckEl.addEventListener('change', function () {
-    autoCheckUpdates = autoCheckEl.checked;
-    saveChat();
-  });
-  if (autoModelEl) {
-    autoModelEl.addEventListener('change', function () {
-      autoModel = autoModelEl.checked;
-      saveChat();
-    });
-  }
-  checkNowBtnEl.addEventListener('click', function () { checkForUpdate(false); });
+  // Auto-check, Save-tokens (Scrooge) and Check-now are owned by the Settings
+  // modal now (setAutoCheck / setScrooge / setCheckNowBtn handlers below).
   // Drawer expand/collapse is class-driven with a height transition —
   // native <details> toggling can't animate, so it stays `open` and the
   // .expanded class shows/hides the animated .activity-body.
@@ -2528,7 +2483,7 @@
   if ((b = document.getElementById('signInClaude'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'claudeai' }); });
   if ((b = document.getElementById('signInConsole'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'console' }); });
   if ((b = document.getElementById('signInCancel'))) b.addEventListener('click', function () { sendWs({ type: 'cancel_sign_in' }); });
-  if ((b = document.getElementById('signOutBtn'))) b.addEventListener('click', function () { sendWs({ type: 'sign_out' }); });
+  // (Sign-out is handled by the Settings modal's setSignOutBtn handler.)
   window.__gafferAuth = function (s) { renderAuth(s || {}); }; // dev/test hook (mirrors __gafferSound)
 
   // ── Start ──
@@ -2551,8 +2506,7 @@
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
   function syncSettings() {
-    var vt = document.getElementById('versionText');
-    var sv = document.getElementById('setVersion'); if (sv && vt && sv !== vt) sv.textContent = vt.textContent;
+    // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
     var lce = document.getElementById('setLastCheck');
     if (lce && !lce.textContent) lce.textContent = 'Not checked yet';
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
@@ -2579,8 +2533,8 @@
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
   settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) closeSettings(); });
   // Wire the modal controls back to existing state/handlers.
-  document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; if (autoCheckEl) autoCheckEl.checked = autoCheckUpdates; saveChat(); });
-  document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; if (autoModelEl) autoModelEl.checked = autoModel; saveChat(); });
+  document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; saveChat(); });
+  document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; saveChat(); });
   // Enabling sound previews the selected cue (mirrors the reply-sound toggle).
   document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; if (soundEnabled) playSelectedCue(); saveChat(); });
   // Preview button plays the currently SELECTED cue (not a cue type) — gated by
@@ -2593,7 +2547,7 @@
   // Model / variant / effort / sound controls are wired natively (makeSelect +
   // renderEffort) — no proxying to inline.
   stopBtnEl.style.display = 'none';
-  autoCheckEl.checked = autoCheckUpdates;
+  document.getElementById('setAutoCheck').checked = autoCheckUpdates;
   updateModelSelect();
   updateVariantSelect();
   soundSelect.update();

@@ -1297,46 +1297,8 @@
         <span class="mcp-loading">loading…</span>
       </div>
     </div>
-    <div class="activity-settings">
-      <span class="row-label">Model:</span>
-      <span class="select-wrap">
-        <button id="modelSelectBtn" class="select-btn" data-fig="183:1072"><span id="modelSelectLabel">Opus</span></button>
-        <div id="modelSelectPopup" class="select-popup" hidden data-fig="195:1366"></div>
-      </span>
-      <span class="select-wrap">
-        <button id="variantSelectBtn" class="select-btn" title="Context window"><span id="variantSelectLabel">Standard</span></button>
-        <div id="variantSelectPopup" class="select-popup" hidden></div>
-      </span>
-      <span class="select-wrap">
-        <button id="effortSelectBtn" class="select-btn" title="Reasoning effort"><span id="effortSelectLabel">High</span></button>
-        <div id="effortSelectPopup" class="select-popup" hidden></div>
-      </span>
-    </div>
-    <div class="activity-settings">
-      <span id="versionText">v—</span>
-      <span id="accountChip" class="account-chip" hidden>
-        <span id="accountLabel"></span>
-        <button id="signOutBtn" class="text-btn">Sign out</button>
-      </span>
-      <span class="spacer"></span>
-      <button id="soundCycleBtn" class="text-btn" title="Cycle reply-sound candidates — the one you leave selected is the cue"></button>
-      <label class="toggle-label" title="Reply cue when the panel is unfocused">
-        <input type="checkbox" id="replySound">
-        <span class="toggle"><span class="knob"></span></span>
-        Sound
-      </label>
-      <label class="toggle-label" title="On simpler turns, use a lighter model / effort / context to save tokens (beta)">
-        <input type="checkbox" id="autoModel">
-        <span class="toggle"><span class="knob"></span></span>
-        Save tokens [beta]
-      </label>
-      <label class="toggle-label">
-        <input type="checkbox" id="autoCheckUpdates">
-        <span class="toggle"><span class="knob"></span></span>
-        Auto-check updates
-      </label>
-      <button id="checkNowBtn" class="text-btn">Check now</button>
-    </div>
+    <!-- Model/variant/effort + account/version/sound/updates settings moved to
+         the Settings modal (#settingsModal) — the source of truth. -->
     <div id="lastJsx" class="value" hidden></div>
     <div id="lastResult" class="value" hidden></div>
     </div>
