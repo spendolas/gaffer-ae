@@ -63,6 +63,7 @@ Status legend: ⬜ unverified · ✅ verified default+variants · ⚠️ finding
 | A11 | StatusDot (MCP) | 183:1051 | status{auth,connected,failed} | mcp status dot (TBD grep) | status→color | ⬜ |
 | A12 | ImageChip | 176:940 | Show Close (bool) | `.account-avatar` + paste chip | image fill override; Show Close→× btn | ✅ (avatars re-verified this session; paste chip earlier) |
 | A13 | CodeInline | 185:1156 | — | `.code-inline` (also reused by `.beta-badge`) | — | ✅ verified (see A13 row above) |
+| A14 | EffortSlider (ModelSelect) | 484:30131 | value (dot count = model's efforts) | `.effort-slider` (`.e-dot`/`.e-circ` + overlay `.e-fill`/`.e-thumb`/`.e-knob`) | value→thumb px + on-dots | ✅ CLEAN atomic pass — every atom exact: track `#000000@.5` r8 h28, off-circle `#666666` 4×4 r999, on-circle/knob `#4D9DF7`, fill `#4A7DC9@.2` r8, thumb 18/knob 16×24 r6. Structural divergence (intentional, generic-repro): Figma flows the handle as a flex slot between dots (dots reflow); code keeps 5 evenly-spaced dots + an ABSOLUTE thumb overlay so the drag can free-follow + ease-to-dot (flex-insert teleports/can't animate). data-fig anchors on e-fill/e-thumb/e-knob will read a width delta in diff-parity (Figma's 224px clipped-rect fill technique ≠ code's growing-width fill) — known, accepted per the atom-registry generic-repro principle. |
 
 ## Molecules / organisms (Pass 2 — override-diff only, no drill)
 
