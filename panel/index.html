@@ -740,6 +740,13 @@
     /* Danger (destructive) variant — the confirm action of a safeguard (e.g. Clear chat) */
     .alert-btn.danger { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
     .alert-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
+    /* Full-screen takeover fade — appear: fade in + up; close: fade out + down.
+       Backdrop fades opacity; the card (.tk-card) also slides 8px. Driven by
+       tkShow/tkHide (main.js) toggling .tk-open (+ .tk-closing during exit). */
+    .tk-anim { opacity: 0; transition: opacity 0.18s ease-out; }
+    .tk-anim.tk-open { opacity: 1; }
+    .tk-anim > .tk-card { transform: translateY(8px); opacity: 0; transition: transform 0.18s ease-out, opacity 0.18s ease-out; }
+    .tk-anim.tk-open > .tk-card { transform: none; opacity: 1; }
     .chat-input {
       flex: 1;
       background: transparent;
@@ -1189,9 +1196,11 @@
     }
 
     /* Sign-in card */
-    .signin-card { position: absolute; inset: 0; z-index: 3000; background: var(--color-bg-panel); display: none; flex-direction: column;
-      align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
-    .signin-card.visible { display: flex; }
+    .signin-card { position: absolute; inset: 0; z-index: 3000; background: var(--color-bg-panel); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px;
+      opacity: 0; visibility: hidden; transform: translateY(8px); /* takeover fade-in-up / out-down */
+      transition: opacity 0.18s ease-out, transform 0.18s ease-out, visibility 0.18s ease-out; }
+    .signin-card.visible { opacity: 1; visibility: visible; transform: none; }
     .signin-title { font-size: 16px; color: var(--color-text-strong); }
     .signin-sub { font-size: 12px; color: var(--color-text-muted); }
     .signin-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
@@ -1377,10 +1386,10 @@
   </details>
 
   <div class="drop-overlay" id="dropOverlay" data-fig="191:1275"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
-  <div class="img-lightbox" id="imgLightbox" hidden data-fig="191:1276"><img></div>
+  <div class="img-lightbox tk-anim" id="imgLightbox" hidden data-fig="191:1276"><img class="tk-card"></div>
   <div class="toast-stack" id="toastStack" data-fig="480:23820"></div>
-  <div class="settings-modal" id="settingsModal" hidden data-fig="447:4826">
-    <div class="settings-card" data-fig="447:4824">
+  <div class="settings-modal tk-anim" id="settingsModal" hidden data-fig="447:4826">
+    <div class="settings-card tk-card" data-fig="447:4824">
       <div class="settings-header" data-fig="475:10068">
         <span class="settings-title" data-fig="I475:10068;475:10043">Settings</span>
         <button id="settingsDismissBtn" class="icon-btn hollow" title="Close settings" data-fig="I475:10068;475:10044"></button>
@@ -1512,8 +1521,8 @@
     </div>
   </div>
 
-  <div class="alert-backdrop" id="alertModal" hidden data-fig="487:38896">
-    <div class="alert-card" data-fig="487:38216">
+  <div class="alert-backdrop tk-anim" id="alertModal" hidden data-fig="487:38896">
+    <div class="alert-card tk-card" data-fig="487:38216">
       <div class="alert-message" data-fig="487:38651">
         <p class="alert-title" id="alertModalTitle" data-fig="487:38590" hidden></p>
         <p class="alert-body" id="alertModalBody" data-fig="487:38596"></p>

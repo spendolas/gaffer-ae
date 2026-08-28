@@ -48,6 +48,35 @@
   var alertModalOkEl = document.getElementById('alertModalOk');
   var alertModalCancelEl = document.getElementById('alertModalCancel');
 
+  // Full-screen takeover fade — fade-in-up on open, fade-out-down on close.
+  // Elements keep the `hidden` attr (display:none) semantics; tkShow/tkHide wrap
+  // it so the CSS transition (.tk-anim / .tk-card) plays. On close we hold the
+  // element visible for the exit transition, then set hidden.
+  function tkShow(el) {
+    if (!el) return;
+    el.hidden = false;
+    el.classList.remove('tk-closing');
+    void el.offsetWidth; // commit the closed state so adding tk-open transitions
+    el.classList.add('tk-open');
+  }
+  function tkHide(el) {
+    if (!el || el.hidden || el.classList.contains('tk-closing')) return;
+    el.classList.remove('tk-open');
+    el.classList.add('tk-closing');
+    var done = function () {
+      el.hidden = true;
+      el.classList.remove('tk-closing');
+    };
+    var t = setTimeout(done, 240); // fallback if transitionend doesn't fire
+    el.addEventListener('transitionend', function h(ev) {
+      if (ev.target !== el) return; // the backdrop's own opacity transition
+      clearTimeout(t);
+      el.removeEventListener('transitionend', h);
+      done();
+    });
+  }
+  function tkOpen(el) { return el && !el.hidden && !el.classList.contains('tk-closing'); }
+
   // Chat state
   var currentSessionId = null;
   var chatBusy = false;
@@ -187,7 +216,7 @@
     if (card) { card.hidden = false; } // display controlled by .visible
     // The account identity now lives in the Settings modal's CLI card (fed from
     // lastAuth via syncSettings); refresh it if the modal is open.
-    if (typeof settingsModalEl !== 'undefined' && settingsModalEl && !settingsModalEl.hidden) syncSettings();
+    if (typeof settingsModalEl !== 'undefined' && settingsModalEl && tkOpen(settingsModalEl)) syncSettings();
     updateChatEnabled();
   }
 
@@ -981,19 +1010,18 @@
   function openLightbox(dataUrl) {
     if (!lightboxEl || !lightboxImgEl || !dataUrl) return;
     lightboxImgEl.src = dataUrl;
-    lightboxEl.hidden = false;
+    tkShow(lightboxEl);
   }
 
   function closeLightbox() {
     if (!lightboxEl || !lightboxImgEl) return;
-    lightboxEl.hidden = true;
-    lightboxImgEl.src = '';
+    tkHide(lightboxEl); // src is overwritten on next open; keep it for the fade-out
   }
 
   if (lightboxEl) {
     lightboxEl.addEventListener('click', closeLightbox);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !lightboxEl.hidden) closeLightbox();
+      if (e.key === 'Escape' && tkOpen(lightboxEl)) closeLightbox();
     });
   }
 
@@ -1034,12 +1062,12 @@
       alertModalOkEl.classList.remove('danger');
       if (alertModalCancelEl) alertModalCancelEl.hidden = true;
     }
-    alertModalEl.hidden = false;
+    tkShow(alertModalEl);
   }
 
   function hideModal() {
-    if (!alertModalEl || alertModalEl.hidden) return;
-    alertModalEl.hidden = true;
+    if (!tkOpen(alertModalEl)) return;
+    tkHide(alertModalEl);
     var cb = alertModalOnClose;
     alertModalOnClose = null;
     if (cb) cb();
@@ -1057,7 +1085,7 @@
       if (e.target === alertModalEl) { alertModalOnConfirm = null; hideModal(); } // backdrop = cancel
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !alertModalEl.hidden) { alertModalOnConfirm = null; hideModal(); }
+      if (e.key === 'Escape' && tkOpen(alertModalEl)) { alertModalOnConfirm = null; hideModal(); }
     });
   }
 
@@ -2741,8 +2769,8 @@
     // status whenever it's opened (see renderApi() / apiState above).
     renderApi();
   }
-  function openSettings() { syncSettings(); settingsModalEl.hidden = false; }
-  function closeSettings() { settingsModalEl.hidden = true; }
+  function openSettings() { syncSettings(); tkShow(settingsModalEl); }
+  function closeSettings() { tkHide(settingsModalEl); }
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
   settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) closeSettings(); });
