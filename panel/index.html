@@ -1056,6 +1056,9 @@
       bottom: calc(100% + 2px);
       left: 0;
       min-width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 2px; /* popup itemSpacing 2 (195:1366) */
       padding: 2px;
       border-radius: 8px;
       background: var(--color-border-input);
@@ -1068,7 +1071,7 @@
     }
     .select-popup .option {
       display: block;
-      padding: 7px 6px; /* option row 24h (10px label + 7px t/b), pad L/R6 (195:1367) */
+      padding: 8px 6px; /* option row 26h (10px label + 8px t/b), pad L/R6 (195:1367) */
       border-radius: 6px;
       color: var(--color-text-light-2); /* #CCC label (195:1370) */
       font-size: calc(10px * var(--chat-text, 1)); /* Figma option label 10px; rides --chat-text */
