@@ -76,6 +76,30 @@
     });
   }
   function tkOpen(el) { return el && !el.hidden && !el.classList.contains('tk-closing'); }
+  // Dismiss a takeover only on a genuine click IN the void: the press AND the
+  // release must both land on `el` itself (the backdrop), not its card. A plain
+  // 'click' listener misfires here — the DOM fires click on the nearest common
+  // ancestor of mousedown/mouseup, so a press inside the card that drifts onto
+  // the backdrop resolves its click to the backdrop and would dismiss. Gating on
+  // the mousedown target (tracked via both pointerdown and mousedown for CEP's
+  // Chromium 99, which emits only MouseEvents for real HID) fixes that.
+  // anyTarget=false (modals): press AND release must both land on the backdrop
+  // itself. anyTarget=true (lightbox): a genuine click on any one element (image
+  // or void) closes, but a drag that starts on one element and releases on
+  // another does not — so image-click-to-close survives while drag-dismiss dies.
+  function dismissOnBackdrop(el, closeFn, anyTarget) {
+    if (!el) return;
+    var downTarget = null;
+    function markDown(e) { downTarget = e.target; }
+    el.addEventListener('pointerdown', markDown);
+    el.addEventListener('mousedown', markDown);
+    el.addEventListener('click', function (e) {
+      var sameTarget = downTarget === e.target;
+      var ok = anyTarget ? sameTarget : (sameTarget && e.target === el);
+      downTarget = null;
+      if (ok) closeFn(e);
+    });
+  }
 
   // Chat state
   var currentSessionId = null;
@@ -1038,7 +1062,7 @@
   }
 
   if (lightboxEl) {
-    lightboxEl.addEventListener('click', closeLightbox);
+    dismissOnBackdrop(lightboxEl, closeLightbox, true);
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && tkOpen(lightboxEl)) closeLightbox();
     });
@@ -1100,9 +1124,7 @@
       if (f) f(); // confirm action runs after the modal is dismissed
     });
     if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () { alertModalOnConfirm = null; hideModal(); });
-    alertModalEl.addEventListener('click', function (e) {
-      if (e.target === alertModalEl) { alertModalOnConfirm = null; hideModal(); } // backdrop = cancel
-    });
+    dismissOnBackdrop(alertModalEl, function () { alertModalOnConfirm = null; hideModal(); }); // void click = cancel
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && tkOpen(alertModalEl)) { alertModalOnConfirm = null; hideModal(); }
     });
@@ -2482,6 +2504,8 @@
       if (CIRC_FIG[d]) circ.setAttribute('data-fig', 'I484:27883;' + CIRC_FIG[d]);
       dt.appendChild(circ); slider.appendChild(dt);
     }
+    // Filled "handle" region (484:30252) grows from the left to the thumb; the
+    // thumb (484:30631) + knob (484:30565) ride at its leading edge.
     var fill = document.createElement('span'); fill.className = 'e-fill';
     fill.setAttribute('data-fig', 'I484:27883;484:30252');
     var thumb = document.createElement('span'); thumb.className = 'e-thumb';
@@ -2828,7 +2852,7 @@
   function closeSettings() { tkHide(settingsModalEl); }
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
-  settingsModalEl.addEventListener('click', function (e) { if (e.target === settingsModalEl) closeSettings(); });
+  dismissOnBackdrop(settingsModalEl, closeSettings); // void click only, not a drag out of the card
   // Wire the modal controls back to existing state/handlers.
   document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; saveChat(); });
   document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; saveChat(); });
