@@ -1847,8 +1847,30 @@
     function dismiss() {
       if (!t.parentNode) return;
       clearTimeout(timer);
-      t.classList.remove('visible');
-      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 220);
+      t.classList.remove('visible'); // fade + slide the dismissing toast out
+      setTimeout(function () {
+        if (!t.parentNode) return;
+        // FLIP: the toasts below this one shift up when it leaves the flow.
+        // Capture their positions, remove, then transform them back to where
+        // they were and let the CSS transform transition (0.18s) slide them up
+        // into place — so the stack closes the gap smoothly instead of snapping.
+        var movers = [];
+        for (var s = t.nextElementSibling; s; s = s.nextElementSibling) {
+          movers.push({ el: s, top: s.getBoundingClientRect().top });
+        }
+        t.parentNode.removeChild(t);
+        movers.forEach(function (m) {
+          var delta = m.top - m.el.getBoundingClientRect().top; // px it jumped up
+          if (!delta) return;
+          m.el.style.transition = 'none';
+          m.el.style.transform = 'translateY(' + delta + 'px)';
+          void m.el.offsetHeight; // commit the pre-slide position instantly
+          m.el.style.transition = ''; // restore CSS transform transition
+          m.el.style.transform = ''; // -> settles to translateY(0), animated
+          var clear = function () { m.el.style.transition = ''; m.el.style.transform = ''; m.el.removeEventListener('transitionend', clear); };
+          m.el.addEventListener('transitionend', clear);
+        });
+      }, 220);
     }
     function arm() { if (life) timer = setTimeout(dismiss, life); }
     function pause() { clearTimeout(timer); }
