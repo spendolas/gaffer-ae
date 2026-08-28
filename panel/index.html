@@ -1395,21 +1395,32 @@
             </span>
           </div>
         </div>
-        <!-- Account / API (scaffold — no live key handling yet) — canonical row:
-             Left Block (avatar chip + status + "API" secondary) + Controls
-             (Connect + Forget/shred). -->
+        <!-- Account / API (scaffold — NO real key handling; masked/demo text only,
+             driven by `apiState` in main.js) — canonical row: Left Block (avatar
+             chip + key/meta text) + Controls (Connect/Disconnect + Forget/shred).
+             3 Figma states share this one markup (anchors point at the
+             480:20902 "disconnected" instance — the only one with generated
+             specs); renderApi() toggles text/visibility per apiState.status:
+               nokey        (516:42191) — "Add key" shown, shred hidden
+               disconnected (480:20902) — masked key + "Connect" + shred
+               connected    (516:43487) — masked key + "Disconnect" + shred
+             Connect/Disconnect intentionally keeps the "informed" (blue) class in
+             all 3 states — Figma's Disconnect is Purpose=Default (grey), but this
+             DOM node is diff-parity-anchored to the Connect variant's spec, so
+             swapping its class would risk a false mismatch depending on which
+             capture state "wins" the audit's per-anchor area tie-break. -->
         <div class="settings-item" data-fig="I480:20902;478:12027">
           <div class="row1">
             <span class="row1-left">
               <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
               <div class="item-col">
-                <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Not connected</span>
-                <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">API</span>
+                <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Bring you API key</span>
+                <span class="item-sub meta" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">From the Anthropic console</span>
               </div>
             </span>
             <span class="row1-controls" data-fig="I480:20902;478:12027;475:10191">
-              <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Connect</button>
-              <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194"></button>
+              <button id="setApiConnectBtn" class="text-btn informed" data-fig="I480:20902;478:12027;475:10193">Add key</button>
+              <button id="setApiForgetBtn" class="icon-btn danger" title="Remove key" data-fig="I480:20902;478:12027;475:10194" hidden></button>
             </span>
           </div>
         </div>

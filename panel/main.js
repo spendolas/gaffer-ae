@@ -148,6 +148,31 @@
   // ── Auth ──
 
   var lastAuth = {}; // last auth_status payload — feeds the Settings CLI card
+
+  // Account / API — SCAFFOLD ONLY. No real key is ever stored/handled here;
+  // `key` is a static masked placeholder for visual review. status:
+  // 'nokey' (no key added yet) | 'disconnected' (key present, not connected) |
+  // 'connected' (key present, connected). Defaults to 'nokey' to match the
+  // already-parity-verified default render (see renderApi() for the 3 states).
+  var apiState = { status: 'nokey', key: 'sk-ant-…4f2a', provider: 'Bedrock' };
+  function renderApi() {
+    var keyEl = document.getElementById('setApiKey');
+    var metaEl = document.getElementById('setApiMeta');
+    var connectBtn = document.getElementById('setApiConnectBtn');
+    var forgetBtn = document.getElementById('setApiForgetBtn');
+    if (!keyEl || !metaEl || !connectBtn || !forgetBtn) return;
+    if (apiState.status === 'nokey') {
+      keyEl.textContent = 'Bring you API key';
+      metaEl.textContent = 'From the Anthropic console';
+      connectBtn.textContent = 'Add key';
+      forgetBtn.hidden = true;
+    } else {
+      keyEl.textContent = apiState.key;
+      metaEl.textContent = apiState.provider ? 'API • ' + apiState.provider : 'API';
+      connectBtn.textContent = apiState.status === 'connected' ? 'Disconnect' : 'Connect';
+      forgetBtn.hidden = false;
+    }
+  }
   function renderAuth(s) {
     lastAuth = s || {};
     authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
@@ -1491,6 +1516,14 @@
       window.__gaffer.currentSelectionQuote = currentSelectionQuote;
       window.__gaffer.showToast = showToast;
       window.__gaffer.openSettings = openSettings;
+      // Account / API review hook — sets apiState.status + re-renders, so the 3
+      // Figma states (nokey/disconnected/connected) can be captured without a
+      // real key. See apiState/renderApi() above.
+      window.__gaffer.setApiState = function (status) {
+        if (status !== 'nokey' && status !== 'disconnected' && status !== 'connected') return;
+        apiState.status = status;
+        renderApi();
+      };
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -2486,6 +2519,14 @@
   // (Sign-out is handled by the Settings modal's setSignOutBtn handler.)
   window.__gafferAuth = function (s) { renderAuth(s || {}); }; // dev/test hook (mirrors __gafferSound)
 
+  // Account / API — scaffold actions only: these send a WS message the daemon
+  // does not yet handle (or is a no-op today). No key is read/entered/stored
+  // here — see apiState above.
+  if ((b = document.getElementById('setApiConnectBtn'))) b.addEventListener('click', function () {
+    sendWs({ type: apiState.status === 'connected' ? 'api_disconnect' : apiState.status === 'disconnected' ? 'api_connect' : 'api_add_key' });
+  });
+  if ((b = document.getElementById('setApiForgetBtn'))) b.addEventListener('click', function () { sendWs({ type: 'api_forget' }); });
+
   // ── Start ──
   if (typeof GafferIcons !== 'undefined') {
     ledEl.innerHTML = GafferIcons.star;
@@ -2529,6 +2570,9 @@
       meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
       so.hidden = false;
     } else { em.textContent = 'Signed out'; meta.textContent = 'CLI'; so.hidden = true; }
+    // Account / API — re-render from apiState so the modal reflects the latest
+    // status whenever it's opened (see renderApi() / apiState above).
+    renderApi();
   }
   function openSettings() { syncSettings(); settingsModalEl.hidden = false; }
   function closeSettings() { settingsModalEl.hidden = true; }

@@ -224,6 +224,26 @@ window.__audit = (function () {
       document.getElementById('setScrooge').checked = false;
       document.getElementById('setSoundOn').checked = true;
     },
+    // Account / API — 3 Figma states (516:42191 / 480:20902 / 516:43487) driven
+    // via the window.__gaffer.setApiState() review hook (scaffold — no real key).
+    'api-nokey': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.setApiState) window.__gaffer.setApiState('nokey');
+    },
+    'api-haskey-disc': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.setApiState) window.__gaffer.setApiState('disconnected');
+    },
+    'api-haskey-conn': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.setApiState) window.__gaffer.setApiState('connected');
+    },
     'dropdown': function () {
       reset();
       document.querySelector('.activity-log').classList.add('expanded');
