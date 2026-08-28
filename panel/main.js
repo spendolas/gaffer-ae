@@ -1863,10 +1863,12 @@
       t.style.left = (r.left - pr.left) + 'px';
       t.style.width = r.width + 'px';
       t.style.margin = '0';
-      t.classList.remove('visible'); // fade out
-      t.style.transform = 'translateY(4px) scale(0.96)'; // recede as it goes
+      t.style.zIndex = '-1'; // sit behind the staying toast as it slides over
+      t.style.transition = 'opacity 0.28s ease, transform 0.28s ease'; // slower fade
+      t.classList.remove('visible'); // fade out — vertical drift only, no x/scale
+      t.style.transform = 'translateY(4px)';
       // FLIP the siblings up on a soft ease-out, synced with the fade.
-      var EASE = 'transform 0.26s cubic-bezier(0.22, 1, 0.36, 1)';
+      var EASE = 'transform 0.32s cubic-bezier(0.22, 1, 0.36, 1)';
       movers.forEach(function (m) {
         var delta = m.top - m.el.getBoundingClientRect().top; // px it jumped up
         if (!delta) return;
@@ -1878,7 +1880,7 @@
         var clear = function () { m.el.style.transition = ''; m.el.style.transform = ''; m.el.removeEventListener('transitionend', clear); };
         m.el.addEventListener('transitionend', clear);
       });
-      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 260);
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 320);
     }
     function arm() { if (life) timer = setTimeout(dismiss, life); }
     function pause() { clearTimeout(timer); }
