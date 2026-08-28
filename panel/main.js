@@ -198,11 +198,24 @@
     if (apiState.status === 'nokey') {
       keyEl.textContent = 'Bring you API key';
       metaEl.textContent = 'From the Anthropic console';
-      connectBtn.textContent = 'Add key';
+      metaEl.classList.add('dim'); // Multiline subtitle role, #777 — see .item-sub.dim
+      // Icon-only, Purpose=Default (grey) button — Figma 516:42191, Icon=Ethernet
+      // (component 516:44855). TODO: GafferIcons has no `ethernet` glyph yet —
+      // export it from Figma component 516:44855 and add it to panel/icons.js;
+      // until then this renders an empty icon-only button (correct shape/color,
+      // missing glyph only).
+      connectBtn.className = 'icon-btn';
+      connectBtn.title = 'Add key';
+      connectBtn.textContent = '';
+      connectBtn.appendChild(icon('ethernet'));
       forgetBtn.hidden = true;
     } else {
       keyEl.textContent = apiState.key;
       metaEl.textContent = apiState.provider ? 'API • ' + apiState.provider : 'API';
+      metaEl.classList.remove('dim'); // Secondary label role here, base #666 is correct
+      // Connect = Purpose=Informed (blue); Disconnect = Purpose=Default (grey) — Figma 516:43487.
+      connectBtn.className = apiState.status === 'connected' ? 'text-btn' : 'text-btn informed';
+      connectBtn.removeAttribute('title');
       connectBtn.textContent = apiState.status === 'connected' ? 'Disconnect' : 'Connect';
       forgetBtn.hidden = false;
     }
