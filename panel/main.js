@@ -2656,7 +2656,9 @@
     document.getElementById('setSoundLabel'),
     SOUND_CANDIDATES.map(function (c) { return { value: c.id, label: c.label }; }),
     function () { return soundVariant; },
-    function (v) { soundVariant = v; if (soundEnabled) playSelectedCue(); }
+    // Picking a cue always previews it — hearing the option is the whole point
+    // of the picker, independent of whether reply sounds are enabled.
+    function (v) { soundVariant = v; playSelectedCue(); }
   );
 
   // (Legacy inline sound cue-cycle button + reply-sound toggle removed \u2014 the
@@ -2872,7 +2874,7 @@
   document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; if (soundEnabled) playSelectedCue(); saveChat(); });
   // Preview button plays the currently SELECTED cue (not a cue type) — gated by
   // the sound toggle, ungated by focus so you can audition it.
-  document.getElementById('setSoundPreview').addEventListener('click', function () { if (soundEnabled) playSelectedCue(); });
+  document.getElementById('setSoundPreview').addEventListener('click', function () { playSelectedCue(); }); // explicit preview — always plays, toggle or not
   // (setSoundBtn is now a real dropdown wired via soundSelect/makeSelect above.)
   document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
   document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
