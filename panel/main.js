@@ -2511,17 +2511,26 @@
   setInterval(function () {
     if (activityExpanded()) requestMcpList(true);
   }, 60000);
-  if (activityEl) activityEl.querySelector('summary').addEventListener('click', function (e) {
-    if (e.defaultPrevented) return; // Clear/Reload buttons handled their own click
-    e.preventDefault(); // keep the native details from toggling
-    var expanded = activityEl.classList.toggle('expanded');
-    if (expanded) requestMcpList(availableMcps.length > 0);
-    // More <-> Less, chevron flips (Figma summary affordance)
-    if (moreLabelEl) moreLabelEl.textContent = expanded ? 'Less' : 'More';
-    if (moreChevronEl && typeof GafferIcons !== 'undefined') {
-      moreChevronEl.innerHTML = GafferIcons[expanded ? 'chevronUp' : 'chevronDown'];
-    }
-  });
+  if (activityEl) {
+    // The summary row must never auto-toggle on its own — only the expand
+    // button (.activity-more) drives .expanded. Block native <details>
+    // click-to-toggle for the whole row (status text, toolbar icons, etc.).
+    activityEl.querySelector('summary').addEventListener('click', function (e) {
+      e.preventDefault(); // keep the native details from toggling
+    });
+    var activityMoreEl = document.querySelector('.activity-more');
+    if (activityMoreEl) activityMoreEl.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation(); // don't also run the summary's own click handler
+      var expanded = activityEl.classList.toggle('expanded');
+      if (expanded) requestMcpList(availableMcps.length > 0);
+      // More <-> Less, chevron flips (Figma summary affordance)
+      if (moreLabelEl) moreLabelEl.textContent = expanded ? 'Less' : 'More';
+      if (moreChevronEl && typeof GafferIcons !== 'undefined') {
+        moreChevronEl.innerHTML = GafferIcons[expanded ? 'chevronUp' : 'chevronDown'];
+      }
+    });
+  }
   updateBtnEl.addEventListener('click', runUpdate);
   dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
   chatInputEl.addEventListener('keydown', function (e) {
