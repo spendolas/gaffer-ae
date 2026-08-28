@@ -74,6 +74,9 @@ window.__audit = (function () {
     document.querySelector('.activity-log').classList.remove('expanded');
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('sendBtn').style.display = '';
+    // Clear body-appended fixtures so states don't bleed into each other.
+    var sc = document.querySelector('.selection-cta'); if (sc && sc.parentNode) sc.parentNode.removeChild(sc);
+    var ts = document.getElementById('toastStack'); if (ts) ts.innerHTML = '';
   }
   function bubble(role, text) {
     var m = el('div', 'chat-msg ' + role);
@@ -190,6 +193,13 @@ window.__audit = (function () {
         c.appendChild(b);
       }
       document.body.appendChild(c);
+    },
+    'toast': function () {
+      reset();
+      if (!(window.__gaffer && window.__gaffer.showToast)) return;
+      ['info', 'success', 'warning', 'error', 'neutral'].forEach(function (ty) {
+        window.__gaffer.showToast(ty, 'Toast label', { duration: 0 });
+      });
     },
   };
   // Interactive elements whose :hover/:focus/:active variants exist in Figma but

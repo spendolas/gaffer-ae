@@ -375,6 +375,50 @@
     @keyframes blink { 50% { opacity: 0.3; } }
     .typing-dot { animation: blink 1s infinite; }
 
+    /* Toast — Toast set 464:10032 + Toast stack 480:23820. Uniform dark pill
+       (bg/table-row-hover), type distinguished by the head-icon glyph only. */
+    .toast-stack {
+      position: fixed;
+      left: 50%;
+      bottom: 84px; /* clears the input area */
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px; /* Toast stack itemSpacing 8 */
+      padding: 24px 0; /* Toast stack 480:23820 pad [24,0,24,0] */
+      z-index: 2500;
+      pointer-events: none;
+    }
+    .toast { /* Toast 462:10030 — r999, pad 6/8/6/12, gap 2; base #000@.5 + solid type tint on top; 5-layer elevation */
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 6px 8px 6px 12px;
+      background: var(--color-bg-table-row-hover);
+      border-radius: var(--radius-full);
+      color: var(--color-text-default);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.29), 0 5px 6px rgba(0,0,0,0.26), 0 10px 8px rgba(0,0,0,0.15), 0 18px 9px rgba(0,0,0,0.04), 0 28px 10px rgba(0,0,0,0.01);
+      pointer-events: auto;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.18s var(--ease-state), transform 0.18s var(--ease-state);
+    }
+    /* Type tint = a solid 2nd fill over the dark base (fills[1] in Figma). */
+    .toast.info    { background: linear-gradient(var(--color-btn-primary-bg), var(--color-btn-primary-bg)), var(--color-bg-table-row-hover); }
+    .toast.success { background: linear-gradient(var(--color-accent-green), var(--color-accent-green)), var(--color-bg-table-row-hover); }
+    .toast.warning { background: linear-gradient(var(--color-accent-amber), var(--color-accent-amber)), var(--color-bg-table-row-hover); }
+    .toast.error   { background: linear-gradient(var(--color-accent-red), var(--color-accent-red)), var(--color-bg-table-row-hover); }
+    .toast.neutral { background: linear-gradient(var(--color-bubble-assistant-border), var(--color-bubble-assistant-border)), var(--color-bg-table-row-hover); }
+    .toast.visible { opacity: 1; transform: translateY(0); }
+    .toast > .gicon { width: 16px; height: 16px; flex-shrink: 0; } /* Head Icon 16, currentColor text/default */
+    .toast-label { /* Framing 462:10025 pad4 + label text/default 12/16 */
+      padding: 4px;
+      font-size: 12px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+
     /* Bubble image attachments */
     .bubble-images-row {
       display: flex;
@@ -1225,6 +1269,7 @@
 
   <div class="drop-overlay" id="dropOverlay" data-fig="191:1275"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
   <div class="img-lightbox" id="imgLightbox" hidden data-fig="191:1276"><img></div>
+  <div class="toast-stack" id="toastStack" data-fig="480:23820"></div>
 
   <script src="lib/CSInterface.js"></script>
   <script src="lib/marked.min.js"></script>

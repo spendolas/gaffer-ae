@@ -707,9 +707,9 @@
       }
       if (msg.type === 'daemon_reloading') {
         // Dev auto-reload: the daemon is stepping aside for updated code; the
-        // onclose handler relaunches it and we reconnect. TODO: swap for a
-        // toast once the toast system lands (Figma pending).
-        showChatNotice(msg.message || 'Reloading Gaffer for updated code…');
+        // onclose handler relaunches it and we reconnect. Surfaced as a neutral
+        // toast (refresh action icon) rather than a chat notice.
+        showToast('neutral', msg.message || 'Reloading Gaffer for updated code…', { actionIcon: 'refresh', actionTitle: 'Reloading' });
         return;
       }
       if (msg.type === 'models') {
@@ -1491,6 +1491,7 @@
       window.__gaffer.addReplyQuote = addReplyQuote;
       window.__gaffer.clearReplyQuotes = clearReplyQuotes;
       window.__gaffer.currentSelectionQuote = currentSelectionQuote;
+      window.__gaffer.showToast = showToast;
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -1643,6 +1644,50 @@
     notice.textContent = text;
     chatMessagesEl.appendChild(notice);
     scrollToBottom();
+  }
+
+  // Toast — dark pill (Toast set 464:10032). `type` (info|success|warning|error|
+  // neutral) selects only the head-icon glyph; the pill is uniform. Auto-dismisses
+  // with pause-on-hover/focus (WCAG 2.2.1) plus a manual dismiss button.
+  var TOAST_ICON = { info: 'galaxy', success: 'check', warning: 'flag', error: 'circleOff', neutral: 'book' };
+  var TOAST_FIG = { info: '462:10030', success: '480:24373', warning: '480:24379', error: '480:24385', neutral: '480:24665' };
+  function showToast(type, label, opts) {
+    opts = opts || {};
+    var stack = document.getElementById('toastStack');
+    if (!stack) return null;
+    var t = document.createElement('div');
+    t.className = 'toast ' + (TOAST_ICON[type] ? type : 'neutral'); // type tint + head-icon glyph
+    if (TOAST_FIG[type]) t.setAttribute('data-fig', TOAST_FIG[type]);
+    t.appendChild(icon(TOAST_ICON[type] || 'book'));
+    var lbl = document.createElement('span');
+    lbl.className = 'toast-label';
+    lbl.textContent = label || '';
+    t.appendChild(lbl);
+    var btn = document.createElement('button');
+    btn.className = 'icon-btn hollow';
+    btn.setAttribute('data-fig', '462:10028'); // Button (Icon/Hollow)
+    btn.title = opts.actionTitle || 'Dismiss';
+    btn.appendChild(icon(opts.actionIcon || 'close'));
+    t.appendChild(btn);
+    stack.appendChild(t);
+    requestAnimationFrame(function () { t.classList.add('visible'); });
+
+    var timer = null, life = opts.duration == null ? 6000 : opts.duration;
+    function dismiss() {
+      if (!t.parentNode) return;
+      clearTimeout(timer);
+      t.classList.remove('visible');
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 220);
+    }
+    function arm() { if (life) timer = setTimeout(dismiss, life); }
+    function pause() { clearTimeout(timer); }
+    t.addEventListener('mouseenter', pause);
+    t.addEventListener('mouseleave', arm);
+    t.addEventListener('focusin', pause);
+    t.addEventListener('focusout', arm);
+    btn.addEventListener('click', function () { if (opts.onAction) opts.onAction(); dismiss(); });
+    arm();
+    return { el: t, dismiss: dismiss };
   }
 
   function showChatError(error) {
