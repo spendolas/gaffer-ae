@@ -387,7 +387,7 @@
       align-items: center;
       gap: 8px; /* Toast stack itemSpacing 8 */
       padding: 24px 0; /* Toast stack 480:23820 pad [24,0,24,0] */
-      z-index: 2500;
+      z-index: 4000;
       pointer-events: none;
     }
     .toast { /* Toast 462:10030 — r999, pad 6/8/6/12, gap 2; base #000@.5 + solid type tint on top; 5-layer elevation */
@@ -689,7 +689,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 1200;
+      z-index: 3000;
     }
     .alert-backdrop[hidden] { display: none; }
     .alert-card {
@@ -857,7 +857,7 @@
        over the selection (fixed, viewport coords). Buttons reuse .icon-btn. */
     .selection-cta { /* SelectedTextActions 507:40583 — r8 pill, bg/panel + rest-overlay tint, 5-layer elevation, flush hollow buttons */
       position: fixed;
-      z-index: 3000;
+      z-index: 2000;
       display: flex;
       gap: 0;
       padding: 0;
@@ -1185,7 +1185,7 @@
     }
 
     /* Sign-in card */
-    .signin-card { position: absolute; inset: 0; z-index: 2000; background: var(--color-bg-panel); display: none; flex-direction: column;
+    .signin-card { position: absolute; inset: 0; z-index: 3000; background: var(--color-bg-panel); display: none; flex-direction: column;
       align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
     .signin-card.visible { display: flex; }
     .signin-title { font-size: 16px; color: var(--color-text-strong); }
@@ -1205,7 +1205,7 @@
     .settings-modal {
       position: fixed;
       inset: 0;
-      z-index: 2000;
+      z-index: 3000;
       display: flex;
       align-items: center;
       justify-content: center;
