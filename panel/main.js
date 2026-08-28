@@ -1853,18 +1853,21 @@
       for (var s = t.nextElementSibling; s; s = s.nextElementSibling) {
         movers.push({ el: s, top: s.getBoundingClientRect().top });
       }
-      // Pin the dismissing toast at its spot and pull it OUT of flow, so the gap
-      // closes immediately and the siblings glide up WHILE it fades — one beat,
-      // not fade-then-slide. (stack is position:fixed, so absolute is relative
-      // to it; top accounts for the 24px stack padding.)
-      var r = t.getBoundingClientRect(), pr = stack.getBoundingClientRect();
-      t.style.position = 'absolute';
-      t.style.top = (r.top - pr.top) + 'px';
-      t.style.left = (r.left - pr.left) + 'px';
+      // Detach the dismissing toast to <body> at fixed VIEWPORT coords, out of
+      // the stack. The stack is a center-aligned hug-width column, so once this
+      // toast leaves the flow the stack shrinks + its translateX(-50%) box
+      // shifts; a toast pinned inside the stack would ride that shift sideways
+      // (the "slide right"). Fixed on <body> is immune — it fades in place, no x.
+      var r = t.getBoundingClientRect();
+      document.body.appendChild(t); // removes from stack -> siblings reflow up now
+      t.style.position = 'fixed';
+      t.style.top = r.top + 'px';
+      t.style.left = r.left + 'px';
       t.style.width = r.width + 'px';
       t.style.margin = '0';
-      t.style.zIndex = '-1'; // sit behind the staying toast as it slides over
+      t.style.zIndex = '3999'; // just under the stack (4000): behind the staying toasts
       t.style.transition = 'opacity 0.28s ease, transform 0.28s ease'; // slower fade
+      void t.offsetWidth; // commit the in-place state before animating
       t.classList.remove('visible'); // fade out — vertical drift only, no x/scale
       t.style.transform = 'translateY(4px)';
       // FLIP the siblings up on a soft ease-out, synced with the fade.
