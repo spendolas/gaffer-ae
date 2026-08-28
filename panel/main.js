@@ -1847,30 +1847,38 @@
     function dismiss() {
       if (!t.parentNode) return;
       clearTimeout(timer);
-      t.classList.remove('visible'); // fade + slide the dismissing toast out
-      setTimeout(function () {
-        if (!t.parentNode) return;
-        // FLIP: the toasts below this one shift up when it leaves the flow.
-        // Capture their positions, remove, then transform them back to where
-        // they were and let the CSS transform transition (0.18s) slide them up
-        // into place — so the stack closes the gap smoothly instead of snapping.
-        var movers = [];
-        for (var s = t.nextElementSibling; s; s = s.nextElementSibling) {
-          movers.push({ el: s, top: s.getBoundingClientRect().top });
-        }
-        t.parentNode.removeChild(t);
-        movers.forEach(function (m) {
-          var delta = m.top - m.el.getBoundingClientRect().top; // px it jumped up
-          if (!delta) return;
-          m.el.style.transition = 'none';
-          m.el.style.transform = 'translateY(' + delta + 'px)';
-          void m.el.offsetHeight; // commit the pre-slide position instantly
-          m.el.style.transition = ''; // restore CSS transform transition
-          m.el.style.transform = ''; // -> settles to translateY(0), animated
-          var clear = function () { m.el.style.transition = ''; m.el.style.transform = ''; m.el.removeEventListener('transitionend', clear); };
-          m.el.addEventListener('transitionend', clear);
-        });
-      }, 220);
+      var stack = t.parentNode;
+      // Capture the toasts below BEFORE this one leaves the flow.
+      var movers = [];
+      for (var s = t.nextElementSibling; s; s = s.nextElementSibling) {
+        movers.push({ el: s, top: s.getBoundingClientRect().top });
+      }
+      // Pin the dismissing toast at its spot and pull it OUT of flow, so the gap
+      // closes immediately and the siblings glide up WHILE it fades — one beat,
+      // not fade-then-slide. (stack is position:fixed, so absolute is relative
+      // to it; top accounts for the 24px stack padding.)
+      var r = t.getBoundingClientRect(), pr = stack.getBoundingClientRect();
+      t.style.position = 'absolute';
+      t.style.top = (r.top - pr.top) + 'px';
+      t.style.left = (r.left - pr.left) + 'px';
+      t.style.width = r.width + 'px';
+      t.style.margin = '0';
+      t.classList.remove('visible'); // fade out
+      t.style.transform = 'translateY(4px) scale(0.96)'; // recede as it goes
+      // FLIP the siblings up on a soft ease-out, synced with the fade.
+      var EASE = 'transform 0.26s cubic-bezier(0.22, 1, 0.36, 1)';
+      movers.forEach(function (m) {
+        var delta = m.top - m.el.getBoundingClientRect().top; // px it jumped up
+        if (!delta) return;
+        m.el.style.transition = 'none';
+        m.el.style.transform = 'translateY(' + delta + 'px)';
+        void m.el.offsetHeight; // commit the pre-slide position instantly
+        m.el.style.transition = EASE;
+        m.el.style.transform = ''; // -> settles to translateY(0), animated
+        var clear = function () { m.el.style.transition = ''; m.el.style.transform = ''; m.el.removeEventListener('transitionend', clear); };
+        m.el.addEventListener('transitionend', clear);
+      });
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 260);
     }
     function arm() { if (life) timer = setTimeout(dismiss, life); }
     function pause() { clearTimeout(timer); }
