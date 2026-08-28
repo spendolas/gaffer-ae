@@ -776,9 +776,13 @@
       resize: none;
       outline: none;
     }
-    /* typed InputField (240:1465) counterAxisAlignItems: MAX — bottom-align
-       so a grown multi-line composer keeps its last line flush with Send */
-    .chat-input.typed { align-self: flex-end; }
+    /* Grown InputField (240:1465) counterAxisAlignItems: MAX — bottom-align
+       once the composer has actually wrapped to 2+ lines, so the last line
+       stays flush with Send. Gated on wrapping (not just "has content" —
+       see .wrapped in main.js:resizeChatInput) so a single typed line stays
+       centered exactly like the placeholder instead of jumping down the
+       moment you start typing. */
+    .chat-input.wrapped { align-self: flex-end; }
     .chat-input::placeholder {
       color: var(--color-text-dim);
       opacity: 0.5; /* Figma placeholder 183:1062 = text/dim @ 50% layer opacity (effective ~#444 over the pill) */

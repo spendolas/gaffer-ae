@@ -176,7 +176,10 @@
     chatInputEl.disabled = !ok;                             // input: connected+auth only — preserve type-ahead while busy
     sendBtnEl.disabled = !ok || chatBusy || !hasContent;   // nothing to send = disabled (Figma send State=Disabled @ .4)
     sendBtnEl.classList.toggle('typed', hasContent);       // kept in sync as the "has content" style hook
-    chatInputEl.classList.toggle('typed', hasContent);     // InputField typed variant (240:1464) bottom-aligns text; idle/busy stay centered
+    // NOTE: the composer's own centered/bottom-aligned text state is NOT
+    // driven by hasContent — it's driven by whether the field has actually
+    // wrapped to 2+ lines (see .wrapped, toggled in resizeChatInput). A
+    // single typed line stays centered exactly like the placeholder.
   }
 
   // ── Auth ──
@@ -2658,6 +2661,12 @@
     chatInputEl.style.height = line + 'px';
     chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, cap) + 'px';
     chatInputEl.style.overflowY = chatInputEl.scrollHeight > cap ? 'auto' : 'hidden';
+    // Bottom-align (.wrapped) only once content has actually wrapped past a
+    // single line — a +1px tolerance absorbs the fractional-DPI rounding
+    // noted above so a true single line never falsely triggers it. Below
+    // that, stay centered (matches placeholder / idle) so the first line
+    // never jumps on the first keystroke; it grows downward from there.
+    chatInputEl.classList.toggle('wrapped', chatInputEl.scrollHeight > line + 1);
   }
   function nudgeTextScale(delta) {
     textScale += delta;
