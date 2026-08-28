@@ -35,6 +35,13 @@ const COMPUTED_PROPS = [
   'align-items', 'justify-content', 'flex-direction', 'opacity', 'box-shadow',
   'text-align', 'overflow-x', 'overflow-y', 'white-space',
   'min-width', 'max-width', 'min-height', 'max-height',
+  // overlay fills (layered backgrounds), transforms (toggle-knob translateX),
+  // visibility, stacking, hit-testing, cursor, and text transform/decoration.
+  'background-image', 'transform', 'visibility', 'z-index', 'pointer-events',
+  'cursor', 'text-transform', 'text-decoration-line', 'align-self', 'flex-grow',
+  'aspect-ratio', 'width', 'height', 'position',
+  // SVG glyph paint (icon stroke colour/weight + non-scaling behaviour)
+  'stroke', 'stroke-width', 'fill',
 ];
 
 // Each state: name + a DOM-level setup snippet (no reliance on main.js
@@ -70,6 +77,9 @@ window.__audit = (function () {
   }
   function bubble(role, text) {
     var m = el('div', 'chat-msg ' + role);
+    // Anchor to the Figma Bubble variant so the diff verifies bubble params.
+    var fig = { user: '176:928', assistant: '176:931', error: '176:934' }[role];
+    if (fig) m.setAttribute('data-fig', fig);
     m.appendChild(el('div', 'msg-text', text));
     chat().appendChild(m);
     return m;
@@ -83,6 +93,7 @@ window.__audit = (function () {
       var row = el('div', 'tool-pills-row');
       row.appendChild(el('span', 'tool-pill done', 'runJSX: wiggle rotation'));
       a.insertBefore(row, a.firstChild);
+      bubble('error', 'Could not reach After Effects — is the panel open?');
     },
     'busy-pills': function () {
       reset();
@@ -121,11 +132,11 @@ window.__audit = (function () {
       reset();
       var row = document.getElementById('pastePreviewRow');
       var chip = el('span', 'paste-chip');
-      chip.setAttribute('data-fig', 'I427:3060;185:1121'); // ImageChip
+      chip.setAttribute('data-fig', '475:10182'); // ImageChip (current master)
       var img = document.createElement('canvas'); img.width = 48; img.height = 48;
       chip.appendChild(img);
       var cx = el('span', 'paste-chip-x', '\\u2715');
-      cx.setAttribute('data-fig', 'I427:3060;185:1121;219:3708'); // CloseBtn
+      cx.setAttribute('data-fig', 'I475:10182;219:3708'); // CloseBtn within ImageChip
       chip.appendChild(cx);
       row.appendChild(chip);
     },
@@ -151,7 +162,90 @@ window.__audit = (function () {
       var wrap = document.getElementById('statusWrap');
       if (wrap) wrap.title = 'Disconnected';
     },
+    // DOM-forced states (reachable without synthetic input).
+    'disabled': function () {
+      reset();
+      // Disabled = the Figma State=Disabled variant (fill @ .4, no hover). Force
+      // it on every control class so the diff can assert the dim + inertness.
+      var sel = '.send-btn, .stop-btn, .icon-btn, .text-btn, #updateBtn, #dismissUpdateBtn, #checkNowBtn';
+      var els = document.querySelectorAll(sel);
+      for (var i = 0; i < els.length; i++) els[i].disabled = true;
+      // stop-btn shares the row with send-btn; show both so both capture disabled.
+      document.getElementById('stopBtn').style.display = '';
+    },
+    'offline': function () {
+      reset();
+      document.getElementById('sendBtn').classList.add('offline');
+    },
+    'selection-cta': function () {
+      reset();
+      var c = el('div', 'selection-cta visible');
+      c.setAttribute('data-fig', '507:40583'); // SelectedTextActions
+      c.style.top = '120px'; c.style.left = '120px';
+      var figs = ['507:40563', '507:40567'];
+      for (var i = 0; i < 2; i++) {
+        var b = el('button', 'icon-btn hollow');
+        b.setAttribute('data-fig', figs[i]);
+        b.appendChild(el('span', 'gicon'));
+        c.appendChild(b);
+      }
+      document.body.appendChild(c);
+    },
   };
+  // Interactive elements whose :hover/:focus/:active variants exist in Figma but
+  // are unreachable by DOM injection. Returns viewport-centre coords so the Node
+  // side can drive a REAL pointer over each via CDP Input, then read the style.
+  function interactiveTargets() {
+    reset();
+    document.getElementById('updateBanner').classList.add('visible'); // expose banner buttons
+    var sel = '.send-btn, .stop-btn, .icon-btn, .text-btn, #updateBtn, #dismissUpdateBtn, #checkNowBtn, .toggle-label, .reply-quote-x, .select-btn';
+    var els = document.querySelectorAll(sel);
+    var out = [];
+    for (var i = 0; i < els.length; i++) {
+      var r = els[i].getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+        id: els[i].id || null, cls: clsOf(els[i]), fig: els[i].getAttribute('data-fig') || null });
+    }
+    return out;
+  }
+  // Read the element currently under (x,y) — after CDP has moved the real pointer
+  // there, its :hover (and ::before/::after) are live. Walks up to the nearest
+  // control so we grab the button, not a glyph span inside it.
+  function captureAt(x, y, props, extra) {
+    var n = document.elementFromPoint(x, y);
+    var control = n && n.closest ? (n.closest('button, .toggle-label, [data-fig], .select-btn') || n) : n;
+    if (!control) return null;
+    var cs = getComputedStyle(control);
+    var r = control.getBoundingClientRect();
+    var rec = { tag: control.tagName.toLowerCase(), id: control.id || null, cls: clsOf(control),
+      fig: control.getAttribute('data-fig') || null, phase: extra || null,
+      rect: { x: r.x, y: r.y, w: r.width, h: r.height }, style: readStyle(cs, props) };
+    var pb = pseudo(control, '::before', props); if (pb) rec.before = pb;
+    var pa = pseudo(control, '::after', props); if (pa) rec.after = pa;
+    return rec;
+  }
+  function readStyle(cs, props) {
+    var st = {};
+    for (var j = 0; j < props.length; j++) st[props[j]] = cs.getPropertyValue(props[j]);
+    return st;
+  }
+  // A ::before/::after only exists when content is not none/normal. Capture it
+  // when generated — three shipping visuals (tool-pill dash, input fader, model
+  // chevron) live entirely in pseudo-elements and were invisible before.
+  function pseudo(n, sel, props) {
+    var cs = getComputedStyle(n, sel);
+    var content = cs.getPropertyValue('content');
+    if (content === 'none' || content === 'normal' || content === '') return null;
+    if (cs.getPropertyValue('display') === 'none') return null;
+    var st = readStyle(cs, props);
+    st.content = content;
+    return st;
+  }
+  function clsOf(n) {
+    if (!n.className) return null;
+    return n.className.baseVal === undefined ? n.className : (n.className.baseVal || null); // SVG className is an object
+  }
   function metrics(props) {
     var out = [];
     var all = document.querySelectorAll('*');
@@ -159,19 +253,32 @@ window.__audit = (function () {
       var n = all[i];
       if (n.tagName === 'SCRIPT' || n.tagName === 'STYLE') continue;
       var r = n.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
+      var fig = (n.getAttribute && n.getAttribute('data-fig')) || null;
+      var id = n.id || null;
+      var box0 = (r.width === 0 && r.height === 0);
+      // Keep anchored/identified 0-box nodes (flagged) so the diff can FAIL on
+      // "should render, collapsed to nothing" instead of silently missing it.
+      // Drop only anonymous zero-box noise.
+      if (box0 && !fig && !id) continue;
       var cs = getComputedStyle(n);
-      var style = {};
-      for (var j = 0; j < props.length; j++) style[props[j]] = cs.getPropertyValue(props[j]);
-      out.push({
-        tag: n.tagName.toLowerCase(), id: n.id || null, cls: n.className && n.className.baseVal === undefined ? n.className : null,
-        fig: (n.getAttribute && n.getAttribute('data-fig')) || null,
-        rect: { x: r.x, y: r.y, w: r.width, h: r.height }, style: style,
-      });
+      var parent = n.parentElement;
+      var rec = {
+        tag: n.tagName.toLowerCase(), id: id, cls: clsOf(n), fig: fig,
+        parentFig: (parent && parent.getAttribute && parent.getAttribute('data-fig')) || null,
+        parentId: (parent && parent.id) || null,
+        childIndex: parent ? Array.prototype.indexOf.call(parent.children, n) : -1,
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        style: readStyle(cs, props),
+      };
+      if (box0) rec.box0 = true;
+      var pb = pseudo(n, '::before', props); if (pb) rec.before = pb;
+      var pa = pseudo(n, '::after', props); if (pa) rec.after = pa;
+      out.push(rec);
     }
     return out;
   }
-  return { states: states, run: function (name) { states[name](); }, list: Object.keys(states), metrics: metrics };
+  return { states: states, run: function (name) { states[name](); }, list: Object.keys(states),
+    metrics: metrics, interactiveTargets: interactiveTargets, captureAt: captureAt };
 })();
 window.__audit.list.join(',');
 `;
@@ -210,6 +317,14 @@ async function main() {
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   await rpc(ws, 'Page.enable');
   await rpc(ws, 'Runtime.enable');
+
+  // Always reload first so the capture reflects the CURRENT panel code — the
+  // deployed panel symlinks the repo, so edited data-fig anchors / CSS only
+  // appear after a reload. Without this we'd diff stale DOM.
+  await evalJs(ws, "localStorage.setItem('gafferAudit', '1'); 'set'");
+  await rpc(ws, 'Page.reload', {});
+  await sleep(600);
+  for (let i = 0; i < 40; i++) { try { if (await evalJs(ws, '!!(window.__gaffer && window.__gaffer.addReplyQuote)')) break; } catch (_) { /* reloading */ } await sleep(250); }
 
   // The panel exposes its real builders on window.__gaffer only when
   // localStorage.gafferAudit === '1' (so no test seam ships to end users). Set
@@ -252,6 +367,37 @@ async function main() {
     const metrics = await evalJs(ws, `JSON.stringify(window.__audit.metrics(${JSON.stringify(COMPUTED_PROPS)}))`);
     writeFileSync(join(OUT, `state-${state}.metrics.json`), metrics);
     console.log('captured', state, '(' + JSON.parse(metrics).length + ' elements)');
+  }
+
+  // ── Interactive states: :hover / :active / :focus ──────────────────────────
+  // DOM injection can't synthesize these — drive a REAL pointer via CDP Input so
+  // Chromium applies the pseudo-classes, then read the element under it. This is
+  // the only way to reach the Figma State=Hover variant axis.
+  await rpc(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 }); // park pointer
+  const hitTargets = JSON.parse(await evalJs(ws, 'JSON.stringify(window.__audit.interactiveTargets())'));
+  const P = JSON.stringify(COMPUTED_PROPS);
+  const hover = [], active = [], focus = [];
+  for (const t of hitTargets) {
+    // hover: move real pointer onto the control
+    await rpc(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y });
+    await sleep(40);
+    const h = await evalJs(ws, `JSON.stringify(window.__audit.captureAt(${t.x},${t.y},${P},'hover'))`);
+    if (h && h !== 'null') hover.push(JSON.parse(h));
+    // active: press (hold) then read, then release
+    await rpc(ws, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button: 'left', clickCount: 1 });
+    await sleep(30);
+    const a = await evalJs(ws, `JSON.stringify(window.__audit.captureAt(${t.x},${t.y},${P},'active'))`);
+    if (a && a !== 'null') active.push(JSON.parse(a));
+    await rpc(ws, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button: 'left', clickCount: 1 });
+    // focus: keyboard-style focus so :focus-visible engages, then read
+    const f = await evalJs(ws, `(function(){var n=document.elementFromPoint(${t.x},${t.y});var c=n&&n.closest?(n.closest('button,.toggle-label,[data-fig],.select-btn')||n):n;if(!c)return 'null';if(c.focus)c.focus({focusVisible:true});return JSON.stringify(window.__audit.captureAt(${t.x},${t.y},${P},'focus'));})()`);
+    if (f && f !== 'null') focus.push(JSON.parse(f));
+    await evalJs(ws, 'if(document.activeElement&&document.activeElement.blur)document.activeElement.blur(); "b"');
+  }
+  await rpc(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 }); // park pointer off controls
+  for (const [name, arr] of [['hover', hover], ['active', active], ['focus', focus]]) {
+    writeFileSync(join(OUT, `state-${name}.metrics.json`), JSON.stringify(arr));
+    console.log('captured', name, '(' + arr.length + ' controls)');
   }
 
   await evalJs(ws, 'setTimeout(function(){ location.reload(); }, 100); "reloading"');

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__grip__export_node",
+      "mcp__grip__set_active_file",
+      "mcp__grip__get_node",
+      "mcp__grip__get_nodes",
+      "mcp__grip__get_annotations",
+      "mcp__grip__search_nodes",
+      "mcp__grip__find_with_criteria",
+      "mcp__grip__get_selection",
+      "mcp__grip__get_page",
+      "mcp__grip__get_page_context",
+      "mcp__grip__get_document",
+      "mcp__grip__get_variables",
+      "mcp__grip__get_styles",
+      "mcp__grip__get_style_consumers",
+      "mcp__grip__get_library_usage",
+      "mcp__grip__list_files",
+      "mcp__grip__grip_health",
+      "mcp__grip__grip_capabilities",
+      "mcp__claude-in-chrome__read_console_messages",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__read_network_requests",
+      "mcp__claude-in-chrome__list_connected_browsers",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__gaffer__captureFrame",
+      "mcp__gaffer__getProjectSummary",
+      "mcp__gaffer__listCompositions"
+    ]
+  }
+}

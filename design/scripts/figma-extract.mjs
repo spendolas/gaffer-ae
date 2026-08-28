@@ -31,9 +31,11 @@ const COMPONENTS_SECTION = '217:3664';
 // Explicitly in-scope even though they live inside groups the walker skips.
 const EXTRA_ROOTS = [
   { id: '173:292', slug: 'states-board' },
-  { id: '427:3058', slug: 'input-area' },
+  // 427:3058 (standalone InputArea board) deleted from Figma — the InputArea is
+  // now covered via organisms (component master 191:1273) + template (209:1449).
+  // Panel data-fig anchors in the 427:30xx region are stale → coverage-gap until re-anchored.
   { id: '428:3200', slug: 'reply-quote' }, // canonical Reply Quote COMPONENT (427:3102 is a stale draft)
-  { id: '284:2052', slug: 'panel-template-instance' }, // inside MCP_IGNORE group
+  // { id: '284:2052', slug: 'panel-template-instance' }, // inside MCP_IGNORE — excluded per "respect .MCP_IGNORE"
 ];
 // Documentation / reference art on the page — real design, but not a panel
 // surface to diff against the DOM. Exported as PNG refs, never walked-for-parity.

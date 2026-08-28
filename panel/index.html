@@ -62,7 +62,7 @@
          well clear of the panel grey. */
       --color-bg-table-row-hover: rgba(0, 0, 0, 0.5);
       /* Unbound in Figma — proposed tokens (audit §3) */
-      --color-bubble-error-bg: rgba(204, 68, 68, 0.5);
+      --color-bubble-error-bg: rgba(204, 68, 68, 0.3); /* error bubble 176:934 = accent-red @30% */
       --color-bubble-error-text: #ee8888;
       --color-code-inline-bg: rgba(216, 176, 112, 0.2);
       /* Button "ghost" fills — base token @ 20% (Figma applies opacity on the
@@ -182,6 +182,7 @@
       background: var(--color-bubble-user-bg);
       border-radius: 16px 16px 2px 16px;
       align-self: flex-end;
+      max-width: 320px; /* Bubble role=user 176:928 caps at 320px (never full-width) */
       color: var(--color-text-light-2);
     }
     .chat-msg.assistant {
@@ -657,6 +658,7 @@
     }
     .chat-input::placeholder {
       color: var(--color-text-dim);
+      opacity: 0.5; /* Figma placeholder 183:1062 = text/dim @ 50% layer opacity (effective ~#444 over the pill) */
       font-style: italic;
     }
     .chat-input.offline::placeholder { font-style: normal; }
@@ -676,12 +678,12 @@
     /* Prompt Default/Disabled = ghost blue + blue glyph; Hover fills solid + light glyph */
     .send-btn { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
     .send-btn:hover:not(:disabled):not(.offline) { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
-    .send-btn:disabled, .stop-btn:disabled { opacity: 0.4; cursor: default; } /* Disabled = Default fill @ .4 */
+    .send-btn:disabled, .stop-btn:disabled { opacity: 0.4; cursor: default; } /* Disabled = Default fill @ .4; send is disabled when empty (nothing to send) */
     .send-btn.offline { background: var(--color-bg-panel); }
     .send-btn.offline .gicon { visibility: hidden; }
     /* Prompt Danger (stop) = ghost dark-red at rest, solid bright red on hover */
     .stop-btn { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
-    .stop-btn:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
+    .stop-btn:hover:not(:disabled) { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
 
     /* Activity log */
     /* ActivityLog — Figma set 191:1343: collapsed 40h / expanded 144h.
@@ -733,26 +735,26 @@
       cursor: pointer;
     }
     .icon-btn .gicon { width: 16px; height: 16px; display: block; }
-    .icon-btn:hover { background: var(--color-border-input); color: var(--color-text-light-2); }
+    .icon-btn:hover:not(:disabled) { background: var(--color-border-input); color: var(--color-text-light-2); }
     .icon-btn:disabled { opacity: 0.4; cursor: default; } /* Disabled = Default fill @ .4 */
     .icon-btn.informed { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
-    .icon-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
+    .icon-btn.informed:hover:not(:disabled) { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
     .icon-btn.hollow { background: transparent; }
-    .icon-btn.hollow:hover { background: var(--color-btn-hollow-hover); color: var(--color-text-light-2); }
+    .icon-btn.hollow:hover:not(:disabled) { background: var(--color-btn-hollow-hover); color: var(--color-text-light-2); }
     .icon-btn.danger { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
-    .icon-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
+    .icon-btn.danger:hover:not(:disabled) { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
     /* Floating selection CTA — copy/reply the highlighted text, positioned
        over the selection (fixed, viewport coords). Buttons reuse .icon-btn. */
-    .selection-cta {
+    .selection-cta { /* SelectedTextActions 507:40583 — r8 pill, bg/panel + btn/icon-bg overlay, 5-layer elevation, flush hollow buttons */
       position: fixed;
       z-index: 3000;
       display: flex;
-      gap: 4px;
-      padding: 4px;
-      background: var(--color-bg-panel);
-      border: 1px solid var(--color-border-default);
-      border-radius: 10px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+      gap: 0;
+      padding: 0;
+      overflow: hidden; /* clipsContent — clip the flush buttons to the r8 pill */
+      background: linear-gradient(var(--color-btn-icon-bg), var(--color-btn-icon-bg)), var(--color-bg-panel);
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.29), 0 5px 6px rgba(0,0,0,0.26), 0 10px 8px rgba(0,0,0,0.15), 0 18px 9px rgba(0,0,0,0.04), 0 28px 10px rgba(0,0,0,0.01);
       /* Subtle rise+fade in/out — stays in layout so offset* still measures */
       opacity: 0;
       transform: translateY(4px) scale(0.97);
@@ -947,17 +949,16 @@
       background: var(--color-text-dimmest);
       transition: transform 0.15s, background 0.15s;
     }
-    .toggle-label input:checked + .toggle { background: var(--color-accent-blue); }
+    /* ON = pale-blue track (btn-primary-ghost) + solid-blue knob — same in both sizes */
+    .toggle-label input:checked + .toggle { background: var(--color-btn-primary-ghost); }
     .toggle-label input:checked + .toggle .knob {
-      background: var(--color-text-light);
+      background: var(--color-accent-blue);
       transform: translateX(8px);
     }
     /* Toggle Size=Big — 32x20 track, 16x16 round knob; off track = table-row-hover */
     .toggle.big { width: 32px; height: 20px; background: var(--color-bg-table-row-hover); }
     .toggle.big .knob { width: 16px; height: 16px; border-radius: var(--radius-12); }
-    /* Big ON differs from Small: pale-blue track (btn-primary-ghost) + solid-blue knob */
-    .toggle-label input:checked + .toggle.big { background: var(--color-btn-primary-ghost); }
-    .toggle-label input:checked + .toggle.big .knob { background: var(--color-accent-blue); transform: translateX(12px); }
+    .toggle-label input:checked + .toggle.big .knob { transform: translateX(12px); }
     /* Button Type=Text — 28h r8 pad6/8, ghost by default (bg = panel), fills on hover */
     .text-btn {
       display: inline-flex;
@@ -973,23 +974,35 @@
       line-height: 10px;
       cursor: pointer;
     }
-    .text-btn:hover { background: var(--color-border-input); color: var(--color-text-light-2); }
+    .text-btn:hover:not(:disabled) { background: var(--color-border-input); color: var(--color-text-light-2); }
     .text-btn:disabled { opacity: 0.4; cursor: default; }
     .text-btn.informed { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
-    .text-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
+    .text-btn.informed:hover:not(:disabled) { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
     .text-btn.danger { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
-    .text-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
+    .text-btn.danger:hover:not(:disabled) { background: var(--color-btn-danger-bg); color: var(--color-text-light-2); }
     /* Text-size stepper — Figma "Text Size" 330:1547: one #333 pill (r10,
        24h), three 24x24 cells with 16px line icons. Minus/plus read
        --color-text-dimmer, the centre glyph --color-text-dimmest. */
-    .text-size {
+    .text-size { /* Text Size 330:1548 — 28h r10 pill, bg/panel + rest-overlay */
       display: inline-flex;
       align-items: center;
-      height: 24px;
-      background: var(--color-border-default);
+      height: 28px;
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
       border-radius: 10px;
     }
-    .ts-btn, .ts-glyph {
+    .ts-btn { /* -/+ = Button 28x28 r8 pad6, bg/panel + rest-overlay (330:1501/1541) */
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
+      cursor: pointer;
+    }
+    .ts-glyph { /* AA = bare 24x24 icon (330:1493), no button bg */
       width: 24px;
       height: 24px;
       display: inline-flex;
@@ -997,7 +1010,6 @@
       justify-content: center;
       padding: 4px;
       border: none;
-      border-radius: 8px;
       background: transparent;
       cursor: pointer;
     }
@@ -1061,29 +1073,9 @@
       color: var(--color-accent-blue);
     }
     .update-banner .actions { display: flex; align-items: center; gap: 4px; }
-    #updateBtn {
-      height: 20px;
-      padding: 2px 8px;
-      border: none;
-      border-radius: 8px;
-      background: var(--color-btn-primary-bg);
-      color: var(--color-bg-panel);
-      font-size: 10px;
-      line-height: 10px;
-      cursor: pointer;
-    }
-    #updateBtn:hover { background: var(--color-btn-primary-hover); }
-    .banner-dismiss {
-      width: 20px;
-      height: 20px;
-      padding: 2px;
-      border: none;
-      border-radius: 8px;
-      background: transparent;
-      color: var(--color-btn-primary-bg);
-      cursor: pointer;
-    }
-    .banner-dismiss .gicon { width: 16px; height: 16px; display: block; }
+    /* #updateBtn + #dismissUpdateBtn now use the token Button classes
+       (.text-btn.informed / .icon-btn.informed) — matches Figma banner
+       instances 191:1260 (Text/Informed) + 191:1262 (Icon/Informed). */
     .activity-log .value {
       font-family: "Source Code Pro", "SF Mono", "Consolas", monospace;
       font-size: 10px;
@@ -1100,7 +1092,7 @@
        .mcp-tile keeps its own tuned timing. */
     .send-btn, .stop-btn, .icon-btn, .text-btn, .model-select,
     .select-popup .option, .toggle, .toggle .knob,
-    #updateBtn, .banner-dismiss, .paste-chip-x, .activity-log summary {
+    .paste-chip-x, .activity-log summary {
       transition: background-color 0.15s var(--ease-state), color 0.15s var(--ease-state),
                   border-color 0.15s var(--ease-state), opacity 0.15s var(--ease-state),
                   transform 0.15s var(--ease-state), filter 0.15s var(--ease-state);
@@ -1141,21 +1133,21 @@
 
   <div class="chat-input-area">
     <div class="input-overlays">
-      <div class="paste-preview-row" id="pastePreviewRow" data-fig="427:3060"></div>
+      <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
       <div id="updateBanner" class="update-banner">
-        <div class="banner-pill" data-fig="I427:3061;284:1631">
-          <span id="updateText" class="banner-text" data-fig="I427:3061;191:1231">Update available</span>
+        <div class="banner-pill" data-fig="284:1631">
+          <span id="updateText" class="banner-text" data-fig="191:1231">Update available</span>
           <span class="actions">
-            <button id="updateBtn" data-fig="I427:3061;191:1260">Update</button>
-            <button id="dismissUpdateBtn" class="banner-dismiss" title="Dismiss" data-fig="I427:3061;191:1262"></button>
+            <button id="updateBtn" class="text-btn informed" data-fig="191:1260">Update</button>
+            <button id="dismissUpdateBtn" class="icon-btn informed" title="Dismiss" data-fig="191:1262"></button>
           </span>
         </div>
       </div>
       <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
     </div>
-    <div class="chat-input-row" data-fig="I427:3062;185:1132">
+    <div class="chat-input-row" data-fig="185:1132">
       <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
-      <button id="sendBtn" class="send-btn" title="Send" data-fig="I427:3062;185:1132;240:1324" disabled></button>
+      <button id="sendBtn" class="send-btn" title="Send" data-fig="240:1324" disabled></button>
       <button id="stopBtn" class="stop-btn" title="Stop"></button>
     </div>
   </div>
@@ -1163,17 +1155,17 @@
   <details class="activity-log" open>
     <summary>
       <span class="activity-status">
-        <span id="statusWrap" class="status-square" title="Starting...">
-          <span id="led" class="led"></span>
+        <span id="statusWrap" class="status-square" title="Starting..." data-fig="241:2282">
+          <span id="led" class="led" data-fig="191:1268"></span>
         </span>
-        <button id="clearBtn" class="icon-btn" title="Clear chat"></button>
-        <button id="reloadBtn" class="icon-btn" title="Reload panel"></button>
-        <span class="text-size">
-          <button id="textDecBtn" class="ts-btn" aria-label="Smaller chat text" title="Smaller chat text"></button>
-          <button id="textResetBtn" class="ts-glyph" title="Reset chat text size"></button>
-          <button id="textIncBtn" class="ts-btn" aria-label="Larger chat text" title="Larger chat text"></button>
+        <button id="clearBtn" class="icon-btn" title="Clear chat" data-fig="191:1264"></button>
+        <button id="reloadBtn" class="icon-btn" title="Reload panel" data-fig="191:1266"></button>
+        <span class="text-size" data-fig="330:1548">
+          <button id="textDecBtn" class="ts-btn" aria-label="Smaller chat text" title="Smaller chat text" data-fig="330:1501"></button>
+          <button id="textResetBtn" class="ts-glyph" title="Reset chat text size" data-fig="330:1493"></button>
+          <button id="textIncBtn" class="ts-btn" aria-label="Larger chat text" title="Larger chat text" data-fig="330:1541"></button>
         </span>
-        <span id="actionSpell" class="action-spell"></span>
+        <span id="actionSpell" class="action-spell" data-fig="291:11938"></span>
       </span>
       <span class="activity-more">
         <span id="moreLabel">More</span>
@@ -1231,8 +1223,8 @@
     </div>
   </details>
 
-  <div class="drop-overlay" id="dropOverlay"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
-  <div class="img-lightbox" id="imgLightbox" hidden><img></div>
+  <div class="drop-overlay" id="dropOverlay" data-fig="191:1275"><span>Drop here</span><span id="dropIcon" class="gicon"></span></div>
+  <div class="img-lightbox" id="imgLightbox" hidden data-fig="191:1276"><img></div>
 
   <script src="lib/CSInterface.js"></script>
   <script src="lib/marked.min.js"></script>

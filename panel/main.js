@@ -137,8 +137,10 @@
   function updateChatEnabled() {
     var connected = ledEl.classList.contains('connected');
     var ok = connected && authLoggedIn !== false;
-    chatInputEl.disabled = !ok;             // input: connected+auth only — preserve type-ahead while busy
-    sendBtnEl.disabled = !ok || chatBusy;   // send: also gated on busy
+    var hasContent = chatInputEl.value.trim().length > 0 || replyQuotes.length > 0;
+    chatInputEl.disabled = !ok;                             // input: connected+auth only — preserve type-ahead while busy
+    sendBtnEl.disabled = !ok || chatBusy || !hasContent;   // nothing to send = disabled (Figma send State=Disabled @ .4)
+    sendBtnEl.classList.toggle('typed', hasContent);       // kept in sync as the "has content" style hook
   }
 
   // ── Auth ──
@@ -604,6 +606,7 @@
           } else {
             var div = document.createElement('div');
             div.className = 'chat-msg assistant';
+    div.setAttribute('data-fig', '176:931'); // Bubble role=assistant
             var textSpan = document.createElement('span');
             textSpan.className = 'msg-text';
             textSpan.dataset.raw = msg.text;
@@ -1075,6 +1078,7 @@
   function buildUserMessageEl(text, images, quotes) {
     var div = document.createElement('div');
     div.className = 'chat-msg user';
+    div.setAttribute('data-fig', '176:928'); // Bubble role=user
     if (quotes && quotes.length) {
       div.classList.add('has-quotes');
       var qc = document.createElement('div');
@@ -1224,12 +1228,15 @@
   function buildSelectionCta() {
     selectionCta = document.createElement('div');
     selectionCta.className = 'selection-cta';
+    selectionCta.setAttribute('data-fig', '507:40583'); // SelectedTextActions
     selCopyBtn = document.createElement('button');
-    selCopyBtn.className = 'icon-btn';
+    selCopyBtn.className = 'icon-btn hollow'; // Icon/Hollow (507:40563)
+    selCopyBtn.setAttribute('data-fig', '507:40563');
     selCopyBtn.title = 'Copy selection';
     selCopyBtn.appendChild(icon('copy'));
     selReplyBtn = document.createElement('button');
-    selReplyBtn.className = 'icon-btn';
+    selReplyBtn.className = 'icon-btn hollow'; // Icon/Hollow (507:40567)
+    selReplyBtn.setAttribute('data-fig', '507:40567');
     selReplyBtn.title = 'Reply to selection';
     selReplyBtn.appendChild(icon('reply'));
     selectionCta.appendChild(selCopyBtn);
@@ -1387,7 +1394,7 @@
       replyQuotes.splice(j, 1);
       if (row.parentNode) row.parentNode.removeChild(row);
       replyQuotesEl.style.maxHeight = replyQuotesEl.scrollHeight + 'px';
-      sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+      updateChatEnabled(); // recompute .typed + disabled from current content
       syncChatReserve();
     }, 200);
   }
@@ -1415,7 +1422,7 @@
   function renderReplyQuotes() {
     if (!replyQuotesEl) return;
     // staged quotes count as "typed" so the send button lights up
-    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+    updateChatEnabled(); // recompute .typed + disabled from current content
     if (replyQuotes.length === 0) {
       replyQuotesEl.style.maxHeight = '0px';
       replyQuotesEl.classList.remove('visible');
@@ -1520,6 +1527,7 @@
   function startAssistantMessage() {
     var div = document.createElement('div');
     div.className = 'chat-msg assistant';
+    div.setAttribute('data-fig', '176:931'); // Bubble role=assistant
     div.id = 'currentResponse';
     // copy CTA arrives with the first text — nothing to copy before that
     var typing = document.createElement('span');
@@ -2337,7 +2345,7 @@
   });
   // Typed state + auto-grow (Figma InputRow mode=typed: field grows to 2+ lines)
   chatInputEl.addEventListener('input', function () {
-    sendBtnEl.classList.toggle('typed', chatInputEl.value.trim().length > 0 || replyQuotes.length > 0);
+    updateChatEnabled(); // recompute .typed + disabled from current content
     resizeChatInput();
   });
 
