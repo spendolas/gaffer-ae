@@ -954,9 +954,10 @@
     }
     /* Toggle Size=Big — 32x20 track, 16x16 round knob; off track = table-row-hover */
     .toggle.big { width: 32px; height: 20px; background: var(--color-bg-table-row-hover); }
-    .toggle.big .knob { width: 16px; height: 16px; border-radius: var(--radius-full); }
-    .toggle-label input:checked + .toggle.big { background: var(--color-accent-blue); }
-    .toggle-label input:checked + .toggle.big .knob { transform: translateX(12px); }
+    .toggle.big .knob { width: 16px; height: 16px; border-radius: var(--radius-12); }
+    /* Big ON differs from Small: pale-blue track (btn-primary-ghost) + solid-blue knob */
+    .toggle-label input:checked + .toggle.big { background: var(--color-btn-primary-ghost); }
+    .toggle-label input:checked + .toggle.big .knob { background: var(--color-accent-blue); transform: translateX(12px); }
     /* Button Type=Text — 28h r8 pad6/8, ghost by default (bg = panel), fills on hover */
     .text-btn {
       display: inline-flex;
@@ -967,12 +968,12 @@
       border: none;
       border-radius: 8px;
       background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
-      color: var(--color-text-light-2);
+      color: var(--color-text-dimmer);
       font-size: 10px;
       line-height: 10px;
       cursor: pointer;
     }
-    .text-btn:hover { background: var(--color-border-input); color: var(--color-text-light); }
+    .text-btn:hover { background: var(--color-border-input); color: var(--color-text-light-2); }
     .text-btn:disabled { opacity: 0.4; cursor: default; }
     .text-btn.informed { background: var(--color-btn-primary-ghost); color: var(--color-accent-blue); }
     .text-btn.informed:hover { background: var(--color-btn-primary-bg); color: var(--color-text-light); }
