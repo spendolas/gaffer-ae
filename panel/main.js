@@ -224,6 +224,17 @@
   // 'connected' (key present, connected). Defaults to 'nokey' to match the
   // already-parity-verified default render (see renderApi() for the 3 states).
   var apiState = { status: 'nokey', key: 'sk-ant-…4f2a', provider: 'Bedrock' };
+  // Internal preview only: the API settings scaffold is hidden in shipping UI.
+  // Enable it in a development panel with:
+  //   localStorage.setItem('gafferDevApiSettings', '1')
+  // The audit flag also reveals it for the parity-capture harness.
+  try {
+    var apiSettingsItem = document.getElementById('setApiSettingsItem');
+    if (apiSettingsItem) {
+      apiSettingsItem.hidden = localStorage.getItem('gafferDevApiSettings') !== '1'
+        && localStorage.getItem('gafferAudit') !== '1';
+    }
+  } catch (e) { /* localStorage blocked → keep the internal card hidden */ }
   function renderApi() {
     var keyEl = document.getElementById('setApiKey');
     var metaEl = document.getElementById('setApiMeta');

@@ -1340,7 +1340,7 @@
     .settings-item .item-col { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
     .settings-item .item-col .item-sub { white-space: normal; }
     .beta-badge { display: inline-block; margin-left: 8px; font-size: calc(9px * var(--chat-text, 1)); line-height: calc(13.5px * var(--chat-text, 1)); letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); background: var(--color-code-inline-bg); border-radius: var(--radius-8); padding: 1px 6px; } /* beta = amber code badge, pill bg 475:10186 */
-    #setSoundBtn { width: 96px; } /* Sounds Dropdown fixed 96; padding cascades from .select-btn (6/4/6/8) */
+    #setSoundBtn { width: calc(96px * var(--chat-text, 1)); } /* Sounds Dropdown starts at the Figma 96px width and grows with A-/A+ so scaled labels never clip. */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
     .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
     /* Shared Stubs/Menu item (475:10304) skeleton: Left Block grows to fill and
@@ -1561,7 +1561,7 @@
                              (Purpose=Default, grey — .informed dropped); shred shown
              Static markup below defaults to the nokey render (apiState's actual
              default), matching what draws before renderApi() first runs. -->
-        <div class="settings-item" data-fig="I480:20902;478:12027">
+        <div class="settings-item" id="setApiSettingsItem" data-fig="I480:20902;478:12027" hidden>
           <div class="row1">
             <span class="row1-left">
               <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
