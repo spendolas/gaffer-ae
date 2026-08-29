@@ -200,7 +200,7 @@ async function fetchSimpleIcon(id, displayName) {
 
 // CEP launches the daemon with a stripped PATH. Augment it so claude can
 // find node/npm and spawn stdio MCP servers (e.g. grip uses bare `node`).
-function augmentedEnv() {
+export function augmentedEnv() {
   var extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
   var pathParts = (process.env.PATH || '').split(':');
   for (var p of extraPaths) {
@@ -479,10 +479,13 @@ export class ChatHandler {
       }
       // Self-heal a dead --resume: the CLI's session storage can be wiped
       // by CLI updates or re-auth, leaving our persisted sessionId pointing
-      // nowhere. The CLI then errors on stderr and exits with NO stream
-      // output — which used to look like a silent empty reply. Retry once
-      // on a fresh session (history text is preserved panel-side).
-      if (!sawOutput && sessionId && !msg.__retriedFreshSession
+      // nowhere. On a failed resume the CLI emits a stream-json `result`
+      // event with is_error (so sawOutput flips true) AND prints
+      // "No conversation found" on stderr, then exits non-zero — it looked
+      // like a silent empty turn that also KEPT the stale id, looping
+      // forever. Key on the stderr signal (a failed resume can never carry a
+      // real reply) and retry once fresh (history text is preserved panel-side).
+      if (sessionId && !msg.__retriedFreshSession
           && /no conversation found/i.test(stderrBuf)) {
         console.log('Gaffer: stale session ' + sessionId + ' — retrying fresh');
         self.sessionId = null;

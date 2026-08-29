@@ -82,6 +82,7 @@
       display: flex;
       flex-direction: column;
       height: 100%;
+      position: relative;
     }
     /* LED atom: 8x8 layout slot, 12x12 star overflowing 2px each side */
     .led {
@@ -1072,10 +1073,39 @@
                   border-color 0.15s var(--ease-state), opacity 0.15s var(--ease-state),
                   transform 0.15s var(--ease-state), filter 0.15s var(--ease-state);
     }
+
+    /* Sign-in card */
+    .signin-card { position: absolute; inset: 0; z-index: 2000; background: var(--color-bg-panel); display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
+    .signin-card.visible { display: flex; }
+    .signin-title { font-size: 16px; color: var(--color-text-strong); }
+    .signin-sub { font-size: 12px; color: var(--color-text-muted); }
+    .signin-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .signin-btn { height: 28px; padding: 0 16px; border: none; border-radius: 8px;
+      background: var(--color-border-default); color: var(--color-text-light); cursor: pointer; }
+    .signin-btn.primary { background: var(--color-btn-primary-bg); color: var(--color-text-white); }
+    .signin-btn.primary:hover { background: var(--color-btn-primary-hover); }
+    .signin-progress { font-size: 12px; color: var(--color-text-muted); margin-top: 8px; }
+    .signin-error { font-size: 12px; color: var(--color-accent-red); margin-top: 8px; }
+    .account-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-dimmer); }
+    .account-chip[hidden] { display: none; }
   </style>
 </head>
 <body>
   <div id="chatMessages" class="chat-messages"></div>
+
+  <div id="signInCard" class="signin-card" hidden>
+    <div class="signin-title">Sign in to Claude</div>
+    <div class="signin-sub">Gaffer runs on your Claude account.</div>
+    <div class="signin-actions">
+      <button id="signInClaude" class="signin-btn primary">Sign in with Claude</button>
+      <button id="signInConsole" class="signin-btn">Use Anthropic Console</button>
+    </div>
+    <div id="signInProgress" class="signin-progress" hidden>
+      Complete sign-in in your browser… <button id="signInCancel" class="text-btn">Cancel</button>
+    </div>
+    <div id="signInError" class="signin-error" hidden></div>
+  </div>
 
   <div class="chat-input-area">
     <div class="input-overlays">
@@ -1141,6 +1171,10 @@
     </div>
     <div class="activity-settings">
       <span id="versionText">v—</span>
+      <span id="accountChip" class="account-chip" hidden>
+        <span id="accountLabel"></span>
+        <button id="signOutBtn" class="text-btn">Sign out</button>
+      </span>
       <span class="spacer"></span>
       <button id="soundCycleBtn" class="text-btn" title="Cycle reply-sound candidates — the one you leave selected is the cue"></button>
       <label class="toggle-label" title="Reply cue when the panel is unfocused">
