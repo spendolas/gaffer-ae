@@ -28,6 +28,8 @@
   var lastResultEl = document.getElementById('lastResult');
   var chatMessagesEl = document.getElementById('chatMessages');
   var chatInputEl = document.getElementById('chatInput');
+  var chatInputRowEl = document.querySelector('.chat-input-row');
+  var chatPlaceholderEl = document.getElementById('chatPlaceholder');
   var sendBtnEl = document.getElementById('sendBtn');
   var stopBtnEl = document.getElementById('stopBtn');
   var clearBtnEl = document.getElementById('clearBtn');
@@ -202,8 +204,10 @@
     // button + "Gaffer" placeholder; connected shows the italic prompt.
     var offline = state !== 'connected';
     chatInputEl.classList.toggle('offline', offline);
+    if (chatInputRowEl) chatInputRowEl.classList.toggle('offline', offline);
     sendBtnEl.classList.toggle('offline', offline);
-    chatInputEl.placeholder = offline ? 'Gaffer' : 'Ask Gaffer...';
+    // Custom placeholder span (behind the textarea), not the native attribute.
+    if (chatPlaceholderEl) chatPlaceholderEl.textContent = offline ? 'Gaffer' : 'Ask Gaffer...';
     updateChatEnabled();
   }
 
@@ -215,6 +219,9 @@
     var connected = ledEl.classList.contains('connected');
     var ok = connected && authLoggedIn !== false;
     var hasContent = chatInputEl.value.trim().length > 0 || replyQuotes.length > 0;
+    // Custom placeholder shows only while the field is truly empty (matches
+    // native placeholder semantics: any character, incl. a space, hides it).
+    if (chatInputRowEl) chatInputRowEl.classList.toggle('empty', chatInputEl.value.length === 0);
     chatInputEl.disabled = !ok;                             // input: connected+auth only — preserve type-ahead while busy
     sendBtnEl.disabled = !ok || chatBusy || !hasContent;   // nothing to send = disabled (Figma send State=Disabled @ .4)
     sendBtnEl.classList.toggle('typed', hasContent);       // kept in sync as the "has content" style hook
@@ -3052,7 +3059,7 @@
   // real child (textarea, send/stop button) keeps its own click; only bare
   // padding hits reach the row as target. mousedown+preventDefault avoids the
   // one-frame focus flicker to <body> before focus() lands.
-  var chatInputRowEl = document.querySelector('.chat-input-row');
+  // (chatInputRowEl declared up top with the other composer refs.)
   if (chatInputRowEl) {
     chatInputRowEl.addEventListener('mousedown', function (e) {
       if (e.target !== chatInputRowEl) return; // let textarea/buttons handle their own
