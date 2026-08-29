@@ -798,6 +798,8 @@
       align-self: center; /* idle/busy InputField counterAxisAlignItems: CENTER (185:1132 / 195:1423) */
       resize: none;
       outline: none;
+      position: relative;
+      z-index: 1; /* above .chat-placeholder (z:0) so the native caret always paints on top of the placeholder */
     }
     /* Grown InputField (240:1465) counterAxisAlignItems: MAX — bottom-align
        once the composer has actually wrapped to 2+ lines, so the last line
@@ -806,12 +808,30 @@
        centered exactly like the placeholder instead of jumping down the
        moment you start typing. */
     .chat-input.wrapped { align-self: flex-end; }
-    .chat-input::placeholder {
-      color: var(--color-text-dim);
-      opacity: 0.5; /* Figma placeholder 183:1062 = text/dim @ 50% layer opacity (effective ~#444 over the pill) */
+    /* Custom placeholder layer — a sibling BEHIND the textarea (z:0 vs the
+       textarea's z:1), not the native ::placeholder. CEP Chromium 99 paints the
+       native placeholder OVER the native caret, so the caret rendered behind the
+       italic glyphs. Behind the textarea, the caret is always on top. Matches
+       the textarea's font/size/left-inset; shown only while the field is empty
+       (JS toggles .chat-input-row.empty). Figma placeholder 183:1062 = text/dim
+       @ 50%, italic. */
+    .chat-placeholder {
+      position: absolute;
+      left: 16px; /* row padding 8 + textarea padding-left 8 = same x as typed text */
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 0;
+      font-family: inherit;
+      font-size: calc(14px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
       font-style: italic;
+      color: var(--color-text-dim);
+      opacity: 0.5;
+      pointer-events: none;
+      white-space: nowrap;
     }
-    .chat-input.offline::placeholder { font-style: normal; }
+    .chat-input-row.offline .chat-placeholder { font-style: normal; }
+    .chat-input-row:not(.empty) .chat-placeholder { display: none; }
     /* Send/Stop — Button atom Type=Icon/Prompt: 32x32, r16, icon-only.
        State matrix (audit §4.2): offline = panel-colored no icon,
        empty = primary @0.4, typed = primary, busy = danger + stop. */
@@ -1516,8 +1536,15 @@
            first-listed child [Preview Row Wrapper] paints on top) -->
       <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
     </div>
-    <div class="chat-input-row" data-fig="185:1132">
-      <textarea id="chatInput" class="chat-input" placeholder="Ask Gaffer..." rows="1" disabled></textarea>
+    <div class="chat-input-row empty" data-fig="185:1132">
+      <!-- Placeholder is a sibling BEHIND the textarea (not the native
+           attribute): CEP's Chromium 99 paints the native placeholder over the
+           native caret, so the caret rendered behind the text. As a lower-z
+           layer the caret (in the textarea) always sits on top. Toggled by JS
+           on input (.chat-input-row.empty). aria-hidden — the textarea's
+           aria-label carries the accessible name. -->
+      <span class="chat-placeholder" id="chatPlaceholder" aria-hidden="true">Ask Gaffer...</span>
+      <textarea id="chatInput" class="chat-input" aria-label="Ask Gaffer" rows="1" disabled></textarea>
       <button id="sendBtn" class="send-btn" title="Send" data-fig="240:1324" disabled></button>
       <button id="stopBtn" class="stop-btn" title="Stop"></button>
     </div>
