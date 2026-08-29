@@ -120,6 +120,7 @@
   var autoCheckUpdates = true;
   var autoModel = false; // off by default; persisted in chat-history.json
   var dismissedUpdateCommit = null;
+  var availableUpdateCommit = null; // independent of whether its banner was dismissed
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
   var mcpUsage = {}; // { id: { count, last } } — sends count, enables stamp recency
@@ -711,6 +712,10 @@
         }
         if (data.dismissedUpdateCommit) {
           dismissedUpdateCommit = data.dismissedUpdateCommit;
+          // Dismissed means "hide the banner", not "forget the update".
+          // Preserve the Settings safeguard across panel reloads, including
+          // when automatic checks are disabled.
+          availableUpdateCommit = data.dismissedUpdateCommit;
         }
         if (Array.isArray(data.enabledMcps)) {
           enabledMcps = data.enabledMcps.slice();
@@ -2181,6 +2186,9 @@
       var s = String(result);
       isDevInstall = s.indexOf('dev') === 0;
       if (!isDevInstall) return;
+      availableUpdateCommit = null;
+      updateBannerEl.classList.remove('visible');
+      syncSettingsUpdateButton();
       // Show the REAL git HEAD, not the frozen version.json commit.
       var m = s.match(/dev:([0-9a-f]{4,}\+?)/i);
       if (m && m[1]) {
@@ -2207,6 +2215,10 @@
           var label = 'v' + (versionData.version || 'dev');
           if (versionData.commit) label += ' (' + versionData.commit.substring(0, 7) + ')';
           versionTextEl.textContent = label;
+          // An update remembered from a dismissed banner may since have been
+          // installed outside this panel. Reconcile it against the local stamp.
+          if (availableUpdateCommit === versionData.commit) availableUpdateCommit = null;
+          syncSettingsUpdateButton();
         } catch (e) { /* ignore */ }
       } else {
         versionTextEl.textContent = 'v(dev)';
@@ -2232,6 +2244,9 @@
 
   function checkForUpdate(silent) {
     if (isDevInstall) {
+      availableUpdateCommit = null;
+      updateBannerEl.classList.remove('visible');
+      syncSettingsUpdateButton();
       markUpdateChecked();
       if (!silent) showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       return;
@@ -2251,13 +2266,19 @@
           return;
         }
         if (remote.commit === versionData.commit) {
+          availableUpdateCommit = null;
+          updateBannerEl.classList.remove('visible');
+          syncSettingsUpdateButton();
           if (!silent) showModal('Gaffer is up to date (' + remote.commit.substring(0, 7) + ')');
           return;
         }
+        // Availability is durable for the session; banner dismissal is only a
+        // presentation preference and must never remove the Settings safeguard.
+        availableUpdateCommit = remote.commit;
+        syncSettingsUpdateButton();
         if (remote.commit === dismissedUpdateCommit) return;
         updateTextEl.textContent = 'Update available — v' + remote.version;
         updateBannerEl.classList.add('visible');
-        updateBannerEl._latestCommit = remote.commit;
         syncSettingsUpdateButton();
       }).catch(function (e) {
         markUpdateChecked();
@@ -2267,6 +2288,7 @@
 
   function runUpdate() {
     if (isDevInstall) {
+      availableUpdateCommit = null;
       showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
@@ -2285,7 +2307,7 @@
       // early would load half-copied files and flag a false failure.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
-          target: updateBannerEl._latestCommit || null,
+          target: availableUpdateCommit || null,
           at: Date.now(),
         }));
       } catch (e) { /* ignore */ }
@@ -2387,8 +2409,8 @@
   }
 
   function dismissUpdate() {
-    if (updateBannerEl._latestCommit) {
-      dismissedUpdateCommit = updateBannerEl._latestCommit;
+    if (availableUpdateCommit) {
+      dismissedUpdateCommit = availableUpdateCommit;
       saveChat();
     }
     updateBannerEl.classList.remove('visible');
@@ -2960,14 +2982,14 @@
   function syncSettingsUpdateButton() {
     var button = document.getElementById('setUpdateBtn');
     if (!button) return;
-    var available = updateBannerEl && updateBannerEl.classList.contains('visible') && !window.__gafferUpdating;
+    var available = !!availableUpdateCommit && !window.__gafferUpdating;
     button.hidden = !available;
   }
   function syncSettings() {
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
     renderLastUpdateCheck();
-    // Update CTA mirrors live banner state, including checks that completed
-    // while Settings was already open.
+    // Update CTA reflects actual availability, never the banner's dismissed
+    // state, including checks that completed while Settings was already open.
     syncSettingsUpdateButton();
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
