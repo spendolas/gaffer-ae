@@ -1222,21 +1222,40 @@
                   transform 0.15s var(--ease-state), filter 0.15s var(--ease-state);
     }
 
-    /* Sign-in card */
-    .signin-card { position: absolute; inset: 0; z-index: 3000; background: var(--color-bg-panel); display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px;
+    /* Sign-in takeover — SignInScreen 524:4062. Full-screen takeover: a scrim
+       (SignInScreen's two fills: bg/panel #232323 + overlay/lightbox #000 @95%)
+       with a centered ModalContainer card — the settings-modal convention.
+       Keeps the reactive `.visible` fade (renderAuth drives it off auth state,
+       not an imperative open, so it stays outside the tk-anim pattern). */
+    .signin-card { position: absolute; inset: 0; z-index: 3000; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; padding: 40px; /* SignInScreen pad 40 */
+      background: linear-gradient(var(--color-overlay-lightbox), var(--color-overlay-lightbox)), var(--color-bg-panel);
       opacity: 0; visibility: hidden; transform: translateY(8px); /* takeover fade-in-up / out-down */
       transition: opacity 0.18s ease-out, transform 0.18s ease-out, visibility 0.18s ease-out; }
     .signin-card.visible { opacity: 1; visibility: visible; transform: none; }
-    .signin-title { font-size: 16px; color: var(--color-text-strong); }
-    .signin-sub { font-size: 12px; color: var(--color-text-muted); }
-    .signin-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-    .signin-btn { height: 28px; padding: 0 16px; border: none; border-radius: 8px;
-      background: var(--color-border-default); color: var(--color-text-light); cursor: pointer; }
-    .signin-btn.primary { background: var(--color-btn-primary-bg); color: var(--color-text-white); }
-    .signin-btn.primary:hover { background: var(--color-btn-primary-hover); }
-    .signin-progress { font-size: 12px; color: var(--color-text-muted); margin-top: 8px; }
-    .signin-error { font-size: 12px; color: var(--color-accent-red); margin-top: 8px; }
+    /* ModalContainer 524:4040 — bg/input, r16, pad4 gap4 (settings-card twin).
+       min-width 200 = the Figma spec width as a floor; hugs wider content. */
+    .signin-modal { display: flex; flex-direction: column; align-items: center; gap: 4px;
+      width: max-content; min-width: 200px; max-width: 100%; padding: 4px;
+      background: var(--color-bg-input); border-radius: 16px; }
+    /* SignIn 524:4041 — pad12 gap16, fills the card */
+    .signin-body { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 12px; width: 100%; }
+    /* Message 524:4042 — heading + subtitle, gap4, centered text */
+    .signin-message { display: flex; flex-direction: column; gap: 4px; text-align: center; }
+    .signin-title { font-size: calc(16px * var(--chat-text, 1)); line-height: calc(20.8px * var(--chat-text, 1)); font-weight: 600; color: var(--color-text-light); } /* Main Label 524:4044 — #DDD SemiBold 16/130% */
+    .signin-sub { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-dim); } /* Pt.1 524:4045 — #777 12/16px */
+    /* Controls 524:4049 — button column, gap4. Buttons are the token Button
+       component (Figma Button instance 449:5347): primary = Text/Informed,
+       console = Text/Rest. FILL width. */
+    .signin-actions { display: flex; flex-direction: column; gap: 4px; }
+    .signin-actions > .text-btn { width: 100%; }
+    .signin-caption { font-size: calc(10px * var(--chat-text, 1)); line-height: calc(15px * var(--chat-text, 1)); color: var(--color-text-dim); text-align: center; } /* Message 524:5668 / Pt.1 524:5671 — #777 10/150% */
+    .signin-caption-u { text-decoration: underline; cursor: pointer; } /* "Claude Code CLI" — links to install docs */
+    .signin-caption-u:hover { color: var(--color-text-light-2); }
+    /* Runtime sign-in flow states (not in the Figma rest frame; preserved
+       behavior): in-progress + error rows, hidden until the flow runs. */
+    .signin-progress { font-size: calc(10px * var(--chat-text, 1)); color: var(--color-text-dim); text-align: center; }
+    .signin-error { font-size: calc(10px * var(--chat-text, 1)); color: var(--color-accent-red); text-align: center; }
     .account-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-dimmer); }
     .account-chip[hidden] { display: none; }
 
@@ -1366,17 +1385,29 @@
 <body>
   <div id="chatMessages" class="chat-messages"></div>
 
-  <div id="signInCard" class="signin-card" hidden>
-    <div class="signin-title">Sign in to Claude</div>
-    <div class="signin-sub">Gaffer runs on your Claude account.</div>
-    <div class="signin-actions">
-      <button id="signInClaude" class="signin-btn primary">Sign in with Claude</button>
-      <button id="signInConsole" class="signin-btn">Use Anthropic Console</button>
+  <div id="signInCard" class="signin-card" hidden data-fig="524:4062">
+    <div class="signin-modal" data-fig="524:4040">
+      <div class="signin-body" data-fig="524:4041">
+        <div class="signin-message" data-fig="524:4042">
+          <div class="signin-title" data-fig="524:4044">Welcome to Gaffer</div>
+          <div class="signin-sub" data-fig="524:4045">Your AI crew in After Effects.</div>
+        </div>
+        <div class="signin-actions" data-fig="524:4049">
+          <button id="signInClaude" class="text-btn informed" data-fig="524:4050">Sign in with Claude</button>
+          <!-- Console sign-in: hidden per Figma (Button 2 524:4051 visible:false).
+               Kept in markup so the sign_in mode:'console' wiring survives. -->
+          <button id="signInConsole" class="text-btn" data-fig="524:4051" hidden>Use Anthropic Console</button>
+          <div id="signInProgress" class="signin-progress" hidden>
+            Complete sign-in in your browser… <button id="signInCancel" class="text-btn">Cancel</button>
+          </div>
+          <div id="signInError" class="signin-error" hidden></div>
+        </div>
+        <!-- "Claude Code CLI" is underlined in the Figma (a text-range style,
+             not a node prop); reproduced as decoration only — the design wires
+             no link/handler, so it is not interactive. -->
+        <div class="signin-caption" data-fig="524:5668">Requires <span id="signInCliLink" class="signin-caption-u" role="link" tabindex="0">Claude Code CLI</span>.</div>
+      </div>
     </div>
-    <div id="signInProgress" class="signin-progress" hidden>
-      Complete sign-in in your browser… <button id="signInCancel" class="text-btn">Cancel</button>
-    </div>
-    <div id="signInError" class="signin-error" hidden></div>
   </div>
 
   <div class="chat-input-area">

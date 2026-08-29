@@ -1,6 +1,14 @@
 (function () {
   var cs = new CSInterface();
 
+  // Single source of truth for the Claude Code install docs — referenced by both
+  // the sign-in caption link and the no-CLI modal's "Learn how" button, so the
+  // URL lives in exactly one place.
+  var CLAUDE_CODE_DOCS_URL = 'https://code.claude.com/docs/en/quickstart#step-1-install-claude-code';
+  function openClaudeCodeDocs() {
+    try { cs.openURLInDefaultBrowser(CLAUDE_CODE_DOCS_URL); } catch (e) { /* no host bridge */ }
+  }
+
   // SVG icon helper — GafferIcons comes from icons.js (generated from Figma)
   function icon(name, cls) {
     var span = document.createElement('span');
@@ -1074,6 +1082,7 @@
   // click, backdrop click, or Esc). opts: { title, okLabel, onClose }.
   var alertModalOnClose = null;
   var alertModalOnConfirm = null;
+  var alertModalOnOk = null; // single-button action: runs on the OK button only, not on backdrop/Esc
 
   function showModal(message, opts) {
     opts = opts || {};
@@ -1095,12 +1104,15 @@
     alertModalBodyEl.textContent = message;
     alertModalOnClose = typeof opts.onClose === 'function' ? opts.onClose : null;
     alertModalOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
+    alertModalOnOk = typeof opts.onOk === 'function' ? opts.onOk : null;
     if (alertModalOnConfirm) {
       // Confirm mode: Cancel (neutral) + a confirm action (danger-styled for destructive ops like Clear chat).
       alertModalOkEl.textContent = opts.confirmLabel || 'Confirm';
       alertModalOkEl.classList.toggle('danger', !!opts.danger);
       if (alertModalCancelEl) { alertModalCancelEl.textContent = opts.cancelLabel || 'Cancel'; alertModalCancelEl.hidden = false; }
     } else {
+      // Single-button mode: an optional onOk action (e.g. "Learn how" -> docs)
+      // that fires only on the button, so backdrop/Esc just dismiss.
       alertModalOkEl.textContent = opts.okLabel || 'OK';
       alertModalOkEl.classList.remove('danger');
       if (alertModalCancelEl) alertModalCancelEl.hidden = true;
@@ -1116,17 +1128,26 @@
     if (cb) cb();
   }
 
+  // Edge case: Claude Code CLI isn't installed. Reuses the ModalFullScreen
+  // (Figma no-CLI modal 524:7807) — single "Learn how" button -> install docs.
+  function showNoCliModal() {
+    showModal(
+      'Gaffer brings AI into After Effects, not on your computer. Please install Claude Code CLI to be able to use it.',
+      { title: 'Missing pieces', okLabel: 'Learn how', onOk: openClaudeCodeDocs }
+    );
+  }
+
   if (alertModalEl && alertModalOkEl) {
     alertModalOkEl.addEventListener('click', function () {
-      var f = alertModalOnConfirm; // capture before hideModal clears state
-      alertModalOnConfirm = null;
+      var f = alertModalOnConfirm || alertModalOnOk; // capture before hideModal clears state
+      alertModalOnConfirm = null; alertModalOnOk = null;
       hideModal();
-      if (f) f(); // confirm action runs after the modal is dismissed
+      if (f) f(); // confirm/onOk action runs after the modal is dismissed
     });
-    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () { alertModalOnConfirm = null; hideModal(); });
-    dismissOnBackdrop(alertModalEl, function () { alertModalOnConfirm = null; hideModal(); }); // void click = cancel
+    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); });
+    dismissOnBackdrop(alertModalEl, function () { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); }); // void click = cancel/dismiss only
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && tkOpen(alertModalEl)) { alertModalOnConfirm = null; hideModal(); }
+      if (e.key === 'Escape' && tkOpen(alertModalEl)) { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); }
     });
   }
 
@@ -1663,6 +1684,7 @@
         renderApi();
       };
       window.__gaffer.showModal = showModal;
+      window.__gaffer.showNoCliModal = showNoCliModal;
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -2856,6 +2878,11 @@
   if ((b = document.getElementById('signInClaude'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'claudeai' }); });
   if ((b = document.getElementById('signInConsole'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'console' }); });
   if ((b = document.getElementById('signInCancel'))) b.addEventListener('click', function () { sendWs({ type: 'cancel_sign_in' }); });
+  // "Claude Code CLI" in the sign-in caption opens the install docs.
+  if ((b = document.getElementById('signInCliLink'))) {
+    b.addEventListener('click', openClaudeCodeDocs);
+    b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openClaudeCodeDocs(); } });
+  }
   // (Sign-out is handled by the Settings modal's setSignOutBtn handler.)
   window.__gafferAuth = function (s) { renderAuth(s || {}); }; // dev/test hook (mirrors __gafferSound)
 
