@@ -2461,8 +2461,17 @@
   // daemon to discover them afresh from the installed CLI (`claude --help`)
   // and current CLI state. These are only the pre-response fallbacks.
   function labelize(v) {
+    if (typeof v !== 'string') return '';
     if (v === 'xhigh') return 'Extra High';
     if (v === '1m') return '1M';
+    // A restored pinned version can briefly precede the fresh model response,
+    // so don't expose the internal select value while its options rebuild.
+    if (v.indexOf('id:') === 0) {
+      var pinned = v.substring(3);
+      var oneM = /\[1m\]$/.test(pinned);
+      if (oneM) pinned = pinned.replace(/\[1m\]$/, '');
+      return versionLabel(pinned) + (oneM ? ' · 1M' : '');
+    }
     return v.charAt(0).toUpperCase() + v.slice(1);
   }
   var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
