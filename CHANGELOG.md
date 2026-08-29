@@ -5,6 +5,7 @@
 **A calmer, more capable panel.**
 
 - **Settings, rebuilt** — updates, Auto-lighten, reply sounds, account status, model family/version, and each model's supported effort levels now live in one polished full-screen settings card. The sounds picker previews every cue and grows with the A−/A+ text scale so names stay readable.
+- **Model controls are honest** — Settings refreshes the installed Claude CLI on open, gates 1M context and effort by the published model-generation matrix, and never treats historical local model state as proof of account entitlement. Haiku 4.5 no longer gets an effort slider or 1M option; pinned Opus/Sonnet generations get their actual effort ranges.
 - **Sign in and out safely** — signed-out users get a focused Claude sign-in screen, missing-CLI installs get a useful recovery path, and signing out clearly warns that it affects Claude Code across the whole machine.
 - **Better feedback** — native-looking alert modals replace browser alerts, clear-chat requires confirmation, and the new toast system stacks, dismisses, and reflows smoothly without colliding with the rest of the panel.
 - **A broad visual pass** — controls, icons, spacing, colours, text scaling, the activity drawer, composer, settings rows, and effort slider now follow the shared design system throughout the panel.

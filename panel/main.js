@@ -1255,7 +1255,7 @@
       // pinned version = full model id (may embed [1m]); alias otherwise
       model: currentVariant.indexOf('id:') === 0 ? currentVariant.slice(3) : currentModel,
       variant: currentVariant === '1m' ? '1m' : 'standard',
-      effort: currentEffort,
+      effort: discoveredEfforts.length ? currentEffort : null,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
       autoModel: autoModel,
@@ -2476,21 +2476,25 @@
   }
   var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
   // Variant = version x context (ref: "Latest", "Latest · 1M", "4.6",
-  // "4.6 · 1M"...). Latest pair is always offered (alias + [1m] suffix);
-  // pinned versions come from the daemon's CLI-state discovery and are
-  // full model ids carried in the value as 'id:<full-id>'.
+  // "4.6 · 1M"...). 1M is offered only when the daemon's fresh capability
+  // response says the selected model supports it; pinned versions come from
+  // the daemon's CLI-state discovery and are full ids carried as
+  // 'id:<full-id>'.
   var modelVersions = {}; // family -> [full ids], daemon-pushed
+  var modelCapabilities = null; // key -> { oneM, efforts, entitlement }
   function versionLabel(id) {
     return id.replace(/^claude-[a-z]+-/, '').replace(/-\d{8}$/, '').replace(/-/g, '.');
   }
+  function supportsOneM(key) {
+    var caps = modelCapabilities && modelCapabilities[key];
+    return !!(caps && caps.oneM);
+  }
   function variantOptionsFor(family) {
-    var opts = [
-      { value: 'standard', label: 'Latest' },
-      { value: '1m', label: 'Latest · 1M' },
-    ];
+    var opts = [{ value: 'standard', label: 'Latest' }];
+    if (supportsOneM(family)) opts.push({ value: '1m', label: 'Latest · 1M' });
     (modelVersions[family] || []).forEach(function (id) {
       opts.push({ value: 'id:' + id, label: versionLabel(id) });
-      opts.push({ value: 'id:' + id + '[1m]', label: versionLabel(id) + ' · 1M' });
+      if (supportsOneM(id)) opts.push({ value: 'id:' + id + '[1m]', label: versionLabel(id) + ' · 1M' });
     });
     return opts;
   }
@@ -2502,8 +2506,9 @@
   // globalEfforts: the daemon's back-compat/fallback list (data.efforts), used
   // when effortsByModel is absent or has no entry for the current model.
   var globalEfforts = EFFORT_LEVELS.slice();
-  // effortsByModel: optional per-model efforts map from the daemon
-  // ({ modelId: [efforts...] }). Null until/unless the daemon sends it.
+  // effortsByModel: per-model efforts map from the daemon
+  // ({ modelId: [efforts...] }). An explicit [] means the model has no effort
+  // control; null means an older daemon has not sent capability data yet.
   var effortsByModel = null;
   // Generic popup select: options is [{value,label}], get/set close over the
   // state var. Popup goes position:fixed on open so the drawer's
@@ -2572,7 +2577,11 @@
   var variantSelect = makeSelect(
     document.getElementById('setVariantBtn'), document.getElementById('setVariantPopup'),
     document.getElementById('setVariantLabel'), variantOptionsFor(currentModel),
-    function () { return currentVariant; }, function (v) { currentVariant = v; }
+    function () { return currentVariant; }, function (v) {
+      currentVariant = v;
+      applyEffortsForModel();
+      renderEffort();
+    }
   );
   function rebuildVariantSelect() {
     var opts = variantOptionsFor(currentModel);
@@ -2605,12 +2614,17 @@
   // when effortsByModel is null (old daemon) — falls straight through to
   // globalEfforts, same behavior as before this per-model wiring existed.
   function applyEffortsForModel() {
-    var perModel = effortsByModel && effortsByModel[currentModel];
-    var levels = (Array.isArray(perModel) && perModel.length) ? perModel : globalEfforts;
+    var selectedKey = currentVariant.indexOf('id:') === 0 ? currentVariant.slice(3) : currentModel;
+    var hasPerModel = effortsByModel && Object.prototype.hasOwnProperty.call(effortsByModel, selectedKey);
+    var perModel = hasPerModel ? effortsByModel[selectedKey] : null;
+    var levels = hasPerModel ? (Array.isArray(perModel) ? perModel : []) : globalEfforts;
     discoveredEfforts = levels.slice();
-    currentEffort = nearestEffort(currentEffort, discoveredEfforts);
+    currentEffort = discoveredEfforts.length ? nearestEffort(currentEffort, discoveredEfforts) : null;
   }
   function applyModelOptions(data) {
+    if (data.capabilitiesByModel && typeof data.capabilitiesByModel === 'object') {
+      modelCapabilities = data.capabilitiesByModel;
+    }
     if (Array.isArray(data.models) && data.models.length) {
       modelSelect.setOptions(data.models.map(function (v) { return { value: v, label: labelize(v) }; }));
     }
@@ -2640,11 +2654,18 @@
   var CIRC_FIG = ['484:30422', '484:31058', '484:31061', '484:31052', '484:31055'];
   function renderEffort() {
     var levels = discoveredEfforts;
+    var lbl = document.getElementById('setEffortLabel');
+    var slider = document.getElementById('setEffortDots');
+    if (!levels.length) {
+      currentEffort = null;
+      if (lbl) lbl.textContent = 'Unavailable';
+      if (slider) { slider.hidden = true; slider.innerHTML = ''; }
+      return;
+    }
+    if (slider) slider.hidden = false;
     if (levels.indexOf(currentEffort) < 0) currentEffort = nearestEffort(currentEffort, levels);
     var idx = levels.indexOf(currentEffort); if (idx < 0) idx = 0;
-    var lbl = document.getElementById('setEffortLabel');
     if (lbl) lbl.textContent = labelize(currentEffort);
-    var slider = document.getElementById('setEffortDots');
     if (!slider) return;
     slider.innerHTML = '';
     var n = levels.length;
@@ -2748,6 +2769,7 @@
   }
   // Programmatic set (model clamp / restore): snap to a dot, full render.
   function applyEffortIndex(i) {
+    if (!discoveredEfforts.length) return;
     i = Math.max(0, Math.min(discoveredEfforts.length - 1, i));
     var v = discoveredEfforts[i];
     if (v && v !== currentEffort) { currentEffort = v; renderEffort(); }
@@ -2755,6 +2777,7 @@
   // Re-place the thumb once the modal is actually laid out (measurement needs a
   // visible track) — call after opening Settings.
   function relayoutEffort() {
+    if (!discoveredEfforts.length) return;
     var i = discoveredEfforts.indexOf(currentEffort); if (i < 0) i = 0;
     settleEffortToIdx(i, false);
   }
