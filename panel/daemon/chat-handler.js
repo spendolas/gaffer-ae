@@ -232,14 +232,35 @@ export function augmentedEnv() {
   return { ...process.env, PATH: pathParts.join(':') };
 }
 
-// One-shot classifier runner for the autoModel middle band: haiku, no MCP, no
-// system prompt, no session. Returns (prompt) => Promise<stdout>. Never
-// rejects — resolves '' on timeout/error so classifyTurn falls back to
-// 'complex' (no downshift). 20s cap: `claude -p` cold-start measured ~10-15s
-// (there is no warm path); a hung classify still can't stall a turn past this.
-// A direct Messages-API classifier would be ~1s but needs an API key the
-// subscription-authed daemon doesn't have — revisit if ANTHROPIC_API_KEY appears.
+// One-shot classifier runner for the autoModel middle band: haiku, hermetic,
+// fresh session. Returns (prompt) => Promise<stdout>. Never rejects — resolves
+// '' on timeout/error so classifyTurn falls back to 'complex' (no downshift).
+//
+// --safe-mode strips every customization (hooks, plugins, skills, LSP, auto
+// memory, CLAUDE.md) but KEEPS keychain auth — unlike --bare, which skips the
+// keychain and then demands ANTHROPIC_API_KEY. So the classifier stays on the
+// user's subscription with nothing bleeding in. classifierEnv() also kills the
+// blocking non-essential startup round-trips (update check / telemetry / error
+// reporting), trimming a few seconds off cold-start. Measured ~4–7s (was ~7–15s).
+//
+// Not warm, not API-direct, by design: a resident stream-json session shares one
+// conversation and haiku drifts from classifying into chatting (context poison),
+// and the CLI inits lazily on first message so an idle process pre-pays nothing.
+// A direct Messages-API call with the subscription OAuth token IS ~1s and works,
+// but was declined — it's a grey-area use of the token and could face an end-user
+// keychain-access prompt. Staying on the CLI keeps auth boring and universal.
 var CLASSIFY_TIMEOUT_MS = 20000;
+// augmentedEnv + non-essential-traffic off. Scoped to the classifier subprocess
+// only — the main chat keeps telemetry/updates. Documented Claude Code vars.
+function classifierEnv() {
+  return {
+    ...augmentedEnv(),
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    DISABLE_AUTOUPDATER: '1',
+    DISABLE_TELEMETRY: '1',
+    DISABLE_ERROR_REPORTING: '1',
+  };
+}
 function makeClassifyRun(claudeBin) {
   return function (prompt) {
     return new Promise(function (resolve) {
@@ -248,9 +269,10 @@ function makeClassifyRun(claudeBin) {
       try {
         var child = spawn(claudeBin, [
           '-p', '--model', 'haiku',
+          '--safe-mode', // strip customizations, keep keychain auth (not --bare)
           '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
           '--dangerously-skip-permissions',
-        ], { stdio: ['pipe', 'pipe', 'pipe'], env: augmentedEnv(), windowsHide: true });
+        ], { stdio: ['pipe', 'pipe', 'pipe'], env: classifierEnv(), windowsHide: true });
         var out = '';
         var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, CLASSIFY_TIMEOUT_MS);
         child.stdout.on('data', function (c) { out += c.toString(); });
