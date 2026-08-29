@@ -497,6 +497,7 @@
       background: var(--color-bg-input);
       border-radius: 24px;
       padding: 8px;
+      cursor: text; /* whole pill signals typeable; send/stop buttons override to pointer */
     }
     /* PastePreviewRow 185:1163 — centered tray docked flush on the pill:
        bg/input fill, r 12/12/0/0, pad 4, gap 4. ImageChip 176:940 80x80 r8,
@@ -809,6 +810,7 @@
       width: 32px;
       height: 32px;
       padding: 8px;
+      cursor: pointer; /* override the row's cursor:text — buttons stay clickable-looking */
       border: none;
       border-radius: 16px;
       cursor: pointer;
