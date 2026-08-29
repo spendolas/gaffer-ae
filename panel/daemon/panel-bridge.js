@@ -20,6 +20,7 @@ export class PanelBridge {
     this.onChat = null;
     this.onChatCancel = null;
     this.onListMcps = null;
+    this.onListModels = null;
   }
 
   start() {
@@ -88,6 +89,10 @@ export class PanelBridge {
           }
           if (msg.type === 'list_mcps') {
             if (this.onListMcps) this.onListMcps(socket);
+            return;
+          }
+          if (msg.type === 'list_models') {
+            if (this.onListModels) this.onListModels(socket);
             return;
           }
           if (msg.type === 'auth_mcp') {

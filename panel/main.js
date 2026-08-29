@@ -2435,9 +2435,9 @@
   });
 
   // ── Custom selects (Figma atom): model, context variant, effort ──
-  // Model + effort options are NOT hardcoded — the daemon discovers them
-  // from the installed CLI (`claude --help`) and pushes a 'models' message
-  // on load; these are only the pre-push fallbacks.
+  // Model + effort options are NOT hardcoded — opening Settings asks the
+  // daemon to discover them afresh from the installed CLI (`claude --help`)
+  // and current CLI state. These are only the pre-response fallbacks.
   function labelize(v) {
     if (v === 'xhigh') return 'Extra High';
     if (v === '1m') return '1M';
@@ -2992,6 +2992,9 @@
   }
   function openSettings() {
     syncSettings(); tkShow(settingsModalEl);
+    // Never reuse daemon-lifetime model data: every Settings visit re-reads
+    // the installed CLI and current account/model state.
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'list_models' }));
     // Thumb placement measures live dot centers — re-run once the modal is
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
