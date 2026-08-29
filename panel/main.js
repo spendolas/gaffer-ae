@@ -2874,9 +2874,11 @@
     // low. The reading surface still animates; the JS-driven textarea can't
     // smoothly animate its height anyway, so an instant composer resize is fine.
     chatInputEl.style.fontSize = (14 * textScale) + 'px';
-    chatInputEl.style.lineHeight = (18 * textScale) + 'px';
-    var line = Math.round(18 * textScale);
-    var cap = Math.round(144 * textScale); // 8 lines
+    // 16px line-height (see .chat-input in index.html) — tight enough that
+    // the native caret hugs the glyphs; loose enough to cover descenders.
+    chatInputEl.style.lineHeight = (16 * textScale) + 'px';
+    var line = Math.round(16 * textScale);
+    var cap = Math.round(128 * textScale); // 8 lines
     chatInputEl.style.height = line + 'px';
     chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, cap) + 'px';
     chatInputEl.style.overflowY = chatInputEl.scrollHeight > cap ? 'auto' : 'hidden';
