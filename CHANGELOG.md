@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0 — 2026-08-29
+
+**A calmer, more capable panel.**
+
+- **Settings, rebuilt** — updates, Auto-lighten, reply sounds, account status, model family/version, and each model's supported effort levels now live in one polished full-screen settings card. The sounds picker previews every cue and grows with the A−/A+ text scale so names stay readable.
+- **Sign in and out safely** — signed-out users get a focused Claude sign-in screen, missing-CLI installs get a useful recovery path, and signing out clearly warns that it affects Claude Code across the whole machine.
+- **Better feedback** — native-looking alert modals replace browser alerts, clear-chat requires confirmation, and the new toast system stacks, dismisses, and reflows smoothly without colliding with the rest of the panel.
+- **A broad visual pass** — controls, icons, spacing, colours, text scaling, the activity drawer, composer, settings rows, and effort slider now follow the shared design system throughout the panel.
+- **Safer internals** — development reloads wait until the daemon is idle, Auto-lighten's local routing is more conservative, and unfinished API-key UI plus diagnostic toast shortcuts stay gated out of the end-user experience.
+
 ## v0.8.0 — 2026-08-24
 
 **Token optimization (under the hood).**
