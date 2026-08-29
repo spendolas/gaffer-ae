@@ -38,28 +38,57 @@ var GAFFER_TOOLS = [
   'mcp__gaffer__getProjectSettings',
 ];
 
-// Per-model effort overrides — MAINTAINED MAP, not CLI-derived.
-//
-// `claude --help` prints a single global `--effort <level>` enum
-// (low, medium, high, xhigh, max) with no per-model breakdown, and it is
-// IDENTICAL regardless of `--model` (verified: `claude --model haiku --help`
-// and `claude --model opus --help` produce the same --effort line). Live
-// `-p` calls at every effort level for haiku, sonnet, and opus all
-// succeeded with no rejection, and usage.output_tokens_details.thinking_tokens
-// varied with effort (e.g. haiku: 67 tokens at low vs 92 at max), confirming
-// every currently-aliased model accepts the full effort range rather than
-// silently capping it. (Tested against Claude CLI 2.1.236, 2026-08-28.)
-//
-// So today there is no known model that supports a narrower effort set than
-// the global list — this map exists as the single place to record one if
-// that ever changes (e.g. a future fast/non-thinking model alias that only
-// takes low/medium). Keyed by the same bare alias `listModelOptions()`
-// resolves from `--help` (e.g. 'opus', 'sonnet', 'haiku'), value is the
-// ordered effort list for that alias. Any model NOT listed here falls back
-// to the global `efforts` list — see `listModelOptions()` below.
-var MODEL_EFFORT_OVERRIDES = {
-  // 'haiku': ['low', 'medium'], // example shape — add real overrides here
-};
+// Claude Code's public model-config matrix is more precise than the CLI's
+// single global `--effort` help line. Keep this compatibility data here so the
+// Settings response can gate model-specific controls instead of pretending
+// every model supports every option. Account/plan entitlement is still a
+// separate server-side decision; `source` below makes that explicit.
+var MODEL_CAPABILITY_SOURCE = 'claude-code-model-config';
+var ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+var NO_XHIGH_EFFORTS = ['low', 'medium', 'high', 'max'];
+
+export function modelCapability(model, versions) {
+  var raw = String(model || '').replace(/\[1m\]$/, '');
+  var id = raw;
+  if (/^[a-z][a-z0-9]*$/.test(raw) && versions && versions[raw] && versions[raw][0]) {
+    id = versions[raw][0];
+  }
+  var m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(id);
+  var family = m ? m[1] : raw;
+  var major = m ? parseInt(m[2], 10) : 0;
+  var minor = m && m[3] ? parseInt(m[3], 10) : 0;
+  var efforts = [];
+  var oneM = false;
+
+  if (family === 'fable' || family === 'mythos') {
+    efforts = major >= 5 ? ALL_EFFORTS : [];
+    oneM = major >= 5;
+  } else if (family === 'opus') {
+    oneM = major >= 5 || (major === 4 && minor >= 6);
+    efforts = major >= 5 || (major === 4 && minor >= 7) ? ALL_EFFORTS
+      : (major === 4 && minor === 6 ? NO_XHIGH_EFFORTS : []);
+  } else if (family === 'sonnet') {
+    oneM = major >= 5 || (major === 4 && minor >= 6);
+    efforts = major >= 5 ? ALL_EFFORTS
+      : (major === 4 && minor === 6 ? NO_XHIGH_EFFORTS : []);
+  }
+
+  // A bare alias can be returned before the state file has a version. The
+  // current aliases still have documented family-level behavior; use it as a
+  // fallback while keeping unknown/new families conservative.
+  if (!m) {
+    if (family === 'fable' || family === 'mythos' || family === 'opus' || family === 'sonnet') {
+      efforts = ALL_EFFORTS; oneM = true;
+    }
+  }
+  return {
+    oneM: oneM,
+    contextWindows: oneM ? [200000, 1000000] : [200000],
+    efforts: efforts.slice(),
+    source: MODEL_CAPABILITY_SOURCE,
+    entitlement: 'plan-dependent',
+  };
+}
 
 // Build a human-readable label for tool pills. Strips mcp__gaffer__ prefix
 // and appends a hint from the tool's input args.
@@ -329,22 +358,29 @@ export class ChatHandler {
     if (!efforts.length) efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
     // Pinnable versions: full model ids the CLI accepts (verified:
     // `--model claude-opus-4-6` works; version aliases don't exist).
-    // Enumerated from the CLI's own state file (~/.claude.json — server
-    // -pushed model options + feature cache), so the list tracks CLI
-    // updates instead of being hardcoded here.
+    // Enumerate the CLI help and its current state file on every call. The
+    // state file contributes names only; it is not treated as entitlement
+    // proof (it can contain historical or unavailable models).
     var versions = {};
+    var seen = {};
+    var addVersion = function (id) {
+      if (!/^claude-[a-z]+(?:-\d+)+$/.test(id) || seen[id]) return;
+      seen[id] = true;
+      var familyMatch = /^claude-([a-z]+)-/.exec(id);
+      if (!familyMatch) return;
+      var family = familyMatch[1];
+      (versions[family] = versions[family] || []).push(id);
+    };
+    var helpId, helpIds = /claude-[a-z]+(?:-\d+)+/g;
+    while ((helpId = helpIds.exec(help))) addVersion(helpId[0]);
     try {
       var stateRaw = readFileSync(join(homedir(), '.claude.json'), 'utf8');
-      var seen = {};
       var vm, vre = /claude-([a-z]+)-[0-9][0-9a-z-]*/g;
       while ((vm = vre.exec(stateRaw))) {
         var id = vm[0].replace(/-$/, '');
         // versions only — numeric segments (opt. date), not entitlement
         // ids like claude-fable-5-promotional-access
-        if (!/^claude-[a-z]+(-\d+)+$/.test(id)) continue;
-        if (seen[id]) continue;
-        seen[id] = true;
-        (versions[vm[1]] = versions[vm[1]] || []).push(id);
+        addVersion(id);
       }
       var vnum = function (id) {
         return id.replace(/^claude-[a-z]+-/, '').split('-')
@@ -363,16 +399,35 @@ export class ChatHandler {
         if (models.indexOf(fam) === -1) models.push(fam);
       }
     } catch (e) { /* no state file — versions stay empty */ }
-    // Per-model efforts: MODEL_EFFORT_OVERRIDES is the maintained source of
-    // truth (see comment above it); any model absent from it — i.e. every
-    // model today — falls back to the global `efforts` list so the panel
-    // never renders an empty slider for an unmapped model.
+    // Per-model efforts and 1M context are derived from Claude Code's public
+    // model matrix. Empty `efforts` is meaningful (Haiku 4.5 has no effort),
+    // so the panel must distinguish an explicit empty entry from a missing
+    // entry when applying this response.
     var effortsByModel = {};
+    var capabilitiesByModel = {};
     for (var mi = 0; mi < models.length; mi++) {
       var modelName = models[mi];
-      effortsByModel[modelName] = MODEL_EFFORT_OVERRIDES[modelName] || efforts;
+      var cap = modelCapability(modelName, versions);
+      effortsByModel[modelName] = cap.efforts;
+      capabilitiesByModel[modelName] = cap;
     }
-    return { models: models, efforts: efforts, effortsByModel: effortsByModel, versions: versions };
+    for (var vf in versions) {
+      for (var vi = 0; vi < versions[vf].length; vi++) {
+        var versionId = versions[vf][vi];
+        var versionCap = modelCapability(versionId, versions);
+        effortsByModel[versionId] = versionCap.efforts;
+        capabilitiesByModel[versionId] = versionCap;
+      }
+    }
+    return {
+      models: models,
+      efforts: efforts,
+      effortsByModel: effortsByModel,
+      capabilitiesByModel: capabilitiesByModel,
+      versions: versions,
+      capabilitySource: MODEL_CAPABILITY_SOURCE,
+      entitlement: 'plan-dependent',
+    };
   }
 
   async handleChat(msg, socket) {
@@ -430,16 +485,26 @@ export class ChatHandler {
         autoDownshifted = sel.dropContext;
       }
     }
-    // Context-window variant: 1M suffix, passed through for ANY model
-    // (probed live: opus/sonnet/fable accept [1m]; haiku returns a clear
-    // API 400 about subscription availability). Never silently strip —
-    // an unsupported combo must surface its error in chat. Skipped when
-    // autoModel downshifted this turn: haiku has no 1M, and a trivial turn
-    // doesn't need the big context.
+    // Validate advanced controls against the same model matrix sent to
+    // Settings. This is a server-side guard for stale panels or hand-crafted
+    // websocket messages; the UI also hides unsupported choices. Account/plan
+    // entitlement remains Claude's decision and may still reject a valid
+    // capability at request time.
+    var capability = modelCapability(model, null);
+    if (msg.variant === '1m' && !autoDownshifted && !capability.oneM) {
+      if (socket.readyState === 1) socket.send(JSON.stringify({
+        type: 'chat_error',
+        error: '1M context is not supported by ' + model + '.',
+      }));
+      return;
+    }
+    if (effort && capability.efforts.indexOf(effort) === -1) effort = null;
+    // Context-window variant: Claude Code encodes 1M as a [1m] model suffix.
+    // Skip it when autoModel deliberately downshifted to a non-1M model.
     if (msg.variant === '1m' && !autoDownshifted) model += '[1m]';
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-    if (effort && EFFORTS.indexOf(effort) !== -1) args.push('--effort', effort);
+    if (effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1) args.push('--effort', effort);
     // Register the gaffer MCP server inline — chat must work even when the
     // installer's `claude mcp add` step never ran (e.g. CLI installed after
     // the panel). Merges with any user-scope registration of the same name.

@@ -30,7 +30,16 @@ bridge.onListModels = async (socket) => {
   try {
     var opts = await chatHandler.listModelOptions();
     if (socket && socket.readyState === 1) {
-      socket.send(JSON.stringify({ type: 'models', models: opts.models, efforts: opts.efforts, effortsByModel: opts.effortsByModel, versions: opts.versions }));
+      socket.send(JSON.stringify({
+        type: 'models',
+        models: opts.models,
+        efforts: opts.efforts,
+        effortsByModel: opts.effortsByModel,
+        capabilitiesByModel: opts.capabilitiesByModel,
+        versions: opts.versions,
+        capabilitySource: opts.capabilitySource,
+        entitlement: opts.entitlement,
+      }));
     }
   } catch (e) {
     console.error('Gaffer: model discovery failed:', e.message);
