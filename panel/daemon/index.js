@@ -26,14 +26,17 @@ bridge.start().catch((err) => {
 var chatHandler = new ChatHandler();
 bridge.onChat = (msg, socket) => chatHandler.handleChat(msg, socket);
 bridge.onChatCancel = () => chatHandler.cancel();
-bridge.onListMcps = async (socket) => {
-  // Panel asks for MCPs on load — ship the CLI-discovered model/effort
-  // options on the same trigger.
-  chatHandler.listModelOptions().then((opts) => {
+bridge.onListModels = async (socket) => {
+  try {
+    var opts = await chatHandler.listModelOptions();
     if (socket && socket.readyState === 1) {
       socket.send(JSON.stringify({ type: 'models', models: opts.models, efforts: opts.efforts, effortsByModel: opts.effortsByModel, versions: opts.versions }));
     }
-  }).catch(() => {});
+  } catch (e) {
+    console.error('Gaffer: model discovery failed:', e.message);
+  }
+};
+bridge.onListMcps = async (socket) => {
   var result = await chatHandler.listMcps(function (icons) {
     // background favicon fetches finished — push them to the panel
     if (socket && socket.readyState === 1) {

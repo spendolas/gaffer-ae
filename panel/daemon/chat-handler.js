@@ -294,17 +294,16 @@ export class ChatHandler {
     this.compacting = false;
     this.claudeBin = null;
     this.envForSpawn = null;
-    this.modelOptions = null; // cached discovery result
   }
 
   // Discover what the installed CLI offers — no hardcoded lists in the
   // panel. Parses `claude --help`: the --effort enum is explicit
   // ("(low, medium, high, xhigh, max)"); the --model description names the
   // current aliases as quoted examples. 'haiku' works but isn't listed in
-  // the examples, so a floor of known-good aliases is unioned in.
+  // the examples, so a floor of known-good aliases is unioned in. This runs
+  // afresh for every Settings open so CLI and account-state changes appear
+  // without a daemon restart.
   async listModelOptions() {
-    if (this.modelOptions) return this.modelOptions;
-    var self = this;
     var help = await new Promise(async function (resolve) {
       try {
         var bin = await findClaudeBinary();
@@ -359,6 +358,9 @@ export class ChatHandler {
           }
           return 0;
         });
+        // A freshly discovered pinned version must have a reachable family
+        // selector even if this CLI build omitted that alias from --help.
+        if (models.indexOf(fam) === -1) models.push(fam);
       }
     } catch (e) { /* no state file — versions stay empty */ }
     // Per-model efforts: MODEL_EFFORT_OVERRIDES is the maintained source of
@@ -370,8 +372,7 @@ export class ChatHandler {
       var modelName = models[mi];
       effortsByModel[modelName] = MODEL_EFFORT_OVERRIDES[modelName] || efforts;
     }
-    self.modelOptions = { models: models, efforts: efforts, effortsByModel: effortsByModel, versions: versions };
-    return self.modelOptions;
+    return { models: models, efforts: efforts, effortsByModel: effortsByModel, versions: versions };
   }
 
   async handleChat(msg, socket) {
