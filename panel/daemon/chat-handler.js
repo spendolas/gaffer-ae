@@ -47,6 +47,164 @@ var MODEL_CAPABILITY_SOURCE = 'claude-code-model-config';
 var ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 var NO_XHIGH_EFFORTS = ['low', 'medium', 'high', 'max'];
 
+var MODEL_DISCOVERY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+function readCredentialFileToken(env) {
+  try {
+    var configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    var raw = readFileSync(join(configDir, '.credentials.json'), 'utf8');
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken
+      ? String(parsed.claudeAiOauth.accessToken) : '';
+  } catch (e) { return ''; }
+}
+
+function readMacKeychainToken(env) {
+  return new Promise(function (resolve) {
+    if (process.platform !== 'darwin') return resolve('');
+    var args = ['find-generic-password'];
+    if (env.USER) args.push('-a', env.USER);
+    args.push('-s', 'Claude Code-credentials', '-w');
+    execFile('/usr/bin/security', args, { env: env, timeout: 10000, windowsHide: true }, function (err, stdout) {
+      if (err) return resolve('');
+      try {
+        var parsed = JSON.parse(String(stdout || ''));
+        resolve(parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken
+          ? String(parsed.claudeAiOauth.accessToken) : '');
+      } catch (e) { resolve(''); }
+    });
+  });
+}
+
+async function readModelDiscoveryCredential(env) {
+  // Explicit credentials win, and are the only supported route for API-key
+  // installs. OAuth credentials stay in the OS/file store and are never
+  // persisted or logged by Gaffer.
+  if (env.ANTHROPIC_API_KEY) return { kind: 'api-key', token: String(env.ANTHROPIC_API_KEY) };
+  if (env.ANTHROPIC_AUTH_TOKEN) return { kind: 'bearer', token: String(env.ANTHROPIC_AUTH_TOKEN) };
+  var token = await readMacKeychainToken(env);
+  if (!token) token = readCredentialFileToken(env);
+  return token ? { kind: 'bearer', token: token } : null;
+}
+
+export function modelCatalogOptions(payload) {
+  if (!payload || !Array.isArray(payload.data)) return null;
+  var rows = payload.data.filter(function (row) {
+    return row && typeof row.id === 'string' && /^claude-[a-z]+-/.test(row.id);
+  });
+  if (!rows.length) return null;
+  var versions = {};
+  var capabilitiesByModel = {};
+  var effortsByModel = {};
+  var seen = {};
+  var addFamilyVersion = function (id) {
+    var match = /^claude-([a-z]+)-/.exec(id);
+    if (!match) return '';
+    var family = match[1];
+    if (!versions[family]) versions[family] = [];
+    if (!seen[id]) { seen[id] = true; versions[family].push(id); }
+    return family;
+  };
+  rows.forEach(function (row) {
+    var id = row.id;
+    var family = addFamilyVersion(id);
+    var effort = row.capabilities && row.capabilities.effort;
+    var supportedEfforts = [];
+    if (effort && effort.supported === true) {
+      var declaresLevels = MODEL_DISCOVERY_EFFORTS.some(function (level) {
+        return Object.prototype.hasOwnProperty.call(effort, level);
+      });
+      supportedEfforts = MODEL_DISCOVERY_EFFORTS.filter(function (level) {
+        return declaresLevels ? effort[level] && effort[level].supported === true : true;
+      });
+    }
+    var oneM = Number(row.max_input_tokens) >= 1000000;
+    var cap = {
+      oneM: oneM,
+      contextWindows: oneM ? [200000, 1000000] : [200000],
+      efforts: supportedEfforts,
+      source: 'anthropic-v1-models',
+      entitlement: 'account-server',
+      modelId: id,
+      displayName: typeof row.display_name === 'string' ? row.display_name : id,
+      maxInputTokens: Number(row.max_input_tokens) || null,
+      maxOutputTokens: Number(row.max_tokens) || null,
+    };
+    capabilitiesByModel[id] = cap;
+    effortsByModel[id] = supportedEfforts;
+    // The family alias resolves to the first (newest) API row below.
+    if (family && !capabilitiesByModel[family]) {
+      capabilitiesByModel[family] = cap;
+      effortsByModel[family] = supportedEfforts;
+    }
+  });
+  var versionNumber = function (id) {
+    return id.replace(/^claude-[a-z]+-/, '').split('-').map(function (part) {
+      return parseInt(part, 10) || 0;
+    });
+  };
+  Object.keys(versions).forEach(function (family) {
+    versions[family].sort(function (a, b) {
+      var x = versionNumber(a), y = versionNumber(b);
+      for (var i = 0; i < Math.max(x.length, y.length); i++) {
+        if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
+      }
+      return 0;
+    });
+    var newest = versions[family][0];
+    if (newest && capabilitiesByModel[newest]) {
+      capabilitiesByModel[family] = capabilitiesByModel[newest];
+      effortsByModel[family] = effortsByModel[newest];
+    }
+  });
+  var preferredOrder = ['fable', 'opus', 'sonnet', 'haiku', 'mythos'];
+  var models = preferredOrder.filter(function (family) { return versions[family] && versions[family].length; });
+  Object.keys(versions).forEach(function (family) {
+    if (models.indexOf(family) === -1) models.push(family);
+  });
+  var efforts = [];
+  Object.keys(effortsByModel).forEach(function (key) {
+    effortsByModel[key].forEach(function (level) { if (efforts.indexOf(level) === -1) efforts.push(level); });
+  });
+  efforts = MODEL_DISCOVERY_EFFORTS.filter(function (level) { return efforts.indexOf(level) !== -1; });
+  return {
+    models: models,
+    efforts: efforts,
+    effortsByModel: effortsByModel,
+    capabilitiesByModel: capabilitiesByModel,
+    versions: versions,
+    capabilitySource: 'anthropic-v1-models',
+    entitlement: 'account-server',
+    live: true,
+  };
+}
+
+async function fetchModelCatalog(env) {
+  var credential = await readModelDiscoveryCredential(env);
+  if (!credential) return { catalog: null, reason: 'no-credential' };
+  var base = String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
+  var url = base + '/v1/models?limit=1000';
+  var headers = {
+    'User-Agent': 'claude-code/2.1.236',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'oauth-2025-04-20',
+  };
+  if (credential.kind === 'api-key') headers['x-api-key'] = credential.token;
+  else headers.Authorization = 'Bearer ' + credential.token;
+  try {
+    var response = await fetch(url, { headers: headers, signal: AbortSignal.timeout(12000) });
+    if (!response.ok) {
+      console.warn('Gaffer: live model discovery returned HTTP ' + response.status);
+      return { catalog: null, reason: response.status === 401 || response.status === 403 ? 'unauthorized' : 'network' };
+    }
+    var catalog = modelCatalogOptions(await response.json());
+    return { catalog: catalog, reason: catalog ? 'ready' : 'invalid-response' };
+  } catch (e) {
+    console.warn('Gaffer: live model discovery failed: ' + (e && e.message ? e.message : e));
+    return { catalog: null, reason: 'network' };
+  }
+}
+
 export function modelCapability(model, versions) {
   var raw = String(model || '').replace(/\[1m\]$/, '');
   var id = raw;
@@ -323,110 +481,27 @@ export class ChatHandler {
     this.compacting = false;
     this.claudeBin = null;
     this.envForSpawn = null;
+    this.liveModelCapabilities = null;
   }
 
-  // Discover what the installed CLI offers — no hardcoded lists in the
-  // panel. Parses `claude --help`: the --effort enum is explicit
-  // ("(low, medium, high, xhigh, max)"); the --model description names the
-  // current aliases as quoted examples. 'haiku' works but isn't listed in
-  // the examples, so a floor of known-good aliases is unioned in. This runs
-  // afresh for every Settings open so CLI and account-state changes appear
-  // without a daemon restart.
+  // Discover the account's currently callable models from Anthropic's live
+  // catalog. This runs afresh for every authorized Settings open; no cached
+  // CLI/session model list is treated as entitlement proof.
   async listModelOptions() {
-    var help = await new Promise(async function (resolve) {
-      try {
-        var bin = await findClaudeBinary();
-        execFile(bin, ['--help'], { env: augmentedEnv(), timeout: 15000, windowsHide: true }, function (err, stdout) {
-          resolve(String(stdout || ''));
-        });
-      } catch (e) { resolve(''); }
-    });
-    var models = [];
-    var modelBlock = help.match(/--model <model>[\s\S]*?(?=\n\s+-{1,2}[a-z])/i);
-    if (modelBlock) {
-      var m, re = /'([a-z][a-z0-9]*)'/g; // bare aliases only, not 'claude-*' ids
-      while ((m = re.exec(modelBlock[0]))) {
-        if (models.indexOf(m[1]) === -1) models.push(m[1]);
-      }
+    var result = await fetchModelCatalog(augmentedEnv());
+    if (result && result.catalog) {
+      this.liveModelCapabilities = result.catalog.capabilitiesByModel;
+      return result.catalog;
     }
-    for (var base of ['opus', 'sonnet', 'haiku']) {
-      if (models.indexOf(base) === -1) models.push(base);
-    }
-    var efforts = [];
-    var effortBlock = help.match(/--effort <level>[\s\S]*?\(([a-z, ]+)\)/i);
-    if (effortBlock) efforts = effortBlock[1].split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (!efforts.length) efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
-    // Pinnable versions: full model ids the CLI accepts (verified:
-    // `--model claude-opus-4-6` works; version aliases don't exist).
-    // Enumerate the CLI help and its current state file on every call. The
-    // state file contributes names only; it is not treated as entitlement
-    // proof (it can contain historical or unavailable models).
-    var versions = {};
-    var seen = {};
-    var addVersion = function (id) {
-      if (!/^claude-[a-z]+(?:-\d+)+$/.test(id) || seen[id]) return;
-      seen[id] = true;
-      var familyMatch = /^claude-([a-z]+)-/.exec(id);
-      if (!familyMatch) return;
-      var family = familyMatch[1];
-      (versions[family] = versions[family] || []).push(id);
-    };
-    var helpId, helpIds = /claude-[a-z]+(?:-\d+)+/g;
-    while ((helpId = helpIds.exec(help))) addVersion(helpId[0]);
-    try {
-      var stateRaw = readFileSync(join(homedir(), '.claude.json'), 'utf8');
-      var vm, vre = /claude-([a-z]+)-[0-9][0-9a-z-]*/g;
-      while ((vm = vre.exec(stateRaw))) {
-        var id = vm[0].replace(/-$/, '');
-        // versions only — numeric segments (opt. date), not entitlement
-        // ids like claude-fable-5-promotional-access
-        addVersion(id);
-      }
-      var vnum = function (id) {
-        return id.replace(/^claude-[a-z]+-/, '').split('-')
-          .map(function (n) { return parseInt(n, 10) || 0; });
-      };
-      for (var fam in versions) {
-        versions[fam].sort(function (a, b) {
-          var x = vnum(a), y = vnum(b);
-          for (var i = 0; i < Math.max(x.length, y.length); i++) {
-            if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
-          }
-          return 0;
-        });
-        // A freshly discovered pinned version must have a reachable family
-        // selector even if this CLI build omitted that alias from --help.
-        if (models.indexOf(fam) === -1) models.push(fam);
-      }
-    } catch (e) { /* no state file — versions stay empty */ }
-    // Per-model efforts and 1M context are derived from Claude Code's public
-    // model matrix. Empty `efforts` is meaningful (Haiku 4.5 has no effort),
-    // so the panel must distinguish an explicit empty entry from a missing
-    // entry when applying this response.
-    var effortsByModel = {};
-    var capabilitiesByModel = {};
-    for (var mi = 0; mi < models.length; mi++) {
-      var modelName = models[mi];
-      var cap = modelCapability(modelName, versions);
-      effortsByModel[modelName] = cap.efforts;
-      capabilitiesByModel[modelName] = cap;
-    }
-    for (var vf in versions) {
-      for (var vi = 0; vi < versions[vf].length; vi++) {
-        var versionId = versions[vf][vi];
-        var versionCap = modelCapability(versionId, versions);
-        effortsByModel[versionId] = versionCap.efforts;
-        capabilitiesByModel[versionId] = versionCap;
-      }
-    }
+    // No live catalog means no entitlement proof. Fail closed: do not surface
+    // CLI aliases or historical versions that the account may not be allowed
+    // to call. Chat keeps its safe Opus 4.8 default, while Settings presents
+    // an explicit retry state.
+    this.liveModelCapabilities = null;
     return {
-      models: models,
-      efforts: efforts,
-      effortsByModel: effortsByModel,
-      capabilitiesByModel: capabilitiesByModel,
-      versions: versions,
-      capabilitySource: MODEL_CAPABILITY_SOURCE,
-      entitlement: 'plan-dependent',
+      models: [], efforts: [], effortsByModel: {}, capabilitiesByModel: {},
+      versions: {}, capabilitySource: 'unavailable', entitlement: 'unknown',
+      live: false, modelAccess: result && result.reason ? result.reason : 'unavailable',
     };
   }
 
@@ -456,8 +531,10 @@ export class ChatHandler {
       systemPrompt += '\n\n## Connected AE\n\nYou are connected to After Effects ' + msg.aeVersion + '. When calling Gaffer tools that accept an aeVersion parameter, pass "' + msg.aeVersion + '". This routes the call to the correct AE instance.\n';
     }
 
-    var model = msg.model || 'opus';
-    var effort = msg.effort;
+    // Keep the trust-first default consistent for older panels and headless
+    // callers that omit advanced settings: Opus 4.8 at Medium effort.
+    var model = msg.model || 'claude-opus-4-8';
+    var effort = msg.effort || 'medium';
     // Optional, off by default: a two-stage classifier lightens the turn.
     // Stage 1 is a free local score; the ambiguous middle escalates to one
     // cheap haiku call. trivial → haiku/low + drop 1M; moderate → sonnet/medium
@@ -490,7 +567,9 @@ export class ChatHandler {
     // websocket messages; the UI also hides unsupported choices. Account/plan
     // entitlement remains Claude's decision and may still reject a valid
     // capability at request time.
-    var capability = modelCapability(model, null);
+    var capabilityKey = String(model || '').replace(/\[1m\]$/, '');
+    var capability = (this.liveModelCapabilities && this.liveModelCapabilities[capabilityKey])
+      || modelCapability(model, null);
     if (msg.variant === '1m' && !autoDownshifted && !capability.oneM) {
       if (socket.readyState === 1) socket.send(JSON.stringify({
         type: 'chat_error',

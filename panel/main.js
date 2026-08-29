@@ -114,9 +114,18 @@
   var chatBusy = false;
   var authLoggedIn = null; // null = unknown/indeterminate, true/false once daemon reports
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
+  // Trust-first default: use the less expensive Opus 4.8 tier until Settings
+  // has refreshed the account's current model availability. The full id keeps
+  // headless calls deterministic while that refresh is in flight.
   var currentModel = 'opus';
-  var currentVariant = 'standard'; // 'standard' | '1m' (context-window variant)
-  var currentEffort = 'high'; // low | medium | high | xhigh | max
+  var currentVariant = 'id:claude-opus-4-8'; // 'standard' | '1m' | pinned full id
+  var currentEffort = 'medium'; // low | medium | high | xhigh | max
+  // macOS alone has a system Keychain prompt. Keep a small local marker that
+  // the explanatory first-visit state has been shown; it is not consent and
+  // never grants, stores, or bypasses any OS credential permission.
+  var modelDiscoveryIntroduced = false;
+  var modelDiscoveryState = 'initial'; // initial | keychain-pending | loading | ready | retry
+  var modelDiscoveryReason = null; // diagnostic only; retry copy stays generic
   var autoCheckUpdates = true;
   var autoModel = false; // off by default; persisted in chat-history.json
   var dismissedUpdateCommit = null;
@@ -243,7 +252,7 @@
     var forgetBtn = document.getElementById('setApiForgetBtn');
     if (!keyEl || !metaEl || !connectBtn || !forgetBtn) return;
     if (apiState.status === 'nokey') {
-      keyEl.textContent = 'Bring you API key';
+      keyEl.textContent = 'Bring your API key';
       metaEl.textContent = 'From the Anthropic console';
       metaEl.classList.add('dim'); // Multiline subtitle role, #777 — see .item-sub.dim
       // Icon-only, Purpose=Default (grey) button — Figma 516:42191, Icon=Ethernet (516:44855).
@@ -635,6 +644,7 @@
       model: currentModel,
       variant: currentVariant,
       effort: currentEffort,
+      modelDiscoveryIntroduced: modelDiscoveryIntroduced,
       autoCheckUpdates: autoCheckUpdates,
       autoModel: autoModel,
       soundEnabled: soundEnabled,
@@ -661,7 +671,17 @@
     cs.evalScript(jsx);
   }
 
-  function restoreChat() {
+  function restoreChat(onRestored) {
+    // Node-backed CEP restores synchronously, but the legacy ExtendScript
+    // route is asynchronous. Both must report completion so we can enable
+    // text-scale animation only after the saved scale and transcript have
+    // reached their first stable layout.
+    var restored = false;
+    function finishRestore() {
+      if (restored) return;
+      restored = true;
+      if (typeof onRestored === 'function') onRestored();
+    }
     function applyData(data) {
         // Restore settings (text size, sound, model, ...) even with no chat
         // history — they must not depend on messages existing.
@@ -676,6 +696,15 @@
           // was until the next 'models' message happens to arrive.
           applyEffortsForModel();
         }
+        // Migrate the former "consent" marker: it only means that the macOS
+        // first-visit explanation was already seen. Gaffer never uses it as
+        // authorization to access a credential.
+        if (typeof data.modelDiscoveryIntroduced === 'boolean') {
+          modelDiscoveryIntroduced = data.modelDiscoveryIntroduced;
+        } else if (typeof data.modelDiscoveryConsent === 'boolean') {
+          modelDiscoveryIntroduced = data.modelDiscoveryConsent;
+        }
+        modelDiscoveryState = modelDiscoveryIntroduced ? 'loading' : 'initial';
         if (data.variant) {
           // migrate the short-lived 'latest' naming
           currentVariant = data.variant === 'latest' ? 'standard' : data.variant;
@@ -751,6 +780,7 @@
           var raw = fs.readFileSync(chatFilePath, 'utf8');
           if (raw) applyData(JSON.parse(raw));
         }
+        finishRestore();
         return;
       } catch (e) { /* fall through to ExtendScript */ }
     }
@@ -762,10 +792,14 @@
       + "return d;"
       + "})()";
     cs.evalScript(jsx, function (result) {
-      if (!result || result === 'undefined' || result === 'EvalScript_ErrMessage') return;
+      if (!result || result === 'undefined' || result === 'EvalScript_ErrMessage') {
+        finishRestore();
+        return;
+      }
       try {
         applyData(JSON.parse(result));
       } catch (e) { /* corrupt data, ignore */ }
+      finishRestore();
     });
   }
 
@@ -837,7 +871,9 @@
         return;
       }
       if (msg.type === 'models') {
-        // CLI-discovered model/effort options (never hardcoded panel-side)
+        // Fresh daemon response for a Settings-open request. Options only
+        // become visible after a successful live response; no historical
+        // model list is kept as an entitlement fallback.
         applyModelOptions(msg);
         return;
       }
@@ -931,7 +967,9 @@
       wasConnected = true;
       reconnectDelay = 1000;
       requestMcpList();
-      ws.send(JSON.stringify({ type: 'auth_status' }));
+      // Do not probe Claude auth on startup: `claude auth status` can touch the
+      // macOS Keychain. Model access is requested only from the explicit
+      // Settings Allow action (or the sign-in flow).
     };
 
     ws.onmessage = handleMessage;
@@ -2457,9 +2495,9 @@
   });
 
   // ── Custom selects (Figma atom): model, context variant, effort ──
-  // Model + effort options are NOT hardcoded — opening Settings asks the
-  // daemon to discover them afresh from the installed CLI (`claude --help`)
-  // and current CLI state. These are only the pre-response fallbacks.
+  // Model + effort options are NOT hardcoded — Settings asks the daemon for a
+  // fresh Anthropic catalog each time it opens. Until then the selector stays
+  // locked around the safe default.
   function labelize(v) {
     if (typeof v !== 'string') return '';
     if (v === 'xhigh') return 'Extra High';
@@ -2622,11 +2660,22 @@
     currentEffort = discoveredEfforts.length ? nearestEffort(currentEffort, discoveredEfforts) : null;
   }
   function applyModelOptions(data) {
+    modelDiscoveryReason = data.modelAccess || null;
+    if (data.live && Array.isArray(data.models) && data.models.length) {
+      modelDiscoveryState = 'ready';
+    } else {
+      modelDiscoveryState = 'retry';
+    }
     if (data.capabilitiesByModel && typeof data.capabilitiesByModel === 'object') {
       modelCapabilities = data.capabilitiesByModel;
     }
     if (Array.isArray(data.models) && data.models.length) {
       modelSelect.setOptions(data.models.map(function (v) { return { value: v, label: labelize(v) }; }));
+      // A saved choice is not proof that it remains available. The fresh
+      // catalog wins, preferring our safe default when the account has it.
+      if (data.models.indexOf(currentModel) === -1) {
+        currentModel = data.models.indexOf('opus') !== -1 ? 'opus' : data.models[0];
+      }
     }
     if (data.effortsByModel && typeof data.effortsByModel === 'object') {
       effortsByModel = data.effortsByModel;
@@ -2634,14 +2683,17 @@
     if (Array.isArray(data.efforts) && data.efforts.length) {
       globalEfforts = data.efforts.slice();
     }
+    if (data.versions && typeof data.versions === 'object') {
+      modelVersions = data.versions;
+    }
+    // Variant validity and effort availability depend on the just-refreshed
+    // catalog. Resolve them together, after both maps have been replaced.
+    rebuildVariantSelect();
     if (effortsByModel || (Array.isArray(data.efforts) && data.efforts.length)) {
       applyEffortsForModel(); // dot count follows the current model's set
       renderEffort();
     }
-    if (data.versions && typeof data.versions === 'object') {
-      modelVersions = data.versions;
-      rebuildVariantSelect();
-    }
+    renderModelDiscovery();
   }
 
   // ── Effort dot-slider (Settings modal, 484:30131) ──
@@ -2786,6 +2838,16 @@
     var slider = document.getElementById('setEffortDots');
     if (!slider || slider._effortWired) return;
     slider._effortWired = true;
+    // The settings grid is fluid. On open, the track can be measured once at
+    // its hidden/intermediate width and then expand to its final width; keep
+    // the thumb snapped to the live dot centers whenever that happens.
+    if (typeof ResizeObserver === 'function' && !slider._effortResizeObserved) {
+      slider._effortResizeObserved = true;
+      slider._effortResizeObserver = new ResizeObserver(function () {
+        if (!effortDragging && !slider.hidden && slider.clientWidth > 0) relayoutEffort();
+      });
+      slider._effortResizeObserver.observe(slider);
+    }
     function trackX(clientX) { return clientX - slider.getBoundingClientRect().left; }
     function startDrag(clientX) {
       effortDragging = true;
@@ -2849,6 +2911,15 @@
   if (textResetEl) textResetEl.appendChild(icon('textSize'));
   if (textIncEl) textIncEl.appendChild(icon('plus'));
   function applyTextScale() {
+    // If the reader was following the newest message, keep that edge pinned
+    // through the text-size reflow. Without this, scrollTop represents the
+    // pre-scale document height while the 0.18s transition grows each line,
+    // and the current chat slides below the fold. A reader who has scrolled
+    // back is deliberately left exactly where they are.
+    var distanceFromBottom = chatMessagesEl
+      ? chatMessagesEl.scrollHeight - chatMessagesEl.scrollTop - chatMessagesEl.clientHeight
+      : Infinity;
+    var pinToBottom = distanceFromBottom <= 2;
     // clamp + snap to the step grid so restored/legacy values stay clean
     textScale = Math.max(TEXT_MIN, Math.min(TEXT_MAX, Math.round(textScale / TEXT_STEP) * TEXT_STEP));
     // set on :root so BOTH the chat log and the composer (which sits
@@ -2861,6 +2932,13 @@
     if (textIncEl) textIncEl.disabled = textScale >= TEXT_MAX - 1e-6;
     resizeChatInput(); // re-fit the composer to the new line height
     refitReplyQuotes(); // re-fit the reply tray to the reflowed quote text
+    if (pinToBottom && document.documentElement.classList.contains('text-scale-ready')) {
+      var pinStartedAt = Date.now();
+      (function keepPinnedDuringScale() {
+        scrollToBottom();
+        if (Date.now() - pinStartedAt < 220) requestAnimationFrame(keepPinnedDuringScale);
+      })();
+    }
   }
   // Auto-grow the composer against a cap, both scaled by --chat-text so the
   // 8-line ceiling stays 8 lines at any text size.
@@ -3029,6 +3107,117 @@
   }
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
+  function isMacOS() {
+    return /Mac/i.test(String((typeof navigator !== 'undefined' && navigator.platform) || ''));
+  }
+  // Fade helpers. Two variants because two structural cases:
+  //  - Within-gate elements (copy, spinner, button): use `.hidden` attribute
+  //    and animate opacity via JS. `[hidden]{display:none}` still removes them
+  //    from flow, so their appearance/disappearance can change the gate's inner
+  //    layout (that's fine — the gate is inside the slot whose height is fixed
+  //    by the larger child).
+  //  - Slot children (gate, controls): use `.is-off` class instead of `.hidden`
+  //    so they stay in flow always. Both children occupy the same grid cell
+  //    (see .model-slot in CSS), so slot height = max(both) = constant, no
+  //    card-height jump when the state changes. CSS handles both opacity and
+  //    the delayed visibility transition — pure declarative.
+  function fadeToggle(el, show) {
+    if (!el) return;
+    if (show) {
+      if (!el.hidden && el.style.opacity !== '0') return;
+      el.style.opacity = '0';
+      el.hidden = false;
+      requestAnimationFrame(function () { requestAnimationFrame(function () { el.style.opacity = ''; }); });
+    } else {
+      if (el.hidden) return;
+      if (el._fadeTimer) clearTimeout(el._fadeTimer);
+      el.style.opacity = '0';
+      el._fadeTimer = setTimeout(function () { el.hidden = true; el.style.opacity = ''; el._fadeTimer = null; }, 200);
+    }
+  }
+  function slotToggle(el, show) { if (el) el.classList.toggle('is-off', !show); }
+  var modelDiscoveryLastState = null;
+  function renderModelDiscovery() {
+    var gate = document.getElementById('modelDiscoveryGate');
+    var copy = document.getElementById('modelDiscoveryCopy');
+    var controls = document.getElementById('modelSelectorControls');
+    var title = document.getElementById('modelDiscoveryTitle');
+    var message = document.getElementById('modelDiscoveryMessage');
+    var allow = document.getElementById('modelDiscoveryAllow');
+    var spinner = document.getElementById('modelDiscoverySpinner');
+    if (!gate || !copy || !controls || !title || !message || !allow || !spinner) return;
+    // Snap (no fade) on:
+    //  - first render (HTML defaults would otherwise cross-fade with the target),
+    //  - leaving `initial` — the copy is a call-to-action, once the user clicks
+    //    Allow they should see the next state immediately, not the previous
+    //    text lingering at 50% opacity.
+    var snap = modelDiscoveryLastState === null || modelDiscoveryLastState === 'initial';
+    modelDiscoveryLastState = modelDiscoveryState;
+    // Snap-aware toggle: instant when leaving `initial` or on first render;
+    // fade otherwise. Applied to both slot children AND within-gate elements.
+    function setVis(el, show, isSlot) {
+      if (!el) return;
+      if (snap) {
+        if (el._fadeTimer) { clearTimeout(el._fadeTimer); el._fadeTimer = null; }
+        if (isSlot) { el.classList.toggle('is-off', !show); }
+        else { el.hidden = !show; el.style.opacity = ''; }
+      } else {
+        if (isSlot) slotToggle(el, show);
+        else fadeToggle(el, show);
+      }
+    }
+    var ready = modelDiscoveryState === 'ready';
+    setVis(controls, ready, true);
+    setVis(gate, !ready, true);
+    if (ready) return;
+    // Reset per-state visibility defaults; each branch overrides as needed.
+    allow.disabled = false;
+    setVis(copy, true, false);
+    setVis(spinner, false, false);
+    setVis(allow, true, false);
+    if (modelDiscoveryState === 'keychain-pending') {
+      title.textContent = 'Available models';
+      message.textContent = 'Approve the macOS prompt to see the models you can use.';
+      allow.textContent = 'Waiting…';
+      allow.disabled = true;
+      return;
+    }
+    if (modelDiscoveryState === 'loading') {
+      // Design has no title/body for the checking state — just the typing
+      // indicator (Figma 530:19756 stub only holds a TypingIndicator instance).
+      setVis(copy, false, false);
+      setVis(allow, false, false);
+      setVis(spinner, true, false);
+      return;
+    }
+    if (modelDiscoveryState === 'retry') {
+      title.textContent = 'Couldn’t check models';
+      message.textContent = 'Try again to see which Claude Code models you can use.';
+      allow.textContent = 'Try again';
+      allow.hidden = false;
+      return;
+    }
+    // macOS first visit only. This explains the imminent system dialog; it is
+    // not an in-app credential permission or a persistent access grant.
+    title.textContent = 'Available models';
+    message.textContent = 'Let Gaffer ask Claude Code which models you can use.';
+    allow.textContent = 'Allow';
+    allow.hidden = false;
+  }
+  function requestModelCatalog(options) {
+    if (!ws || ws.readyState !== 1) {
+      modelDiscoveryState = 'retry';
+      renderModelDiscovery();
+      return;
+    }
+    // The macOS state exists only while the system Keychain dialog may be
+    // active. Every later refresh, and all Windows/Linux refreshes, use the
+    // normal loading state automatically.
+    modelDiscoveryState = options && options.keychainPrompt ? 'keychain-pending' : 'loading';
+    modelDiscoveryReason = null;
+    renderModelDiscovery();
+    ws.send(JSON.stringify({ type: 'list_models' }));
+  }
   function syncSettingsUpdateButton() {
     var button = document.getElementById('setUpdateBtn');
     if (!button) return;
@@ -3053,20 +3242,33 @@
     // Account / CLI from last auth status
     var em = document.getElementById('setCliEmail'), meta = document.getElementById('setCliMeta');
     var so = document.getElementById('setSignOutBtn');
+    var si = document.getElementById('setSignInBtn');
     if (lastAuth && lastAuth.loggedIn) {
       em.textContent = lastAuth.email || 'Signed in';
       meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
       so.hidden = false;
-    } else { em.textContent = 'Signed out'; meta.textContent = 'CLI'; so.hidden = true; }
+      if (si) si.hidden = true;
+    } else {
+      em.textContent = 'Signed out';
+      meta.textContent = 'CLI';
+      so.hidden = true;
+      // Signed-out row is otherwise bare; surface a Sign in CTA so users who
+      // reach Settings without the full-screen overlay can still get in.
+      if (si) si.hidden = false;
+    }
     // Account / API — re-render from apiState so the modal reflects the latest
     // status whenever it's opened (see renderApi() / apiState above).
     renderApi();
+    renderModelDiscovery();
   }
   function openSettings() {
+    var needsMacIntroduction = isMacOS() && !modelDiscoveryIntroduced;
+    modelDiscoveryState = needsMacIntroduction ? 'initial' : 'loading';
     syncSettings(); tkShow(settingsModalEl);
-    // Never reuse daemon-lifetime model data: every Settings visit re-reads
-    // the installed CLI and current account/model state.
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'list_models' }));
+    // Never reuse daemon-lifetime model data: Settings always asks for the
+    // account's current catalog. macOS gets one explanatory first visit before
+    // its own Keychain dialog; Windows and Linux check automatically.
+    if (!needsMacIntroduction) requestModelCatalog();
     // Thumb placement measures live dot centers — re-run once the modal is
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
@@ -3086,6 +3288,27 @@
   // (setSoundBtn is now a real dropdown wired via soundSelect/makeSelect above.)
   document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
   document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
+  document.getElementById('modelDiscoveryAllow').addEventListener('click', function () {
+    if (modelDiscoveryState === 'initial') {
+      modelDiscoveryIntroduced = true;
+      saveChat();
+      requestModelCatalog({ keychainPrompt: true });
+      return;
+    }
+    requestModelCatalog();
+  });
+  // Signed-out CTA on the Settings CLI card: closes Settings and reveals the
+  // full-screen sign-in overlay (renderAuth already shows it whenever
+  // authLoggedIn === false, so we just need to make sure Settings gets out of
+  // the way). Same wiring the overlay's "Sign in with Claude" button uses.
+  (function () {
+    var siBtn = document.getElementById('setSignInBtn');
+    if (!siBtn) return;
+    siBtn.addEventListener('click', function () {
+      closeSettings();
+      sendWs({ type: 'sign_in', mode: 'claudeai' });
+    });
+  })();
   document.getElementById('setSignOutBtn').addEventListener('click', function () {
     // Gaffer signs in through the Claude Code CLI, so signing out here logs the
     // whole machine out of Claude Code — confirm first (reuses the clear-chat
@@ -3104,7 +3327,14 @@
   soundSelect.update();
   wireEffortSlider();
   renderEffort();
-  restoreChat();
+  restoreChat(function () {
+    // Give restored DOM/style changes one frame to settle before future user
+    // scale changes may animate. This prevents the visible post-load drift
+    // from the default 1× scale to a saved larger scale.
+    requestAnimationFrame(function () {
+      document.documentElement.classList.add('text-scale-ready');
+    });
+  });
   loadVersion();
   if (autoCheckUpdates) {
     setTimeout(function () { checkForUpdate(true); }, 2000);
