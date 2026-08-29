@@ -2142,6 +2142,25 @@
 
   var versionData = { version: 'dev', commit: null };
   var isDevInstall = false; // panel dir lives inside a git checkout
+  var lastUpdateCheckAt = 0;
+  try { lastUpdateCheckAt = Number(localStorage.getItem('gafferLastUpdateCheckAt')) || 0; } catch (e) { /* ignore */ }
+
+  function renderLastUpdateCheck() {
+    var el = document.getElementById('setLastCheck');
+    if (!el) return;
+    if (!lastUpdateCheckAt) { el.textContent = 'Never'; return; }
+    var age = Math.max(0, Date.now() - lastUpdateCheckAt);
+    if (age < 60000) el.textContent = 'Just now';
+    else if (age < 3600000) el.textContent = Math.floor(age / 60000) + 'm ago';
+    else if (age < 86400000) el.textContent = Math.floor(age / 3600000) + 'h ago';
+    else el.textContent = new Date(lastUpdateCheckAt).toLocaleDateString();
+  }
+
+  function markUpdateChecked() {
+    lastUpdateCheckAt = Date.now();
+    try { localStorage.setItem('gafferLastUpdateCheckAt', String(lastUpdateCheckAt)); } catch (e) { /* ignore */ }
+    renderLastUpdateCheck();
+  }
 
   // A dev install symlinks the panel out of a git repo — tarball updates
   // would clobber uncommitted work (update.sh refuses too; this is the UX
@@ -2167,6 +2186,9 @@
       if (m && m[1]) {
         var base = versionTextEl.textContent.replace(/\s*\([0-9a-f]+\)/i, '');
         versionTextEl.textContent = base + ' (' + m[1] + ')';
+        // Keep update state and the visible dev label on the same live HEAD.
+        // The trailing + is a dirty-tree display marker, not part of the hash.
+        versionData.commit = m[1].replace(/\+$/, '');
       }
       versionTextEl.textContent = versionTextEl.textContent + ' · dev';
       versionTextEl.title = 'Dev install — build number is the live git HEAD'
@@ -2210,21 +2232,26 @@
 
   function checkForUpdate(silent) {
     if (isDevInstall) {
+      markUpdateChecked();
       if (!silent) showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       return;
     }
     // Fetch remote version.json directly — content match means same release.
     // Avoids commit-hash chicken-and-egg from amend hooks.
-    fetch('https://raw.githubusercontent.com/spendolas/gaffer-ae/main/panel/version.json?t=' + Date.now())
-      .then(function (r) { return r.json(); })
+    fetch('https://raw.githubusercontent.com/spendolas/gaffer-ae/main/panel/version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
       .then(function (remote) {
-        if (!remote || !remote.commit) return;
+        if (!remote || !remote.commit) throw new Error('Invalid version response');
+        markUpdateChecked();
         if (!versionData.commit) {
           if (!silent) showModal('Local version unknown. Reinstall to enable updates.');
           return;
         }
         if (remote.commit === versionData.commit) {
-          if (!silent) showModal('Gaffer is up to date (' + versionData.commit.substring(0, 7) + ')');
+          if (!silent) showModal('Gaffer is up to date (' + remote.commit.substring(0, 7) + ')');
           return;
         }
         if (remote.commit === dismissedUpdateCommit) return;
@@ -2232,6 +2259,7 @@
         updateBannerEl.classList.add('visible');
         updateBannerEl._latestCommit = remote.commit;
       }).catch(function (e) {
+        markUpdateChecked();
         if (!silent) showModal('Update check failed: ' + e.message);
       });
   }
@@ -2926,8 +2954,7 @@
   var settingsModalEl = document.getElementById('settingsModal');
   function syncSettings() {
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
-    var lce = document.getElementById('setLastCheck');
-    if (lce && !lce.textContent) lce.textContent = 'Not checked yet';
+    renderLastUpdateCheck();
     // Update CTA only when an update is actually available (banner visible).
     var ub = document.getElementById('setUpdateBtn');
     if (ub) ub.hidden = !(updateBannerEl && updateBannerEl.classList.contains('visible'));
