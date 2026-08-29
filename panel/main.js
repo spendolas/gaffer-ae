@@ -2965,6 +2965,22 @@
     updateChatEnabled(); // recompute .typed + disabled from current content
     resizeChatInput();
   });
+  // Focus-forwarding: the visible pill (.chat-input-row) is a wider affordance
+  // than the textarea it wraps — its 8px padding + the space around the send
+  // button all read as clickable. Forward those clicks into the textarea so
+  // the hit-area matches the affordance. Gated on `target === row` so any
+  // real child (textarea, send/stop button) keeps its own click; only bare
+  // padding hits reach the row as target. mousedown+preventDefault avoids the
+  // one-frame focus flicker to <body> before focus() lands.
+  var chatInputRowEl = document.querySelector('.chat-input-row');
+  if (chatInputRowEl) {
+    chatInputRowEl.addEventListener('mousedown', function (e) {
+      if (e.target !== chatInputRowEl) return; // let textarea/buttons handle their own
+      if (chatInputEl.disabled) return;         // offline/busy: nothing to focus into
+      e.preventDefault();
+      chatInputEl.focus();
+    });
+  }
 
   // NOTE: Cmd+C/V/X/A are intercepted by AE at the app level before reaching
   // the panel JS. registerKeyEventsInterest doesn't work in CEP 12 for these.
