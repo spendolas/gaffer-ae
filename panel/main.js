@@ -2258,6 +2258,7 @@
         updateTextEl.textContent = 'Update available — v' + remote.version;
         updateBannerEl.classList.add('visible');
         updateBannerEl._latestCommit = remote.commit;
+        syncSettingsUpdateButton();
       }).catch(function (e) {
         markUpdateChecked();
         if (!silent) showModal('Update check failed: ' + e.message);
@@ -2268,6 +2269,7 @@
     if (isDevInstall) {
       showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
       updateBannerEl.classList.remove('visible');
+      syncSettingsUpdateButton();
       return;
     }
     if (chatBusy) {
@@ -2291,6 +2293,7 @@
       var actionsEl = updateBannerEl.querySelector('.actions');
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
       window.__gafferUpdating = true; // pauses daemon auto-respawn
+      syncSettingsUpdateButton(); // prevent a second update launch from Settings
       var startCommit = versionData.commit;
       var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
       var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
@@ -2308,6 +2311,7 @@
             clearInterval(timer);
             window.__gafferUpdating = false;
             updateBannerEl.classList.remove('visible');
+            syncSettingsUpdateButton();
             if (actionsEl) actionsEl.style.display = '';
             showChatNotice('Update did not complete — the updater log has details: '
               + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
@@ -2388,6 +2392,7 @@
       saveChat();
     }
     updateBannerEl.classList.remove('visible');
+    syncSettingsUpdateButton();
   }
 
   // ── Input handlers ──
@@ -2952,12 +2957,18 @@
   }
   // Settings full-screen takeover open/close + state sync.
   var settingsModalEl = document.getElementById('settingsModal');
+  function syncSettingsUpdateButton() {
+    var button = document.getElementById('setUpdateBtn');
+    if (!button) return;
+    var available = updateBannerEl && updateBannerEl.classList.contains('visible') && !window.__gafferUpdating;
+    button.hidden = !available;
+  }
   function syncSettings() {
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
     renderLastUpdateCheck();
-    // Update CTA only when an update is actually available (banner visible).
-    var ub = document.getElementById('setUpdateBtn');
-    if (ub) ub.hidden = !(updateBannerEl && updateBannerEl.classList.contains('visible'));
+    // Update CTA mirrors live banner state, including checks that completed
+    // while Settings was already open.
+    syncSettingsUpdateButton();
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
