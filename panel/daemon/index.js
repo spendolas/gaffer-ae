@@ -39,10 +39,19 @@ bridge.onListModels = async (socket) => {
         versions: opts.versions,
         capabilitySource: opts.capabilitySource,
         entitlement: opts.entitlement,
+        live: !!opts.live,
+        modelAccess: opts.modelAccess || (opts.live ? 'ready' : 'unavailable'),
       }));
     }
   } catch (e) {
     console.error('Gaffer: model discovery failed:', e.message);
+    if (socket && socket.readyState === 1) {
+      socket.send(JSON.stringify({
+        type: 'models', models: [], efforts: [], effortsByModel: {},
+        capabilitiesByModel: {}, versions: {}, capabilitySource: 'unavailable',
+        entitlement: 'unknown', live: false, modelAccess: 'unavailable',
+      }));
+    }
   }
 };
 bridge.onListMcps = async (socket) => {

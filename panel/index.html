@@ -22,10 +22,12 @@
     /* Design tokens — generated from design/tokens.json (Figma "Gaffer"
        collection). Edit there, not here; see docs/figma-parity-audit.md §3. */
     :root {
-      /* Text-size scale animates in one place — the whole app's text eases to
-         the new size instead of jumping. Matches the panel's 0.18s takeovers.
-         Do NOT add per-element font-size transitions (reflow storm). */
-      transition: --chat-text 0.18s ease-out;
+      /* The saved text scale is restored before the panel's first stable
+         layout. Keep that restoration instant: transitioning 1× → the saved
+         scale after history has rendered reflows the chat under the reader.
+         The class is enabled after restore, so deliberate A-/A+ changes still
+         use the panel's normal 0.18s takeover. */
+      transition: none;
       --color-bg-panel: #232323;
       --color-bg-input: #121212;
       --color-bg-banner: #173658;
@@ -87,6 +89,7 @@
       --radius-2: 2px; --radius-4: 4px; --radius-6: 6px; --radius-8: 8px;
       --radius-12: 12px; --radius-16: 16px; --radius-full: 999px;
     }
+    :root.text-scale-ready { transition: --chat-text 0.18s ease-out; }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
     /* The hidden attribute must win over any explicit display (flex/inline-flex
@@ -1283,7 +1286,8 @@
     .settings-card { /* ModalContainer 447:4824 — bg/input, r16, pad4 gap4.
          Hugs its widest .settings-item's real content (usually the Models
          row's fixed 184px control column, or an account row's label) —
-         280 is now a floor (the Figma spec width), not a hardcoded width,
+         The existing 340px minimum is a roomier floor than the Figma spec,
+         not a fixed card width,
          so a genuinely wider row can grow the card instead of every row
          squeezing to fit a fixed 280. Every .settings-item then fills this
          resolved width (see .settings-item width:100% below). */
@@ -1292,7 +1296,9 @@
       align-items: center; /* counterAxis CENTER */
       gap: 4px;
       width: max-content;
-      min-width: 340px; /* roomier than the Figma 280 floor (447:4824) — deliberate: gives rows more air; still hugs wider content + capped by max-width:100% */
+      min-width: calc(340px * var(--chat-text, 1)); /* Keep the established
+        baseline roomy at 100%, then let the whole Settings card grow with the
+        text-size control; still hugs wider content + is capped by max-width. */
       max-width: 100%; /* never exceed settings-modal's padded box, at any panel width */
       max-height: 100%;
       overflow-y: auto;
@@ -1323,10 +1329,12 @@
         already global (line ~81) so padding is included */
     }
     .settings-item:hover { background: var(--color-bg-panel); }
-    /* Models section — its OWN 2-col grid (484:27797), NOT the row skeleton.
-       label col (grow) + control col (hug 184); shared across both grid rows so
-       the dropdowns align with the effort slider below. gap 8 = Figma itemSpacing. */
-    .settings-item.models-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+    /* Models section — Figma's four-column grid (484:34406/484:31247).
+       Four equal tracks, 8px gaps; the label occupies column 1 and each
+       control spans columns 2–4 (184px at the 272px Hug width). */
+    .settings-item.models-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 8px; row-gap: 8px; align-items: center; }
+    .settings-item.models-grid > .select-group,
+    .settings-item.models-grid > .effort-slider { grid-column: span 3; }
     .settings-item .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .settings-item .row2 { display: flex; align-items: center; gap: 8px; }
     .settings-item .row2 .row2-grow { flex: 1 1 auto; min-width: 0; } /* Row 2 version/last-check slot grows, pushing Update button right (475:10197) */
@@ -1350,7 +1358,81 @@
     .beta-badge { display: inline-block; margin-left: 8px; font-size: calc(9px * var(--chat-text, 1)); line-height: calc(13.5px * var(--chat-text, 1)); letter-spacing: -0.18px; font-family: "Source Code Pro", "SF Mono", "Consolas", monospace; color: var(--color-accent-amber); background: var(--color-code-inline-bg); border-radius: var(--radius-8); padding: 1px 6px; } /* beta = amber code badge, pill bg 475:10186 */
     #setSoundBtn { width: calc(96px * var(--chat-text, 1)); } /* Sounds Dropdown starts at the Figma 96px width and grows with A-/A+ so scaled labels never clip. */
     .sound-selector { display: inline-flex; align-items: center; gap: 4px; }
-    .select-group { display: inline-flex; gap: 4px; flex: 0 0 184px; width: 184px; } /* Models drops 484:35545 — fixed 184, splits 90/90 via child flex:1 */
+    .select-group { display: inline-flex; gap: 4px; width: 100%; min-width: 0; } /* Models drops 484:35545 — spans columns 2–4; width comes from the four-column grid */
+    .model-discovery-gate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+    .model-discovery-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .model-discovery-copy .item-sub {
+      max-width: 240px;
+    }
+    /* Loading = typing indicator only (design 530:19756 / 530:19811 etc). Span
+       both columns + center; the copy + button are `hidden` in this state. */
+    .model-discovery-gate .model-discovery-spinner { grid-column: 1 / -1; justify-self: center; padding: 4px 0; }
+    .model-discovery-gate .model-discovery-spinner[hidden] { display: none; }
+    /* (obsolete: gate + controls now toggle .is-off inside .model-slot; both
+       stay laid out so the slot's height is constant. Removed to prevent the
+       global [hidden]{display:none !important} from ever collapsing them.) */
+    /* Smooth state transitions — fadeToggle helper drives opacity; [hidden]
+       still hides after the fade (see renderModelDiscovery). */
+    .model-discovery-gate, #modelSelectorControls,
+    .model-discovery-copy, .model-discovery-spinner, #modelDiscoveryAllow {
+      transition: opacity 0.18s ease-out;
+    }
+    /* Shared cell — gate + controls occupy the same grid slot so they overlap
+       during the cross-fade instead of stacking vertically. Both children stay
+       in flow always (via .is-off instead of [hidden]{display:none}), so the
+       slot's height is constant — max of both children's natural size, matching
+       the design intent that the loader/gate is sized the same as Model ready
+       to avoid a card-height jump. */
+    .model-slot { display: grid; grid-template-columns: 1fr; }
+    .model-slot > .settings-item { grid-column: 1; grid-row: 1; transition: opacity 0.18s ease-out; }
+    /* .is-off = "not the active state": stays laid out (so the slot height
+       doesn't collapse) but fades away and stops taking hover/click. */
+    .model-slot > .settings-item.is-off { visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out, visibility 0s 0.18s; }
+
+    /* Multiline type: apply the wrap policy to the rendered text leaves, not
+       to `body`. Several components set `white-space`, which otherwise resets
+       the inherited text-wrap mode. `balance` is the useful choice here: it
+       removes orphan last lines without altering authored line breaks. */
+    :where(
+      .chat-msg .msg-text,
+      .chat-notice,
+      .reply-quote-text,
+      .alert-title,
+      .alert-body,
+      .signin-title,
+      .signin-sub,
+      .signin-caption,
+      .signin-progress,
+      .signin-error,
+      .mcp-tooltip .tip-detail,
+      .settings-title,
+      .settings-item .item-title,
+      .settings-item .item-sub
+    ) {
+      text-wrap: balance;
+    }
+    /* Do not rebalance source code, inline code chips, or editable text. */
+    code, textarea, input { text-wrap: wrap; }
+    pre, pre code { text-wrap: nowrap; }
+
+    /* AE's CEP Chromium 99 predates `text-wrap: balance`. The fixed UI cards
+       already constrain their copy; only a stretched assistant transcript can
+       become a full-panel line. Keep its prose within a readable measure in
+       that runtime, leaving tables and <pre> blocks at their natural width. */
+    @supports not (text-wrap: balance) {
+      .chat-msg.assistant .msg-text > h1,
+      .chat-msg.assistant .msg-text > h2,
+      .chat-msg.assistant .msg-text > h3,
+      .chat-msg.assistant .msg-text > h4,
+      .chat-msg.assistant .msg-text > h5,
+      .chat-msg.assistant .msg-text > h6,
+      .chat-msg.assistant .msg-text > p,
+      .chat-msg.assistant .msg-text > ul,
+      .chat-msg.assistant .msg-text > ol,
+      .chat-msg.assistant .msg-text > blockquote {
+        max-width: 64ch;
+      }
+    }
     /* Shared Stubs/Menu item (475:10304) skeleton: Left Block grows to fill and
        left-aligns its label + control(s); Controls slot hugs on the right. */
     /* Shared canonical row pair (475:10304), reused by every settings row:
@@ -1369,7 +1451,7 @@
        Handle(18w)>fill(224w, clipped)>knob(16x24 r6). Dots left of thumb blue,
        right grey. Ghost-blue fill overflows left, clipped by track. */
     .effort-slider {
-      position: relative; flex: 0 0 184px; width: 184px; /* 484:30131 fixed 184, matches dropdown row */
+      position: relative; width: 100%; min-width: 0; /* 484:30131 spans columns 2–4; width comes from the four-column grid */
       display: flex; align-items: center; justify-content: space-between; gap: 2px;
       height: 28px; padding: 0;
       background: var(--color-bg-table-row-hover);
@@ -1552,6 +1634,7 @@
               </div>
             </span>
             <span class="row1-controls">
+              <button id="setSignInBtn" class="text-btn informed" hidden>Sign in</button>
               <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
             </span>
           </div>
@@ -1574,7 +1657,7 @@
             <span class="row1-left">
               <span class="account-avatar" id="setApiAvatar" data-fig="I480:20902;478:12027;475:10182"></span>
               <div class="item-col">
-                <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Bring you API key</span>
+                <span class="item-title" id="setApiKey" data-fig="I480:20902;478:12027;475:10185">Bring your API key</span>
                 <span class="item-sub meta dim" id="setApiMeta" data-fig="I480:20902;478:12027;475:10557">From the Anthropic console</span>
               </div>
             </span>
@@ -1584,10 +1667,24 @@
             </span>
           </div>
         </div>
-        <!-- Models + Effort — its OWN 2-col grid (484:27797, EXCEPTION to the
-             canonical row skeleton): label col + control col shared across two
-             rows so the dropdowns align with the effort slider below. -->
-        <div class="settings-item models-grid" data-fig="I484:27883;484:27834">
+        <!-- Shared slot — gate + controls overlap in the same grid cell so they
+             cross-fade in place instead of stacking vertically during a state
+             transition (see .model-slot in the style block above). -->
+        <div class="model-slot">
+        <!-- macOS gets this first-visit explanation before its own Keychain
+             prompt. Windows/Linux start discovery automatically. -->
+        <div class="settings-item model-discovery-gate is-off" id="modelDiscoveryGate" data-fig="I484:27883;484:27834">
+          <div class="model-discovery-copy" id="modelDiscoveryCopy">
+            <span class="item-title muted" id="modelDiscoveryTitle">Available models</span>
+            <span class="item-sub dim" id="modelDiscoveryMessage">Let Gaffer ask Claude Code which models you can use.</span>
+          </div>
+          <!-- Loading state: TypingIndicator 215:2620 (design has no copy) -->
+          <span class="typing-indicator model-discovery-spinner" id="modelDiscoverySpinner" hidden aria-hidden="true"><i></i><i></i><i></i></span>
+          <button id="modelDiscoveryAllow" class="text-btn informed">Allow</button>
+        </div>
+        <!-- Models + Effort — Figma's four-column grid (484:34406/484:31247):
+             label in column 1; model/version and effort slider span columns 2–4. -->
+        <div class="settings-item models-grid is-off" id="modelSelectorControls" data-fig="I484:27883;484:27834">
           <span class="item-title muted" data-fig="I484:27883;484:35778">Models</span>
           <span class="select-group">
             <span class="select-wrap">
@@ -1604,6 +1701,7 @@
             <span class="item-title muted" id="setEffortLabel" data-fig="I484:27883;484:31618">High</span>
           </span>
           <span class="effort-slider" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
+        </div>
         </div>
       </div>
     </div>
