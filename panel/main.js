@@ -2962,7 +2962,15 @@
   // (setSoundBtn is now a real dropdown wired via soundSelect/makeSelect above.)
   document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
   document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
-  document.getElementById('setSignOutBtn').addEventListener('click', function () { sendWs({ type: 'sign_out' }); closeSettings(); });
+  document.getElementById('setSignOutBtn').addEventListener('click', function () {
+    // Gaffer signs in through the Claude Code CLI, so signing out here logs the
+    // whole machine out of Claude Code — confirm first (reuses the clear-chat
+    // confirm modal). Humane, plain-language copy.
+    showModal("This signs the whole machine out of Claude Code, not just Gaffer. Anything here that uses it will need to sign in again. You can sign back in anytime from the CLI.", {
+      title: 'Sign out of Claude Code?', confirmLabel: 'Sign out', cancelLabel: 'Cancel',
+      danger: true, onConfirm: function () { sendWs({ type: 'sign_out' }); closeSettings(); }
+    });
+  });
   // Model / variant / effort / sound controls are wired natively (makeSelect +
   // renderEffort) — no proxying to inline.
   stopBtnEl.style.display = 'none';
