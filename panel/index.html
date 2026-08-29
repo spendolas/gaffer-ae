@@ -775,12 +775,18 @@
       /* composer tracks the chat text-size factor (--chat-text) so what
          you type matches what you read; JS auto-grow scales in lockstep */
       font-size: calc(14px * var(--chat-text, 1));
-      line-height: calc(18px * var(--chat-text, 1));
+      /* Line-height tuned tight to font-size (1.14) so the native caret,
+         which spans the full line-box, hugs the glyphs instead of towering
+         over them. Source Sans 3 has a tall hhea ascent that pushes the cap
+         low in a 1.28x box, leaving obvious whitespace above the "A" and a
+         disproportionately tall blinker. 16px covers cap + descender for
+         14px text with room to spare. */
+      line-height: calc(16px * var(--chat-text, 1));
       /* horizontal pad only + centered — vertical rhythm comes from the
          row's pad 8, keeping the pill at the designed 48px */
       padding: 0 8px;
-      height: calc(18px * var(--chat-text, 1));
-      max-height: calc(144px * var(--chat-text, 1)); /* 8 lines x 18px */
+      height: calc(16px * var(--chat-text, 1));
+      max-height: calc(128px * var(--chat-text, 1)); /* 8 lines x 16px */
       /* hidden until the cap — fractional DPI scaling (Windows 125%/150%)
          rounds clientHeight/scrollHeight apart and fakes a 1px overflow,
          painting a phantom scrollbar in the empty field; JS flips to auto
