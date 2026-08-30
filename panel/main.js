@@ -974,9 +974,14 @@
       wasConnected = true;
       reconnectDelay = 1000;
       requestMcpList();
-      // Do not probe Claude auth on startup: `claude auth status` can touch the
-      // macOS Keychain. Model access is requested only from the explicit
-      // Settings Allow action (or the sign-in flow).
+      // Fetch auth on connect so the account card, the model-section gate, and
+      // the sign-in overlay all reflect the real CLI session (otherwise lastAuth
+      // stays empty and the card is stuck on "Signed out" even when logged in).
+      // This runs `claude auth status --json` via the CLI binary, which reads
+      // its own credential (no Keychain prompt observed) — distinct from the
+      // daemon reading the credential directly for model discovery, which is
+      // still deferred behind the explicit Settings "Allow".
+      try { ws.send(JSON.stringify({ type: 'auth_status' })); } catch (e) { /* ignore */ }
     };
 
     ws.onmessage = handleMessage;
