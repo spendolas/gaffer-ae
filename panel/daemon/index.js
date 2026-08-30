@@ -4,7 +4,7 @@ import { startMcpServer } from './mcp-server.js';
 import { ChatHandler, augmentedEnv } from './chat-handler.js';
 import { authStatus, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
-import { maxSourceMtime, isDevInstall, shouldReload } from './dev-reload.js';
+import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,37 +132,64 @@ console.log(
   `Gaffer daemon: MCP on http://127.0.0.1:${MCP_PORT}/mcp, panel bridge on ws://127.0.0.1:${WS_PORT}`
 );
 
-// Dev auto-reload: on a dev install, watch our own sources and step aside when
-// they change so the panel's reconnect boots a fresh daemon from the new code.
-// Idle-gated (never mid-turn/sign-in) and settle-debounced (a branch switch =
-// one reload, not a storm). End users (no repo) never enter this.
+// Self-restart when the on-disk code changes, so a fresh daemon boots from the
+// new code without waiting for AE to quit (a panel reload only reloads the UI).
+// Idle-gated (never mid-turn/sign-in/JSX) and settle-debounced (an update or
+// branch switch touches many files at once = one reload, not a storm). The
+// panel's reconnect path relaunches us on exit.
+//   - Dev install (git checkout): watches *.js source mtimes.
+//   - End-user install: watches version.json, which update.sh rewrites — so an
+//     updated daemon relaunches into the new code even if update.sh's own stop
+//     is skipped or fails (the historical stale-daemon bug).
 var DAEMON_DIR = dirname(fileURLToPath(import.meta.url));
 var PANEL_DIR = pathJoin(DAEMON_DIR, '..');
-if (isDevInstall(PANEL_DIR)) {
-  var reloadBaseline = maxSourceMtime(DAEMON_DIR);
-  var reloadLastMax = reloadBaseline;
-  var reloadLastChangeAt = Date.now();
-  var reloadArmed = false;
-  console.log('Gaffer: dev auto-reload watching daemon sources');
-  var reloadTimer = setInterval(() => {
-    var cur = maxSourceMtime(DAEMON_DIR);
-    if (cur > reloadLastMax) { reloadLastMax = cur; reloadLastChangeAt = Date.now(); reloadArmed = true; }
-    if (!reloadArmed) return;
-    var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn;
-    if (shouldReload({ baseline: reloadBaseline, currentMax: cur, lastChangeAt: reloadLastChangeAt, settleMs: 1500, idle: idle }, Date.now())) {
-      clearInterval(reloadTimer);
-      console.log('Gaffer: daemon sources changed — reloading');
-      bridge.broadcast({ type: 'daemon_reloading', message: 'Reloading Gaffer for updated code…' });
-      setTimeout(() => process.exit(0), 250); // let the notice flush, then let the panel relaunch us
-    }
-  }, 3000);
-  if (reloadTimer.unref) reloadTimer.unref();
-}
+var devInstall = isDevInstall(PANEL_DIR);
+var currentSig = () => (devInstall ? maxSourceMtime(DAEMON_DIR) : readVersionSignature(PANEL_DIR));
+// A real change: dev mtime advances; prod version.json content differs (a ''
+// transient read miss never counts, so a brief unreadable file can't trigger).
+var sigChanged = (from, to) => (devInstall ? to > from : (to !== from && to !== ''));
+var reloadBaseline = currentSig();
+var reloadLastSig = reloadBaseline;
+var reloadLastChangeAt = Date.now();
+var reloadArmed = false;
+console.log('Gaffer: watching for code changes (' + (devInstall ? 'dev sources' : 'version.json') + ')');
+var reloadTimer = setInterval(() => {
+  var cur = currentSig();
+  if (sigChanged(reloadLastSig, cur)) { reloadLastSig = cur; reloadLastChangeAt = Date.now(); reloadArmed = true; }
+  if (!reloadArmed) return;
+  var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn && queue.isIdle();
+  if (shouldReload({ changed: sigChanged(reloadBaseline, reloadLastSig), lastChangeAt: reloadLastChangeAt, settleMs: 1500, idle: idle }, Date.now())) {
+    clearInterval(reloadTimer);
+    console.log('Gaffer: code changed — reloading daemon');
+    bridge.broadcast({ type: 'daemon_reloading', message: 'Reloading Gaffer for updated code…' });
+    setTimeout(() => process.exit(0), 250); // let the notice flush, then let the panel relaunch us
+  }
+}, 3000);
+if (reloadTimer.unref) reloadTimer.unref();
 
-// Graceful shutdown
+// Graceful shutdown. SIGINT (Ctrl-C, dev) exits immediately, cancelling any
+// active chat. SIGTERM (update.sh's stop) DRAINS first: it waits for the chat,
+// sign-in, and any in-flight JSX to finish so an update never cuts off real
+// work, then exits (hard cap past the 60s JSX timeout so it can't hang).
 process.on('SIGINT', () => {
   console.log('\nGaffer: shutting down');
   chatHandler.cancel();
   bridge.stop();
   process.exit(0);
+});
+var draining = false;
+process.on('SIGTERM', () => {
+  if (draining) return;
+  draining = true;
+  console.log('Gaffer: SIGTERM — draining in-flight work before exit');
+  var deadline = Date.now() + 65000;
+  (function waitIdle() {
+    var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn && queue.isIdle();
+    if (idle || Date.now() > deadline) {
+      if (!idle) console.log('Gaffer: drain timed out — exiting anyway');
+      try { bridge.stop(); } catch (e) { /* ignore */ }
+      process.exit(0);
+    }
+    setTimeout(waitIdle, 250);
+  })();
 });

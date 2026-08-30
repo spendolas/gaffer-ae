@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { maxSourceMtime, isDevInstall, shouldReload } from '../dev-reload.js';
+import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from '../dev-reload.js';
 
 function seconds(t) { return new Date(t * 1000); }
 
@@ -49,4 +49,24 @@ test('shouldReload: fires only when changed AND settled AND idle', () => {
   assert.equal(shouldReload({ ...base, idle: false }, 100 + 1500), false); // busy → defer
   assert.equal(shouldReload(base, 100 + 1499), false);          // not settled yet
   assert.equal(shouldReload({ ...base, currentMax: 1000 }, 1e9), false);   // no change
+});
+
+test('shouldReload: honours an explicit changed flag (version-signature path)', () => {
+  var base = { changed: true, lastChangeAt: 100, settleMs: 1500, idle: true };
+  assert.equal(shouldReload(base, 100 + 1500), true);                 // changed + settled + idle
+  assert.equal(shouldReload({ ...base, changed: false }, 1e9), false); // sig unchanged → never
+  assert.equal(shouldReload({ ...base, idle: false }, 100 + 1500), false); // busy → defer
+  assert.equal(shouldReload(base, 100 + 1499), false);               // not settled yet
+});
+
+test('readVersionSignature: returns file content, and "" when absent', () => {
+  var dir = mkdtempSync(join(tmpdir(), 'devreload-ver-'));
+  assert.equal(readVersionSignature(dir), '');                       // no file yet
+  var body = '{\n  "version": "0.9.5",\n  "commit": "abc1234"\n}\n';
+  writeFileSync(join(dir, 'version.json'), body);
+  assert.equal(readVersionSignature(dir), body);                     // exact content
+  // A different release yields a different signature (drives the prod reload).
+  var next = '{\n  "version": "0.9.6",\n  "commit": "def5678"\n}\n';
+  writeFileSync(join(dir, 'version.json'), next);
+  assert.notEqual(readVersionSignature(dir), body);
 });

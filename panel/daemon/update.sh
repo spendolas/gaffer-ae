@@ -12,6 +12,30 @@ LOG="${TMPDIR:-/tmp}/gaffer-update.log"
 exec >> "$LOG" 2>&1
 echo "=== Update started: $(date) ==="
 
+# Stop whatever holds the daemon's WebSocket port (9823) — reliable regardless
+# of how it was launched (`node index.js`, `env node index.js`, or the SEA
+# binary). The old pattern kills (pkill -f "node.*daemon/index.js") never matched
+# the real `node index.js` cmdline, so every update left a stale daemon running.
+# Graceful first: SIGTERM lets a v0.9.5+ daemon drain in-flight work then exit;
+# SIGKILL only if it outlives the window.
+stop_daemon() {
+  local pids i
+  pids="$(lsof -nP -iTCP:9823 -sTCP:LISTEN -t 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    pkill -f "gaffer-daemon" 2>/dev/null || true   # SEA binary fallback
+    return 0
+  fi
+  echo "Stopping daemon (pids: $pids)"
+  kill -TERM $pids 2>/dev/null || true
+  # Wait for a graceful drain — past the 60s JSX cap the daemon honours.
+  for i in $(seq 1 140); do
+    lsof -nP -iTCP:9823 -sTCP:LISTEN -t >/dev/null 2>&1 || { echo "Daemon stopped."; return 0; }
+    sleep 0.5
+  done
+  echo "Daemon did not exit in time — forcing."
+  kill -KILL $(lsof -nP -iTCP:9823 -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null || true
+}
+
 # Never overwrite a development checkout — a dev install symlinks the panel
 # out of a git repo; rsync --delete would clobber uncommitted work.
 if [ -d "$PANEL_DIR/../.git" ] || [ -d "$PANEL_DIR/.git" ]; then
@@ -49,11 +73,9 @@ if [ -f "$PANEL_DIR/chat-history.json" ]; then
   cp "$PANEL_DIR/chat-history.json" "$BACKUP"
 fi
 
-# Kill existing daemon (panel will detect disconnect and continue)
+# Stop existing daemon (panel will detect disconnect and continue)
 echo "Stopping daemon..."
-pkill -f "gaffer-daemon" 2>/dev/null || true
-pkill -f "node.*daemon/index.js" 2>/dev/null || true
-sleep 1
+stop_daemon
 
 # Sync new files into panel dir (overwrite, but preserve user data)
 echo "Replacing files..."
@@ -80,11 +102,10 @@ if [ -n "${NODE:-}" ]; then
   PATH="$NPM_DIR:$PATH" npm install --production
 fi
 
-# Kill any daemon that respawned from the half-copied tree during the update
+# Stop any daemon that respawned from the half-copied tree during the update
 # (the panel pauses auto-start now, but belt and braces) — the panel reloads
 # when version.json changes and boots a clean daemon.
-pkill -f "gaffer-daemon" 2>/dev/null || true
-pkill -f "node.*daemon/index.js" 2>/dev/null || true
+stop_daemon
 
 # Write new version.json — version comes from the downloaded tarball,
 # only the commit is stamped (rsync already copied the tarball's file,
