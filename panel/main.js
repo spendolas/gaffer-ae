@@ -3187,39 +3187,33 @@
     setVis(controls, ready, true);
     setVis(gate, !ready, true);
     if (ready) return;
-    // Reset per-state visibility defaults; each branch overrides as needed.
-    allow.disabled = false;
-    setVis(copy, true, false);
-    setVis(spinner, false, false);
-    setVis(allow, true, false);
+    // Set each element's TARGET visibility for this state exactly once — never
+    // reset-to-shown-then-hide (that fades copy+allow in before hiding them on a
+    // non-snap render into `loading`, which reads as an "Allow" flash). loading
+    // shows only the spinner (design 530:19756 has no copy for the checking
+    // state); every other state shows the copy + button, no spinner.
+    var showSpinner = modelDiscoveryState === 'loading';
     if (modelDiscoveryState === 'keychain-pending') {
       title.textContent = 'Available models';
       message.textContent = 'Approve the macOS prompt to see the models you can use.';
       allow.textContent = 'Waiting…';
       allow.disabled = true;
-      return;
-    }
-    if (modelDiscoveryState === 'loading') {
-      // Design has no title/body for the checking state — just the typing
-      // indicator (Figma 530:19756 stub only holds a TypingIndicator instance).
-      setVis(copy, false, false);
-      setVis(allow, false, false);
-      setVis(spinner, true, false);
-      return;
-    }
-    if (modelDiscoveryState === 'retry') {
+    } else if (modelDiscoveryState === 'retry') {
       title.textContent = 'Couldn’t check models';
       message.textContent = 'Try again to see which Claude Code models you can use.';
       allow.textContent = 'Try again';
-      allow.hidden = false;
-      return;
+      allow.disabled = false;
+    } else if (modelDiscoveryState !== 'loading') {
+      // initial — macOS first visit only. Explains the imminent system dialog;
+      // not an in-app credential permission or a persistent access grant.
+      title.textContent = 'Available models';
+      message.textContent = 'Let Gaffer ask Claude Code which models you can use.';
+      allow.textContent = 'Allow';
+      allow.disabled = false;
     }
-    // macOS first visit only. This explains the imminent system dialog; it is
-    // not an in-app credential permission or a persistent access grant.
-    title.textContent = 'Available models';
-    message.textContent = 'Let Gaffer ask Claude Code which models you can use.';
-    allow.textContent = 'Allow';
-    allow.hidden = false;
+    setVis(copy, !showSpinner, false);
+    setVis(allow, !showSpinner, false);
+    setVis(spinner, showSpinner, false);
   }
   function requestModelCatalog(options) {
     if (!ws || ws.readyState !== 1) {
