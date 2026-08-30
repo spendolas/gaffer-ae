@@ -2672,6 +2672,7 @@
     currentEffort = discoveredEfforts.length ? nearestEffort(currentEffort, discoveredEfforts) : null;
   }
   function applyModelOptions(data) {
+    if (modelCatalogTimer) { clearTimeout(modelCatalogTimer); modelCatalogTimer = null; }
     modelDiscoveryReason = data.modelAccess || null;
     if (data.live && Array.isArray(data.models) && data.models.length) {
       modelDiscoveryState = 'ready';
@@ -3215,6 +3216,7 @@
     setVis(allow, !showSpinner, false);
     setVis(spinner, showSpinner, false);
   }
+  var modelCatalogTimer = null;
   function requestModelCatalog(options) {
     if (!ws || ws.readyState !== 1) {
       modelDiscoveryState = 'retry';
@@ -3228,6 +3230,17 @@
     modelDiscoveryReason = null;
     renderModelDiscovery();
     ws.send(JSON.stringify({ type: 'list_models' }));
+    // Safety net: the daemon should always reply (applyModelOptions clears this),
+    // but a wedged credential read on the daemon side can leave the panel on the
+    // spinner forever. Fall to retry so the user is never stuck.
+    if (modelCatalogTimer) clearTimeout(modelCatalogTimer);
+    modelCatalogTimer = setTimeout(function () {
+      modelCatalogTimer = null;
+      if (modelDiscoveryState === 'loading' || modelDiscoveryState === 'keychain-pending') {
+        modelDiscoveryState = 'retry';
+        renderModelDiscovery();
+      }
+    }, 20000);
   }
   function syncSettingsUpdateButton() {
     var button = document.getElementById('setUpdateBtn');
