@@ -49,52 +49,51 @@ var NO_XHIGH_EFFORTS = ['low', 'medium', 'high', 'max'];
 
 var MODEL_DISCOVERY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+// Parse the Claude Code OAuth blob into { token, expiresAt }. expiresAt (ms
+// epoch) lets discovery detect a stale access token BEFORE calling the API, so
+// an expired token falls back to the cached catalog instead of eating a 401.
+function parseOauthBlob(raw) {
+  try {
+    var o = JSON.parse(String(raw || '')).claudeAiOauth;
+    return o && o.accessToken
+      ? { token: String(o.accessToken), expiresAt: typeof o.expiresAt === 'number' ? o.expiresAt : 0 }
+      : null;
+  } catch (e) { return null; }
+}
+
 function readCredentialFileToken(env) {
   try {
     var configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-    var raw = readFileSync(join(configDir, '.credentials.json'), 'utf8');
-    var parsed = JSON.parse(raw);
-    return parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken
-      ? String(parsed.claudeAiOauth.accessToken) : '';
-  } catch (e) { return ''; }
+    return parseOauthBlob(readFileSync(join(configDir, '.credentials.json'), 'utf8'));
+  } catch (e) { return null; }
 }
 
 function readMacKeychainToken(env) {
   return new Promise(function (resolve) {
-    if (process.platform !== 'darwin') return resolve('');
+    if (process.platform !== 'darwin') return resolve(null);
     var args = ['find-generic-password'];
     if (env.USER) args.push('-a', env.USER);
     args.push('-s', 'Claude Code-credentials', '-w');
     execFile('/usr/bin/security', args, { env: env, timeout: 10000, windowsHide: true }, function (err, stdout) {
-      if (err) return resolve('');
-      try {
-        var parsed = JSON.parse(String(stdout || ''));
-        resolve(parsed && parsed.claudeAiOauth && parsed.claudeAiOauth.accessToken
-          ? String(parsed.claudeAiOauth.accessToken) : '');
-      } catch (e) { resolve(''); }
+      resolve(err ? null : parseOauthBlob(stdout));
     });
   });
 }
 
-// Cache the resolved credential for the daemon's lifetime. The mac Keychain
-// read (`security -w`) is the fragile step: from a background daemon a repeat
-// read can wedge on an ACL prompt that never displays, which stranded the panel
-// on the loading spinner on the SECOND settings open. Reading once and reusing
-// the token means every later refresh skips the Keychain entirely. Cleared on an
-// auth failure (401/403) so a rotated/expired token gets re-read.
-var cachedModelCredential = null;
-function clearModelCredentialCache() { cachedModelCredential = null; }
+// The daemon does NOT own the OAuth token lifecycle — the Claude Code CLI
+// refreshes the access token when IT makes an API call (e.g. a chat spawn), and
+// exposes no refresh/models command. So the token is only valid in the window
+// after recent CLI use (~8h), and a background daemon can't refresh it without
+// impersonating Claude Code's OAuth client. Discovery therefore reads the token
+// fresh each time WITH its expiry; expiry handling lives in fetchModelCatalog.
 async function readModelDiscoveryCredential(env) {
   // Explicit credentials win, and are the only supported route for API-key
-  // installs. OAuth credentials stay in the OS/file store and are never
-  // persisted or logged by Gaffer. Env creds are cheap; don't cache them.
-  if (env.ANTHROPIC_API_KEY) return { kind: 'api-key', token: String(env.ANTHROPIC_API_KEY) };
-  if (env.ANTHROPIC_AUTH_TOKEN) return { kind: 'bearer', token: String(env.ANTHROPIC_AUTH_TOKEN) };
-  if (cachedModelCredential) return cachedModelCredential;
-  var token = await readMacKeychainToken(env);
-  if (!token) token = readCredentialFileToken(env);
-  cachedModelCredential = token ? { kind: 'bearer', token: token } : null;
-  return cachedModelCredential;
+  // installs. Treated as non-expiring (no OAuth expiry to track).
+  if (env.ANTHROPIC_API_KEY) return { kind: 'api-key', token: String(env.ANTHROPIC_API_KEY), expiresAt: 0 };
+  if (env.ANTHROPIC_AUTH_TOKEN) return { kind: 'bearer', token: String(env.ANTHROPIC_AUTH_TOKEN), expiresAt: 0 };
+  var blob = await readMacKeychainToken(env);
+  if (!blob) blob = readCredentialFileToken(env);
+  return blob ? { kind: 'bearer', token: blob.token, expiresAt: blob.expiresAt } : null;
 }
 
 export function modelCatalogOptions(payload) {
@@ -192,6 +191,13 @@ export function modelCatalogOptions(payload) {
 async function fetchModelCatalog(env) {
   var credential = await readModelDiscoveryCredential(env);
   if (!credential) return { catalog: null, reason: 'no-credential' };
+  // Don't spend a request on a token we already know is expired — the CLI
+  // refreshes it on its next API call (e.g. a chat). Report 'token-expired' so
+  // the caller serves the cached catalog and tries live again later. A 30s skew
+  // buffer avoids racing the exact expiry instant.
+  if (credential.expiresAt && credential.expiresAt <= Date.now() + 30000) {
+    return { catalog: null, reason: 'token-expired' };
+  }
   var base = String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
   var url = base + '/v1/models?limit=1000';
   var headers = {
@@ -205,9 +211,6 @@ async function fetchModelCatalog(env) {
     var response = await fetch(url, { headers: headers, signal: AbortSignal.timeout(12000) });
     if (!response.ok) {
       console.warn('Gaffer: live model discovery returned HTTP ' + response.status);
-      // A rejected token may be stale/rotated — drop the cache so the next
-      // attempt re-reads the credential instead of reusing the bad one.
-      if (response.status === 401 || response.status === 403) clearModelCredentialCache();
       return { catalog: null, reason: response.status === 401 || response.status === 403 ? 'unauthorized' : 'network' };
     }
     var catalog = modelCatalogOptions(await response.json());
@@ -495,27 +498,60 @@ export class ChatHandler {
     this.claudeBin = null;
     this.envForSpawn = null;
     this.liveModelCapabilities = null;
+    // Last catalog that came back live from the account. Served as a fallback
+    // when the OAuth token is momentarily expired (the daemon can't refresh it;
+    // the CLI does on its next API call). It IS real entitlement proof — it was
+    // fetched live from this account — so serving it isn't the "stale CLI alias"
+    // problem the fail-closed rule guards against.
+    this.cachedCatalog = null;
   }
 
   // Discover the account's currently callable models from Anthropic's live
-  // catalog. This runs afresh for every authorized Settings open; no cached
-  // CLI/session model list is treated as entitlement proof.
+  // catalog. Live when the token is valid; on a momentary expiry it serves the
+  // last live catalog (refreshed automatically the next time the token is
+  // valid, e.g. right after a chat — see refreshCatalogInBackground).
   async listModelOptions() {
-    var result = await fetchModelCatalog(augmentedEnv());
+    // _fetchCatalog is an injection seam for tests; defaults to the live fetch.
+    var result = await (this._fetchCatalog || fetchModelCatalog)(augmentedEnv());
     if (result && result.catalog) {
       this.liveModelCapabilities = result.catalog.capabilitiesByModel;
+      this.cachedCatalog = result.catalog;
       return result.catalog;
     }
-    // No live catalog means no entitlement proof. Fail closed: do not surface
-    // CLI aliases or historical versions that the account may not be allowed
-    // to call. Chat keeps its safe Opus 4.8 default, while Settings presents
-    // an explicit retry state.
+    // Token expired (or the fetch failed) but we have a prior live catalog:
+    // serve it so the picker keeps working instead of stranding on retry.
+    if (this.cachedCatalog) {
+      this.liveModelCapabilities = this.cachedCatalog.capabilitiesByModel;
+      return Object.assign({}, this.cachedCatalog, {
+        modelAccess: 'cached', cached: true,
+      });
+    }
+    // No live catalog ever, and none cached. Fail closed: don't surface CLI
+    // aliases the account may not be entitled to. Settings shows retry; the
+    // next chat refreshes the token and discovery goes live.
     this.liveModelCapabilities = null;
     return {
       models: [], efforts: [], effortsByModel: {}, capabilitiesByModel: {},
       versions: {}, capabilitySource: 'unavailable', entitlement: 'unknown',
       live: false, modelAccess: result && result.reason ? result.reason : 'unavailable',
     };
+  }
+
+  // After the CLI makes an API call the OAuth token is fresh again; opportunist-
+  // ically refresh the cached catalog so a later Settings open (with a possibly
+  // expired token) still shows current models. Fire-and-forget, throttled.
+  refreshCatalogInBackground() {
+    var now = Date.now();
+    if (this._catalogRefreshInFlight) return;
+    if (this._lastCatalogRefresh && now - this._lastCatalogRefresh < 60000) return;
+    this._catalogRefreshInFlight = true;
+    this._lastCatalogRefresh = now;
+    fetchModelCatalog(augmentedEnv()).then((result) => {
+      if (result && result.catalog) {
+        this.cachedCatalog = result.catalog;
+        this.liveModelCapabilities = result.catalog.capabilitiesByModel;
+      }
+    }).catch(() => {}).finally(() => { this._catalogRefreshInFlight = false; });
   }
 
   async handleChat(msg, socket) {
@@ -721,6 +757,11 @@ export class ChatHandler {
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_done', sessionId: this.sessionId }));
       }
+      // The chat just made an API call, so the CLI refreshed the OAuth token.
+      // Opportunistically refresh the cached model catalog while it's valid, so
+      // a later Settings open still shows current models even if the token has
+      // since lapsed. Fire-and-forget, throttled.
+      this.refreshCatalogInBackground();
       // Shed replayed image payloads from the persisted transcript before the
       // next --resume. Safe window: this turn's process has exited. Skipped
       // while a background compaction holds the session. Never throws.

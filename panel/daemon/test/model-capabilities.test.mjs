@@ -1,6 +1,37 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { modelCapability, modelCatalogOptions } from '../chat-handler.js';
+import { modelCapability, modelCatalogOptions, ChatHandler } from '../chat-handler.js';
+
+test('model discovery serves the cached catalog when the token is momentarily expired', async () => {
+  const handler = new ChatHandler();
+  const liveCatalog = {
+    models: ['opus', 'sonnet'], efforts: ['low', 'high'], effortsByModel: { opus: ['low', 'high'] },
+    capabilitiesByModel: { opus: { oneM: true } }, versions: { opus: ['claude-opus-4-8'] },
+    capabilitySource: 'anthropic-v1-models', entitlement: 'account-server', live: true,
+  };
+  // 1) A live fetch caches the catalog and returns it live.
+  handler._fetchCatalog = async () => ({ catalog: liveCatalog, reason: 'ready' });
+  const live = await handler.listModelOptions();
+  assert.equal(live.live, true);
+  assert.deepEqual(live.models, ['opus', 'sonnet']);
+
+  // 2) Token now expired: no live catalog, but the cached one is served (usable,
+  //    flagged cached) instead of failing closed.
+  handler._fetchCatalog = async () => ({ catalog: null, reason: 'token-expired' });
+  const cached = await handler.listModelOptions();
+  assert.equal(cached.live, true, 'cached catalog still presents as usable');
+  assert.equal(cached.modelAccess, 'cached');
+  assert.deepEqual(cached.models, ['opus', 'sonnet']);
+});
+
+test('model discovery fails closed when expired with no cached catalog', async () => {
+  const handler = new ChatHandler();
+  handler._fetchCatalog = async () => ({ catalog: null, reason: 'token-expired' });
+  const out = await handler.listModelOptions();
+  assert.equal(out.live, false);
+  assert.deepEqual(out.models, []);
+  assert.equal(out.modelAccess, 'token-expired');
+});
 
 test('model capabilities gate 1M and effort by Claude model generation', () => {
   assert.deepEqual(modelCapability('claude-haiku-4-5-20251001', null), {
