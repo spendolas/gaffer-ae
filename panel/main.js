@@ -122,11 +122,10 @@
   var currentModel = 'opus';
   var currentVariant = 'id:claude-opus-4-8'; // 'standard' | '1m' | pinned full id
   var currentEffort = 'medium'; // low | medium | high | xhigh | max
-  // macOS alone has a system Keychain prompt. Keep a small local marker that
-  // the explanatory first-visit state has been shown; it is not consent and
-  // never grants, stores, or bypasses any OS credential permission.
-  var modelDiscoveryIntroduced = false;
-  var modelDiscoveryState = 'initial'; // initial | keychain-pending | loading | ready | retry
+  // Discovery reads the Claude Code credential silently (open-ACL Keychain item
+  // / creds file) — no OS prompt ever fires, so there's no first-visit "Allow"
+  // gate on any platform. States: loading (spinner) | ready | retry.
+  var modelDiscoveryState = 'loading';
   var modelDiscoveryReason = null; // diagnostic only; retry copy stays generic
   var autoCheckUpdates = true;
   var autoModel = false; // off by default; persisted in chat-history.json
@@ -651,7 +650,6 @@
       model: currentModel,
       variant: currentVariant,
       effort: currentEffort,
-      modelDiscoveryIntroduced: modelDiscoveryIntroduced,
       autoCheckUpdates: autoCheckUpdates,
       autoModel: autoModel,
       soundEnabled: soundEnabled,
@@ -703,15 +701,8 @@
           // was until the next 'models' message happens to arrive.
           applyEffortsForModel();
         }
-        // Migrate the former "consent" marker: it only means that the macOS
-        // first-visit explanation was already seen. Gaffer never uses it as
-        // authorization to access a credential.
-        if (typeof data.modelDiscoveryIntroduced === 'boolean') {
-          modelDiscoveryIntroduced = data.modelDiscoveryIntroduced;
-        } else if (typeof data.modelDiscoveryConsent === 'boolean') {
-          modelDiscoveryIntroduced = data.modelDiscoveryConsent;
-        }
-        modelDiscoveryState = modelDiscoveryIntroduced ? 'loading' : 'initial';
+        // (Legacy modelDiscoveryIntroduced/Consent markers are ignored now —
+        // there's no first-visit gate; discovery always starts at 'loading'.)
         if (data.variant) {
           // migrate the short-lived 'latest' naming
           currentVariant = data.variant === 'latest' ? 'standard' : data.variant;
@@ -1778,7 +1769,12 @@
         .replace(/^(\s*[-*+]\s+.*)\n\s*\n(?=\s*[-*+]\s)/gm, '$1\n')
         .replace(/^(\s*\d+\.\s+.*)\n\s*\n(?=\s*\d+\.\s)/gm, '$1\n')
         .trim();
-      return marked.parse(clean, { breaks: false, gfm: true });
+      var html = marked.parse(clean, { breaks: false, gfm: true });
+      // GFM task-list items ship as <li><input type=checkbox> with no class.
+      // Tag them so CSS can drop the redundant bullet — CEP Ch99 predates
+      // :has(), so we can't detect the checkbox child in the stylesheet alone.
+      html = html.replace(/<li>(\s*<input\b[^>]*type="checkbox")/g, '<li class="task-item">$1');
+      return html;
     } catch (e) {
       return text;
     }
@@ -3164,15 +3160,12 @@
     // in animate mode the "reset defaults" below briefly fades copy+allow in
     // before the per-state branch hides them again — a visible "Allow" flash.
     if (modelDiscoveryState === modelDiscoveryLastState) return;
-    // Snap (no fade) on:
-    //  - first render (HTML defaults would otherwise cross-fade with the target),
-    //  - leaving `initial` — the copy is a call-to-action, once the user clicks
-    //    Allow they should see the next state immediately, not the previous
-    //    text lingering at 50% opacity.
-    var snap = modelDiscoveryLastState === null || modelDiscoveryLastState === 'initial';
+    // Snap (no fade) on the first render so the HTML defaults don't cross-fade
+    // with the target; fade on subsequent transitions (loading <-> retry <-> ready).
+    var snap = modelDiscoveryLastState === null;
     modelDiscoveryLastState = modelDiscoveryState;
-    // Snap-aware toggle: instant when leaving `initial` or on first render;
-    // fade otherwise. Applied to both slot children AND within-gate elements.
+    // Snap-aware toggle: instant on first render, fade otherwise. Applied to
+    // both slot children AND within-gate elements.
     function setVis(el, show, isSlot) {
       if (!el) return;
       if (snap) {
@@ -3188,28 +3181,15 @@
     setVis(controls, ready, true);
     setVis(gate, !ready, true);
     if (ready) return;
-    // Set each element's TARGET visibility for this state exactly once — never
-    // reset-to-shown-then-hide (that fades copy+allow in before hiding them on a
-    // non-snap render into `loading`, which reads as an "Allow" flash). loading
-    // shows only the spinner (design 530:19756 has no copy for the checking
-    // state); every other state shows the copy + button, no spinner.
+    // Only two non-ready gate states remain: loading (spinner only, no copy —
+    // design 530:19756) and retry (copy + Try again). Set each element's TARGET
+    // visibility once — never reset-to-shown-then-hide (that fades copy in before
+    // hiding it on a non-snap render into loading, which reads as a flash).
     var showSpinner = modelDiscoveryState === 'loading';
-    if (modelDiscoveryState === 'keychain-pending') {
-      title.textContent = 'Available models';
-      message.textContent = 'Approve the macOS prompt to see the models you can use.';
-      allow.textContent = 'Waiting…';
-      allow.disabled = true;
-    } else if (modelDiscoveryState === 'retry') {
+    if (modelDiscoveryState === 'retry') {
       title.textContent = 'Couldn’t check models';
       message.textContent = 'Try again to see which Claude Code models you can use.';
       allow.textContent = 'Try again';
-      allow.disabled = false;
-    } else if (modelDiscoveryState !== 'loading') {
-      // initial — macOS first visit only. Explains the imminent system dialog;
-      // not an in-app credential permission or a persistent access grant.
-      title.textContent = 'Available models';
-      message.textContent = 'Let Gaffer ask Claude Code which models you can use.';
-      allow.textContent = 'Allow';
       allow.disabled = false;
     }
     setVis(copy, !showSpinner, false);
@@ -3217,26 +3197,22 @@
     setVis(spinner, showSpinner, false);
   }
   var modelCatalogTimer = null;
-  function requestModelCatalog(options) {
+  function requestModelCatalog() {
     if (!ws || ws.readyState !== 1) {
       modelDiscoveryState = 'retry';
       renderModelDiscovery();
       return;
     }
-    // The macOS state exists only while the system Keychain dialog may be
-    // active. Every later refresh, and all Windows/Linux refreshes, use the
-    // normal loading state automatically.
-    modelDiscoveryState = options && options.keychainPrompt ? 'keychain-pending' : 'loading';
+    modelDiscoveryState = 'loading';
     modelDiscoveryReason = null;
     renderModelDiscovery();
     ws.send(JSON.stringify({ type: 'list_models' }));
     // Safety net: the daemon should always reply (applyModelOptions clears this),
-    // but a wedged credential read on the daemon side can leave the panel on the
-    // spinner forever. Fall to retry so the user is never stuck.
+    // but if a reply never comes, fall to retry so the user is never stuck.
     if (modelCatalogTimer) clearTimeout(modelCatalogTimer);
     modelCatalogTimer = setTimeout(function () {
       modelCatalogTimer = null;
-      if (modelDiscoveryState === 'loading' || modelDiscoveryState === 'keychain-pending') {
+      if (modelDiscoveryState === 'loading') {
         modelDiscoveryState = 'retry';
         renderModelDiscovery();
       }
@@ -3286,13 +3262,13 @@
     renderModelDiscovery();
   }
   function openSettings() {
-    var needsMacIntroduction = isMacOS() && !modelDiscoveryIntroduced;
-    modelDiscoveryState = needsMacIntroduction ? 'initial' : 'loading';
+    // Every platform: spinner -> models. The daemon reads the Claude Code
+    // credential silently (its Keychain item has an open ACL — no system prompt
+    // ever fires), so there's no macOS "Allow / approve the prompt" ceremony;
+    // that was staging users for a dialog that structurally can't appear.
+    modelDiscoveryState = 'loading';
     syncSettings(); tkShow(settingsModalEl);
-    // Never reuse daemon-lifetime model data: Settings always asks for the
-    // account's current catalog. macOS gets one explanatory first visit before
-    // its own Keychain dialog; Windows and Linux check automatically.
-    if (!needsMacIntroduction) requestModelCatalog();
+    requestModelCatalog();
     // Thumb placement measures live dot centers — re-run once the modal is
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
@@ -3312,13 +3288,8 @@
   // (setSoundBtn is now a real dropdown wired via soundSelect/makeSelect above.)
   document.getElementById('setCheckNowBtn').addEventListener('click', function () { checkForUpdate(false); });
   document.getElementById('setUpdateBtn').addEventListener('click', runUpdate);
+  // The gate's button now only appears in the retry state ("Try again").
   document.getElementById('modelDiscoveryAllow').addEventListener('click', function () {
-    if (modelDiscoveryState === 'initial') {
-      modelDiscoveryIntroduced = true;
-      saveChat();
-      requestModelCatalog({ keychainPrompt: true });
-      return;
-    }
     requestModelCatalog();
   });
   // Signed-out CTA on the Settings CLI card: closes Settings and reveals the
