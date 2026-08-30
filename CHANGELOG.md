@@ -1,6 +1,18 @@
 # Changelog
 
+## v0.9.1 — 2026-08-30
+
+**Model access, sign-in, and composer polish.**
+
+- **Choose your models, on your terms.** Settings now asks Claude Code which models your account can use, behind a one-tap opt-in (with a first-visit explainer on macOS before the system prompt). The model, version, and per-model effort picker appear once the check succeeds; a clean spinner covers the check and a retry path covers failures.
+- **The account card tells the truth.** The panel reads your Claude Code session on connect, so the Settings account row shows who you are signed in as instead of a stale "Signed out," and the model section follows the same state.
+- **Sign in from Settings.** The signed-out account row now has a Sign in button, and the "Bring your API key" copy is fixed.
+- **Composer feel.** The whole prompt pill is clickable to focus, with a text cursor to match, and the caret no longer hides behind the placeholder text.
+- **Smoother Settings.** The model section fades between states without a size jump, and the "Allow" prompt no longer flashes when the panel is already set up.
+
 ## v0.9.0 — 2026-08-29
+
+> **Superseded by v0.9.1.** This build shipped with known issues (stale "Signed out" account card, a flashing "Allow" prompt in Settings, and a caret rendering glitch in the composer). Update to v0.9.1.
 
 **A calmer, more capable panel.**
 
