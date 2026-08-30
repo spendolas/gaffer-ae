@@ -76,15 +76,25 @@ function readMacKeychainToken(env) {
   });
 }
 
+// Cache the resolved credential for the daemon's lifetime. The mac Keychain
+// read (`security -w`) is the fragile step: from a background daemon a repeat
+// read can wedge on an ACL prompt that never displays, which stranded the panel
+// on the loading spinner on the SECOND settings open. Reading once and reusing
+// the token means every later refresh skips the Keychain entirely. Cleared on an
+// auth failure (401/403) so a rotated/expired token gets re-read.
+var cachedModelCredential = null;
+function clearModelCredentialCache() { cachedModelCredential = null; }
 async function readModelDiscoveryCredential(env) {
   // Explicit credentials win, and are the only supported route for API-key
   // installs. OAuth credentials stay in the OS/file store and are never
-  // persisted or logged by Gaffer.
+  // persisted or logged by Gaffer. Env creds are cheap; don't cache them.
   if (env.ANTHROPIC_API_KEY) return { kind: 'api-key', token: String(env.ANTHROPIC_API_KEY) };
   if (env.ANTHROPIC_AUTH_TOKEN) return { kind: 'bearer', token: String(env.ANTHROPIC_AUTH_TOKEN) };
+  if (cachedModelCredential) return cachedModelCredential;
   var token = await readMacKeychainToken(env);
   if (!token) token = readCredentialFileToken(env);
-  return token ? { kind: 'bearer', token: token } : null;
+  cachedModelCredential = token ? { kind: 'bearer', token: token } : null;
+  return cachedModelCredential;
 }
 
 export function modelCatalogOptions(payload) {
@@ -195,6 +205,9 @@ async function fetchModelCatalog(env) {
     var response = await fetch(url, { headers: headers, signal: AbortSignal.timeout(12000) });
     if (!response.ok) {
       console.warn('Gaffer: live model discovery returned HTTP ' + response.status);
+      // A rejected token may be stale/rotated — drop the cache so the next
+      // attempt re-reads the credential instead of reusing the bad one.
+      if (response.status === 401 || response.status === 403) clearModelCredentialCache();
       return { catalog: null, reason: response.status === 401 || response.status === 403 ? 'unauthorized' : 'network' };
     }
     var catalog = modelCatalogOptions(await response.json());
