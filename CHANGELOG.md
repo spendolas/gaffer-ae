@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.5 — 2026-08-30
+
+**Updates apply without a restart, plus cleaner chat formatting.**
+
+- **Updates now restart the daemon.** Previously an update replaced the panel files but left the old background process running, so fixes silently did not take effect until you quit After Effects, and model settings could show "Couldn't check models." Updates now restart it cleanly, and wait for any work in progress to finish first so nothing is cut off.
+- **Replies use the full width again.** A hidden line cap had crept in that squeezed long answers into a narrow column; agent replies now fill the bubble as before.
+- **Checklists render right.** A task list (the `- [ ]` / `- [x]` kind) now shows a single checkbox per item, instead of a checkbox sitting next to a stray bullet.
+- **List items stay put.** A list item with more than one paragraph no longer runs its paragraphs together on one line.
+- **Images fit the bubble.** A wide image in a reply is capped to the chat width instead of spilling past the edge.
+
 ## v0.9.4 — 2026-08-30
 
 **Simpler model settings.**
