@@ -3158,6 +3158,11 @@
     var allow = document.getElementById('modelDiscoveryAllow');
     var spinner = document.getElementById('modelDiscoverySpinner');
     if (!gate || !copy || !controls || !title || !message || !allow || !spinner) return;
+    // No-op re-renders with the SAME state (e.g. openSettings sets loading, then
+    // requestModelCatalog sets loading again) must not run the toggle sequence:
+    // in animate mode the "reset defaults" below briefly fades copy+allow in
+    // before the per-state branch hides them again — a visible "Allow" flash.
+    if (modelDiscoveryState === modelDiscoveryLastState) return;
     // Snap (no fade) on:
     //  - first render (HTML defaults would otherwise cross-fade with the target),
     //  - leaving `initial` — the copy is a call-to-action, once the user clicks
