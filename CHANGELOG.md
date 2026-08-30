@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.3 — 2026-08-30
+
+**Model discovery survives an expired login token.**
+
+- **Root fix for the stuck / failed model check.** The model list is fetched with your Claude Code login token, which is short-lived and only refreshes when the CLI itself makes a call (like a chat). If you opened Settings during a quiet gap, the token could be expired and the check failed. Now Gaffer notices an expired token and shows the last models it successfully loaded, instead of failing or spinning. It also refreshes that list in the background right after a chat, when the token is fresh again. (Supersedes the v0.9.2 attempt, which could reuse the expired token.)
+
 ## v0.9.2 — 2026-08-30
 
 **Model discovery reliability on macOS.**
