@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.2 — 2026-08-30
+
+**Model discovery reliability on macOS.**
+
+- **The model check no longer stalls on reopen.** The daemon now reads your Claude Code credential once and reuses it, instead of re-reading the macOS Keychain every time Settings opens. That repeated read could wedge on a background approval that never surfaced, leaving the model section stuck on the loading spinner the second time you opened Settings. It reuses the credential for the session and re-reads only if it stops working.
+- **No more infinite spinner.** If a model check ever fails to come back, the section now falls to a retry state instead of spinning forever.
+
 ## v0.9.1 — 2026-08-30
 
 **Model access, sign-in, and composer polish.**
