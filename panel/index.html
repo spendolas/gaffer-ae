@@ -252,8 +252,15 @@
     .msg-text em { color: var(--color-text-light); font-style: italic; }
     .msg-text ul, .msg-text ol { margin: 2px 0 2px 18px; padding: 0; font-size: 0; }
     .msg-text li { margin: 0; font-size: calc(14px * var(--chat-text, 1)); line-height: calc(18px * var(--chat-text, 1)); display: list-item; }
-    .msg-text li > p { margin: 0; display: inline; }
+    .msg-text li > p { margin: 0; }
+    .msg-text li > p:first-child { display: inline; } /* first para sits beside the marker */
+    .msg-text li > p + p { display: block; margin-top: 4px; } /* extra paras in a loose item stack, not collapse */
     .msg-text li + li { margin-top: 2px; }
+    /* GFM task items: marked emits <li><input type=checkbox> with no class, and
+       CEP Ch99 has no :has() — renderMarkdown tags them .task-item. Drop the
+       disc so the checkbox is the only marker, reclaim the list indent. */
+    .msg-text li.task-item { list-style: none; margin-left: -14px; }
+    .msg-text li.task-item > input { margin: 0 6px 0 0; vertical-align: middle; }
     .msg-text p + ul, .msg-text p + ol { margin-top: 0; }
     .msg-text ul + p, .msg-text ol + p { margin-top: 6px; }
     /* CodeInline 185:1156 — pad 2/4, r4, 20h chip. display:inline so the
@@ -296,6 +303,8 @@
     }
     .msg-text a { color: var(--color-accent-blue); text-decoration: none; }
     .msg-text a:hover { text-decoration: underline; }
+    /* markdown images never exceed the bubble; keep aspect + a soft corner */
+    .msg-text img { max-width: 100%; height: auto; border-radius: 8px; margin: 6px 0; }
     /* Tables — Figma MarkdownTable 185:1166: r8 container on bg/input,
        zebra on odd data rows, panel-colored column dividers, no borders */
     .msg-text table {
@@ -1434,25 +1443,6 @@
     /* Do not rebalance source code, inline code chips, or editable text. */
     code, textarea, input { text-wrap: wrap; }
     pre, pre code { text-wrap: nowrap; }
-
-    /* AE's CEP Chromium 99 predates `text-wrap: balance`. The fixed UI cards
-       already constrain their copy; only a stretched assistant transcript can
-       become a full-panel line. Keep its prose within a readable measure in
-       that runtime, leaving tables and <pre> blocks at their natural width. */
-    @supports not (text-wrap: balance) {
-      .chat-msg.assistant .msg-text > h1,
-      .chat-msg.assistant .msg-text > h2,
-      .chat-msg.assistant .msg-text > h3,
-      .chat-msg.assistant .msg-text > h4,
-      .chat-msg.assistant .msg-text > h5,
-      .chat-msg.assistant .msg-text > h6,
-      .chat-msg.assistant .msg-text > p,
-      .chat-msg.assistant .msg-text > ul,
-      .chat-msg.assistant .msg-text > ol,
-      .chat-msg.assistant .msg-text > blockquote {
-        max-width: 64ch;
-      }
-    }
     /* Shared Stubs/Menu item (475:10304) skeleton: Left Block grows to fill and
        left-aligns its label + control(s); Controls slot hugs on the right. */
     /* Shared canonical row pair (475:10304), reused by every settings row:
