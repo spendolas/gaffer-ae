@@ -3158,15 +3158,6 @@
     var allow = document.getElementById('modelDiscoveryAllow');
     var spinner = document.getElementById('modelDiscoverySpinner');
     if (!gate || !copy || !controls || !title || !message || !allow || !spinner) return;
-    // Signed out: the whole model section is irrelevant (no account = no
-    // catalog). Hide the slot entirely and stop — the user signs in first.
-    var slot = gate.parentElement; // .model-slot
-    if (!(lastAuth && lastAuth.loggedIn)) {
-      if (slot) slot.hidden = true;
-      modelDiscoveryLastState = null; // so the next signed-in open renders instantly
-      return;
-    }
-    if (slot) slot.hidden = false;
     // Snap (no fade) on:
     //  - first render (HTML defaults would otherwise cross-fade with the target),
     //  - leaving `initial` — the copy is a call-to-action, once the user clicks
@@ -3283,18 +3274,13 @@
     renderModelDiscovery();
   }
   function openSettings() {
-    // Model discovery only runs while signed in — the whole catalog depends on
-    // the CLI account. Signed out, the section is hidden (renderModelDiscovery)
-    // and no catalog is requested; the user signs in first (design Flow 5:
-    // never past the login screen without being logged in).
-    var loggedIn = lastAuth && lastAuth.loggedIn;
-    var needsMacIntroduction = loggedIn && isMacOS() && !modelDiscoveryIntroduced;
-    if (loggedIn) modelDiscoveryState = needsMacIntroduction ? 'initial' : 'loading';
+    var needsMacIntroduction = isMacOS() && !modelDiscoveryIntroduced;
+    modelDiscoveryState = needsMacIntroduction ? 'initial' : 'loading';
     syncSettings(); tkShow(settingsModalEl);
     // Never reuse daemon-lifetime model data: Settings always asks for the
     // account's current catalog. macOS gets one explanatory first visit before
     // its own Keychain dialog; Windows and Linux check automatically.
-    if (loggedIn && !needsMacIntroduction) requestModelCatalog();
+    if (!needsMacIntroduction) requestModelCatalog();
     // Thumb placement measures live dot centers — re-run once the modal is
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
