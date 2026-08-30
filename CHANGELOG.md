@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.4 — 2026-08-30
+
+**Simpler model settings.**
+
+- **No more "Allow" step for models.** Opening Settings now goes straight to your models on every platform, with a brief spinner while it checks. The old macOS "Allow, then approve the system prompt" step is gone: Gaffer reads your Claude Code login without any system prompt (it never actually appeared), so the extra clicks and the wait-for-a-dialog message were pure friction. If a check can't complete, you get a simple Try again.
+
 ## v0.9.3 — 2026-08-30
 
 **Model discovery survives an expired login token.**
