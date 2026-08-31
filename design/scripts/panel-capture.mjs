@@ -225,6 +225,22 @@ window.__audit = (function () {
       document.getElementById('setScrooge').checked = false;
       document.getElementById('setSoundOn').checked = true;
     },
+    // Effort "Not offered" row (Figma 529:19259) — drive the real catalog path
+    // with a model that offers no effort levels, so the disabled pill + hidden
+    // secondary label render as they would live. No daemon round-trip needed.
+    'model-no-effort': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.applyModelOptions) {
+        window.__gaffer.applyModelOptions({
+          live: true, modelAccess: 'ready', models: ['haiku'], efforts: [],
+          effortsByModel: { haiku: [] },
+          capabilitiesByModel: { haiku: { efforts: [], oneM: false } },
+          versions: { haiku: ['claude-haiku-4-5-20251001'] },
+        });
+      }
+    },
     // Account / API — 3 Figma states (516:42191 / 480:20902 / 516:43487) driven
     // via the window.__gaffer.setApiState() review hook (scaffold — no real key).
     'api-nokey': function () {

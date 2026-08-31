@@ -77,6 +77,11 @@
       --color-bubble-error-bg: rgba(204, 68, 68, 0.3); /* error bubble 176:934 = accent-red @30% */
       --color-bubble-error-text: #ee8888;
       --color-code-inline-bg: rgba(216, 176, 112, 0.2);
+      /* DS Checkbox 183:1052 — off = bg/table-row-hover (#000 @50%, now a
+         bound DS variable), on = #0078d4 (still raw hex in the DS, no bound
+         variable). Check glyph = text/light (#DDD). */
+      --color-checkbox-off: var(--color-bg-table-row-hover);
+      --color-checkbox-on: #0078d4;
       /* Button "ghost" fills — base token @ 20% (Figma applies opacity on the
          node; CEP Chrome 99 has no color-mix, so named here). */
       --color-btn-primary-ghost: rgba(74, 125, 201, 0.2);  /* btn/primary-bg @.2 — Informed / send rest */
@@ -771,6 +776,38 @@
     /* Danger (destructive) variant — the confirm action of a safeguard (e.g. Clear chat) */
     .alert-btn.danger { background: var(--color-btn-danger-ghost); color: var(--color-accent-red); }
     .alert-btn.danger:hover { background: var(--color-btn-danger-bg); color: var(--color-text-light); }
+    /* Optional header row (Settings Header 541:20539) — title left, X dismiss
+       right. Shown only when showModal is called with { dismissible: true };
+       the title then lives here instead of in .alert-message. */
+    .alert-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-24, 24px); }
+    .alert-header[hidden] { display: none; }
+    .alert-header-title { /* Settings Header title #DDD 12/15.6 SemiBold */
+      margin: 0;
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(15.6px * var(--chat-text, 1));
+      font-weight: 600;
+      color: var(--color-text-light);
+    }
+    /* Optional "don't show again" row (Message>Controls 487:38602) — gap 4,
+       centered. Shown only when showModal gets { dontShowAgain: { key } }. */
+    .alert-dontshow { display: flex; align-items: center; gap: var(--space-6); cursor: pointer; } /* 487:38602 itemSpacing 6 (space/6) — checkbox↔label gap */
+    .alert-dontshow[hidden] { display: none; }
+    .alert-dontshow > input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; } /* real checkbox drives state + a11y; the span is the paint */
+    .alert-checkbox { /* DS Checkbox 183:1052 — 20x20, r8 */
+      width: 20px; height: 20px; flex-shrink: 0;
+      border-radius: var(--radius-8);
+      background: var(--color-checkbox-off);
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .alert-checkbox .gicon { width: 10px; height: 10px; color: var(--color-text-light); display: none; } /* check #DDD, 10x10 icon frame, hidden until on */
+    .alert-dontshow > input:checked + .alert-checkbox { background: var(--color-checkbox-on); }
+    .alert-dontshow > input:checked + .alert-checkbox .gicon { display: block; }
+    .alert-dontshow > input:focus-visible + .alert-checkbox { outline: 2px solid var(--color-accent-blue); outline-offset: 1px; }
+    .alert-dontshow-label { /* Pt.1 #CCC 12/16 */
+      font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1));
+      color: var(--color-text-light-2);
+    }
     /* Full-screen takeover fade — appear: fade in + up; close: fade out + down.
        Backdrop fades opacity; the card (.tk-card) also slides 8px. Driven by
        tkShow/tkHide (main.js) toggling .tk-open (+ .tk-closing during exit). */
@@ -893,6 +930,10 @@
       display: flex;
       align-items: center;
       gap: 4px;
+      /* Span the row so the spell can right-align against the chevron
+         (.action-spell.align-right) when a right-stack button is hovered. */
+      flex: 1 1 auto;
+      min-width: 0;
     }
     .status-square {
       width: 24px;
@@ -1046,6 +1087,10 @@
       pointer-events: none;
     }
     .action-spell.visible { opacity: 1; }
+    /* Hovering any right-stack control slides the spell to the row's right
+       edge so it sits beside the button it describes (JS derives this from
+       whether the hovered control lives outside the left .activity-status). */
+    .action-spell.align-right { margin-left: auto; margin-right: 4px; }
     /* Monogram/16 — SS3 has no condensed cut; SemiBold + -4% tracking
        approximates the old Adobe Clean SemiCn Bold */
     .mcp-tile .monogram {
@@ -1315,19 +1360,18 @@
     .settings-card { /* ModalContainer 447:4824 — bg/input, r16, pad4 gap4.
          Hugs its widest .settings-item's real content (usually the Models
          row's fixed 184px control column, or an account row's label) —
-         The existing 340px minimum is a roomier floor than the Figma spec,
-         not a fixed card width,
+         the 280px minimum is the Figma spec floor, not a fixed card width,
          so a genuinely wider row can grow the card instead of every row
-         squeezing to fit a fixed 280. Every .settings-item then fills this
+         squeezing to fit. Every .settings-item then fills this
          resolved width (see .settings-item width:100% below). */
       display: flex;
       flex-direction: column;
       align-items: center; /* counterAxis CENTER */
       gap: 4px;
       width: max-content;
-      min-width: calc(340px * var(--chat-text, 1)); /* Keep the established
-        baseline roomy at 100%, then let the whole Settings card grow with the
-        text-size control; still hugs wider content + is capped by max-width. */
+      min-width: calc(280px * var(--chat-text, 1)); /* Figma spec floor; the
+        card can shrink to 280 (× the text scale) and grows with the text-size
+        control above it; still hugs wider content + is capped by max-width. */
       max-width: 100%; /* never exceed settings-modal's padded box, at any panel width */
       max-height: 100%;
       overflow-y: auto;
@@ -1412,11 +1456,14 @@
        slot's height is constant — max of both children's natural size, matching
        the design intent that the loader/gate is sized the same as Model ready
        to avoid a card-height jump. */
-    .model-slot { display: grid; grid-template-columns: 1fr; }
-    .model-slot > .settings-item { grid-column: 1; grid-row: 1; transition: opacity 0.18s ease-out; }
+    .model-slot, .account-slot { display: grid; grid-template-columns: 1fr; }
+    .model-slot > .settings-item, .account-slot > .settings-item { grid-column: 1; grid-row: 1; transition: opacity 0.18s ease-out; }
     /* .is-off = "not the active state": stays laid out (so the slot height
        doesn't collapse) but fades away and stops taking hover/click. */
-    .model-slot > .settings-item.is-off { visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out, visibility 0s 0.18s; }
+    .model-slot > .settings-item.is-off, .account-slot > .settings-item.is-off { visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 0.18s ease-out, visibility 0s 0.18s; }
+    /* Account loading = spinner only, centered, sized to match the resolved row
+       so the slot height doesn't jump (same intent as the model loader). */
+    .account-loading { display: flex; align-items: center; justify-content: center; }
 
     /* Multiline type: apply the wrap policy to the rendered text leaves, not
        to `body`. Several components set `white-space`, which otherwise resets
@@ -1455,7 +1502,11 @@
     .account-avatar { width: 31px; height: 31px; border-radius: 8px; background: var(--color-btn-primary-bg) center/cover no-repeat; flex-shrink: 0; }
     #setCliAvatar { background-color: transparent; background-image: url("img/account-galaxy-cli.png"); }
     #setApiAvatar { background-color: transparent; background-image: url("img/account-galaxy-api.png"); }
-    .effort-head { display: flex; flex-direction: column; gap: 0; } /* 484:31616 itemSpacing 0 */
+    /* 484:31616 — VERTICAL, primaryAxisAlignItems CENTER, itemSpacing 0. Reserve
+       the two-line (caption 15 + value 16) height always so the row keeps the
+       same height when the value is hidden (no-effort), and center the content so
+       the lone "Effort" caption aligns with the pill instead of floating on top. */
+    .effort-head { display: flex; flex-direction: column; justify-content: center; gap: 0; min-height: calc(31px * var(--chat-text, 1)); }
     /* Effort slider (484:30131) — #000@.5 r8 track, 5 dot-frames + 1 thumb,
        space-between. Mirrors Figma tree exactly: Dot(24w)>Circle(4px);
        Handle(18w)>fill(224w, clipped)>knob(16x24 r6). Dots left of thumb blue,
@@ -1480,6 +1531,12 @@
     .effort-slider .e-thumb { position: absolute; top: 2px; left: 0; width: 18px; height: 24px; display: flex; align-items: center; justify-content: center; transform: translateX(-50%); pointer-events: none; z-index: 1; transition: left 0.16s ease; } /* Handle 484:30631 = 18px */
     .effort-slider .e-knob { width: 16px; height: 24px; border-radius: 6px; background: var(--color-accent-blue); } /* Handle 484:30565 = 16x24 r6 */
     .effort-slider.dragging .e-thumb, .effort-slider.dragging .e-fill { transition: none; } /* 1:1 finger-follow during drag; CSS eases the settle on release */
+    /* No-effort state (Figma 529:19259 "Model selector · no effort"): the model
+       doesn't offer effort. The track stays but becomes a disabled pill with a
+       centered "Not offered" label; dots, thumb, and input are gone, and the
+       secondary value label is hidden (Main Label 484:31618 is visible:false). */
+    .effort-slider.is-na { cursor: default; background: var(--color-bg-table-row); } /* disabled pill fill #000@20% (var 284:1410) — lighter than the active track's @50% */
+    .effort-slider .e-na { flex: 1 1 auto; text-align: center; font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-dimmest); } /* "Not offered" #666 — label 484:30132 */
   </style>
 </head>
 <body>
@@ -1556,7 +1613,7 @@
         </span>
         <span id="actionSpell" class="action-spell" data-fig="291:11938"></span>
       </span>
-      <button type="button" class="activity-more icon-btn" aria-label="Toggle activity details">
+      <button type="button" class="activity-more icon-btn" aria-label="Show or hide MCPs">
         <span id="moreChevron" class="gicon"></span>
       </button>
     </summary>
@@ -1639,21 +1696,29 @@
             </span>
           </div>
         </div>
-        <!-- Account / CLI — canonical row: Left Block (avatar chip + email +
-             "CLI • team" secondary) + Controls (Sign out). -->
-        <div class="settings-item" data-fig="I478:13117;478:11902">
-          <div class="row1">
-            <span class="row1-left">
-              <span class="account-avatar" id="setCliAvatar" data-fig="I478:13117;478:11902;475:10182"></span>
-              <div class="item-col">
-                <span class="item-title" id="setCliEmail" data-fig="I478:13117;478:11902;475:10185">Signed out</span>
-                <span class="item-sub meta" id="setCliMeta" data-fig="I478:13117;478:11902;475:10557">CLI</span>
-              </div>
-            </span>
-            <span class="row1-controls">
-              <button id="setSignInBtn" class="text-btn informed" hidden>Sign in</button>
-              <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
-            </span>
+        <!-- Account / CLI — spinner -> resolved cross-fade (same .account-slot
+             mechanics as the model picker), so auth resolving never flashes the
+             wrong state: a neutral spinner holds until auth_status lands. -->
+        <div class="account-slot">
+          <!-- Loading: auth unknown. Spinner only (TypingIndicator 215:2620). -->
+          <div class="settings-item account-loading" id="accountLoading" aria-hidden="true">
+            <span class="typing-indicator"><i></i><i></i><i></i></span>
+          </div>
+          <!-- Resolved row: Left Block (avatar chip + email + "CLI • team") + Controls. -->
+          <div class="settings-item is-off" id="accountRow" data-fig="I478:13117;478:11902">
+            <div class="row1">
+              <span class="row1-left">
+                <span class="account-avatar" id="setCliAvatar" data-fig="I478:13117;478:11902;475:10182"></span>
+                <div class="item-col">
+                  <span class="item-title" id="setCliEmail" data-fig="I478:13117;478:11902;475:10185"></span>
+                  <span class="item-sub meta" id="setCliMeta" data-fig="I478:13117;478:11902;475:10557">CLI</span>
+                </div>
+              </span>
+              <span class="row1-controls">
+                <button id="setSignInBtn" class="text-btn informed" hidden>Sign in</button>
+                <button id="setSignOutBtn" class="text-btn danger" data-fig="I478:13117;478:11902;475:10194">Sign out</button>
+              </span>
+            </div>
           </div>
         </div>
         <!-- Account / API (scaffold — NO real key handling; masked/demo text only,
@@ -1720,15 +1785,42 @@
           <span class="effort-slider" id="setEffortDots" data-fig="I484:27883;484:30131"></span>
         </div>
         </div>
+        <!-- Reset Modals (542:22027) — restores dialogs the user hid via a
+             modal's "Don't show this again". Shown only when at least one is
+             stored (openSettings toggles it). -->
+        <div class="settings-item" id="setResetDialogsItem" data-fig="542:22027" hidden>
+          <div class="row1">
+            <div class="row1-left">
+              <div class="item-col">
+                <span class="item-title" data-fig="I542:22029;475:10185">Reset modals</span>
+                <span class="item-sub" data-fig="I542:22029;475:10570">They annoy, but can be helpful</span>
+              </div>
+            </div>
+            <div class="row1-controls">
+              <button id="setResetDialogsBtn" class="text-btn informed" data-fig="I542:22029;475:10193">Reset</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="alert-backdrop tk-anim" id="alertModal" hidden data-fig="487:38896">
     <div class="alert-card tk-card" data-fig="487:38216">
+      <!-- Optional header (Settings Header 541:20539) — shown for dismissible modals. -->
+      <div class="alert-header" id="alertModalHeader" data-fig="541:20539" hidden>
+        <p class="alert-header-title" id="alertModalHeaderTitle"></p>
+        <button class="icon-btn hollow" id="alertModalDismiss" title="Dismiss" data-fig="I541:20539;475:10044"></button>
+      </div>
       <div class="alert-message" data-fig="487:38651">
         <p class="alert-title" id="alertModalTitle" data-fig="487:38590" hidden></p>
         <p class="alert-body" id="alertModalBody" data-fig="487:38596"></p>
+        <!-- Optional "don't show again" (Message>Controls 487:38602) — shown when dontShowAgain is set. -->
+        <label class="alert-dontshow" id="alertModalDontShow" data-fig="487:38602" hidden>
+          <input type="checkbox" id="alertModalDontShowInput">
+          <span class="alert-checkbox" data-fig="487:38645"><span class="gicon"></span></span>
+          <span class="alert-dontshow-label" id="alertModalDontShowLabel" data-fig="487:38649">Don't show this again</span>
+        </label>
       </div>
       <div class="alert-controls" data-fig="487:38638">
         <button class="alert-btn" id="alertModalCancel" hidden>Cancel</button>
