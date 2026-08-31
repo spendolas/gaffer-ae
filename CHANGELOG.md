@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.6 — 2026-08-31
+
+**Settings polish: model, account, and dialog surfaces.**
+
+- **Models without effort levels read clearly.** A model that offers no effort setting now shows a "Not offered" control the same size as the normal effort slider, instead of a blank or missing one.
+- **The account panel no longer flashes "signed out."** While Gaffer checks your Claude Code login it shows a brief spinner, then fades in your account, instead of briefly showing the signed-out state first.
+- **Clearer sign-out explanation**, and dialog text no longer leaves a single word stranded on its own line.
+- **Tidier dialogs.** Some dialogs can be dismissed from a header, a "don't show again" option is available, and there is a way to reset dialogs you have hidden.
+- **Activity summary.** The details toggle now clearly reads Show / Hide MCPs.
+
 ## v0.9.5 — 2026-08-30
 
 **Updates apply without a restart, plus cleaner chat formatting.**
