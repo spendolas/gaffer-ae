@@ -744,11 +744,14 @@
           applyTextScale();
         }
         if (data.dismissedUpdateCommit) {
+          // Remember only WHICH banner the user dismissed, so a completed check
+          // can keep that banner suppressed. Do NOT resurrect availability from
+          // it: the Update CTA must appear only after a fresh check confirms a
+          // newer remote commit (unknown != update-available, same rule as the
+          // account card / model discovery). Seeding availableUpdateCommit here
+          // flashed the Settings Update CTA on every reload until the async
+          // check (or dev-detect) resolved.
           dismissedUpdateCommit = data.dismissedUpdateCommit;
-          // Dismissed means "hide the banner", not "forget the update".
-          // Preserve the Settings safeguard across panel reloads, including
-          // when automatic checks are disabled.
-          availableUpdateCommit = data.dismissedUpdateCommit;
         }
         if (Array.isArray(data.enabledMcps)) {
           enabledMcps = data.enabledMcps.slice();
@@ -3320,7 +3323,13 @@
   function syncSettingsUpdateButton() {
     var button = document.getElementById('setUpdateBtn');
     if (!button) return;
-    var available = !!availableUpdateCommit && !window.__gafferUpdating;
+    // Show ONLY when a completed check has confirmed an available update whose
+    // commit differs from the local build. Pre-check / in-flight / up-to-date
+    // all leave availableUpdateCommit null (or equal to local) -> no CTA.
+    var localCommit = versionData && versionData.commit;
+    var available = !!availableUpdateCommit
+      && availableUpdateCommit !== localCommit
+      && !window.__gafferUpdating;
     button.hidden = !available;
   }
   function syncSettings() {
