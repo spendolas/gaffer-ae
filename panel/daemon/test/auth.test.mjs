@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authStatus, signIn, signOut } from '../auth.js';
+import { authStatus, authIdentityFromDisk, signIn, signOut } from '../auth.js';
 import { execFile as _execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
@@ -166,4 +166,67 @@ test('signOut invokes the real CLI arg shape (auth logout)', async () => {
   const r = await signOut('claude', { execFileFn });
   assert.equal(r.ok, true);
   assert.match(readFileSync(argvFile, 'utf8'), /"auth","logout"/);
+});
+
+// ── authIdentityFromDisk — the fast, subprocess-free account-card reader ──
+
+test('authIdentityFromDisk maps a signed-in OAuth account from disk', async () => {
+  const s = await authIdentityFromDisk({}, {
+    readAccount: () => ({ emailAddress: 'a@b.co', organizationName: 'Acme' }),
+    readCredential: async () => ({ present: true, token: 'tok', subscriptionType: 'team' }),
+  });
+  assert.equal(s.loggedIn, true);
+  assert.equal(s.authMethod, 'claude.ai');
+  assert.equal(s.email, 'a@b.co');
+  assert.equal(s.orgName, 'Acme');
+  assert.equal(s.subscriptionType, 'team');
+});
+
+test('authIdentityFromDisk returns loggedIn:false only on a definitive absence', async () => {
+  const s = await authIdentityFromDisk({}, {
+    readAccount: () => null,
+    readCredential: async () => ({ present: false, definitive: true }),
+  });
+  assert.equal(s.loggedIn, false);
+});
+
+test('authIdentityFromDisk returns loggedIn:null on an indeterminate credential read', async () => {
+  // A transient keychain/read error must NOT read as a false signed-out.
+  const s = await authIdentityFromDisk({}, {
+    readAccount: () => ({ emailAddress: 'a@b.co' }),
+    readCredential: async () => ({ present: false, definitive: false }),
+  });
+  assert.equal(s.loggedIn, null);
+});
+
+test('authIdentityFromDisk treats an explicit API key as signed in without profile', async () => {
+  let read = false;
+  const s = await authIdentityFromDisk({ ANTHROPIC_API_KEY: 'sk-x' }, {
+    readAccount: () => { read = true; return null; },
+    readCredential: async () => { read = true; return null; },
+  });
+  assert.equal(s.loggedIn, true);
+  assert.equal(s.authMethod, 'apiKey');
+  assert.equal(read, false); // never touches disk when an explicit key is set
+});
+
+test('authIdentityFromDisk signs in even when the profile file is missing', async () => {
+  // Credential present but ~/.claude.json unreadable: still signed in, email/org
+  // simply omitted (card degrades gracefully).
+  const s = await authIdentityFromDisk({}, {
+    readAccount: () => null,
+    readCredential: async () => ({ present: true, token: 'tok', subscriptionType: 'pro' }),
+  });
+  assert.equal(s.loggedIn, true);
+  assert.equal(s.email, undefined);
+  assert.equal(s.orgName, undefined);
+  assert.equal(s.subscriptionType, 'pro');
+});
+
+test('authIdentityFromDisk never throws — a throwing reader yields loggedIn:null', async () => {
+  const s = await authIdentityFromDisk({}, {
+    readAccount: () => { throw new Error('boom'); },
+    readCredential: async () => ({ present: true, token: 't' }),
+  });
+  assert.equal(s.loggedIn, null);
 });

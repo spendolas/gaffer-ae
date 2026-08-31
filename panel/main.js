@@ -290,6 +290,10 @@
   function renderAuth(s) {
     lastAuth = s || {};
     authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
+    // Auth resolved (or moved back to unknown): cancel any pending spinner-defer
+    // so a fast reply never trips a late spinner, and a later unknown window
+    // re-arms fresh.
+    if (authLoggedIn === true || authLoggedIn === false) clearAccountSpinnerDefer();
     var card = document.getElementById('signInCard');
     var signedOut = authLoggedIn === false;
     if (card) card.classList.toggle('visible', signedOut);
@@ -3333,6 +3337,29 @@
   // still trips the timer and shows one. Well below any network latency, well
   // above cache+WS latency.
   var MODEL_SPINNER_DELAY_MS = 120;
+  // Account / CLI card: the daemon now answers auth_status from disk (single-
+  // digit ms) instead of a ~500ms subprocess, so a spinner would only flash.
+  // Same treatment as the model card: while auth is unknown, hold the slot BLANK
+  // and reveal the loader only if the reply hasn't landed within the grace
+  // window. A fast disk-backed reply resolves the row with no spinner frame.
+  var accountSpinnerAllowed = false;
+  var accountSpinnerTimer = null;
+  function armAccountSpinnerDefer() {
+    if (accountSpinnerTimer) return;         // already waiting
+    accountSpinnerAllowed = false;
+    accountSpinnerTimer = setTimeout(function () {
+      accountSpinnerTimer = null;
+      accountSpinnerAllowed = true;
+      if (authLoggedIn !== true && authLoggedIn !== false
+        && typeof settingsModalEl !== 'undefined' && settingsModalEl && tkOpen(settingsModalEl)) {
+        syncSettings();                      // still unknown -> reveal the spinner
+      }
+    }, MODEL_SPINNER_DELAY_MS);
+  }
+  function clearAccountSpinnerDefer() {
+    if (accountSpinnerTimer) { clearTimeout(accountSpinnerTimer); accountSpinnerTimer = null; }
+    accountSpinnerAllowed = false;
+  }
   function clearModelDiscoveryTimers() {
     if (modelCatalogTimer) { clearTimeout(modelCatalogTimer); modelCatalogTimer = null; }
     if (modelSpinnerDelayTimer) { clearTimeout(modelSpinnerDelayTimer); modelSpinnerDelayTimer = null; }
@@ -3407,7 +3434,14 @@
     var acctLoading = document.getElementById('accountLoading');
     var acctRow = document.getElementById('accountRow');
     var acctKnown = authLoggedIn === true || authLoggedIn === false;
-    showAsyncSlot(acctLoading, acctRow, acctKnown); // spinner while unknown -> resolved row fades in
+    if (acctKnown) {
+      showAsyncSlot(acctLoading, acctRow, true); // resolved row in, spinner off
+    } else {
+      // Unknown: hold BOTH off (blank) until the grace window elapses, so a fast
+      // disk-backed auth reply cross-fades straight to the row with no spinner.
+      slotToggle(acctRow, false);
+      slotToggle(acctLoading, accountSpinnerAllowed);
+    }
     if (authLoggedIn === true) {
       em.textContent = lastAuth.email || 'Signed in';
       meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
@@ -3437,6 +3471,10 @@
     // its 'ready' controls — requestModelCatalog only reveals the spinner if the
     // reply is slow (a live fetch), so a fresh cache hit never flashes one.
     if (modelDiscoveryState !== 'ready') modelDiscoveryState = 'pending';
+    // If auth hasn't resolved yet (the brief on-connect window), hold the account
+    // slot blank and defer its spinner past the grace window — the auth_status
+    // reply is now a fast disk read, so it almost always beats the timer.
+    if (authLoggedIn !== true && authLoggedIn !== false) armAccountSpinnerDefer();
     // Reset-modals row appears only when at least one dialog is suppressed.
     var resetItem = document.getElementById('setResetDialogsItem');
     if (resetItem) resetItem.hidden = !hasSuppressedModals();
