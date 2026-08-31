@@ -4,6 +4,7 @@
 
 **Settings polish: model, account, and dialog surfaces.**
 
+- **Settings open faster and work offline.** Gaffer remembers your available models for a day and reads your account details locally, so Settings opens right away, without a spinner or a network round-trip, and keeps working during brief login-token gaps. It refreshes quietly after a chat and re-checks when you sign in or out.
 - **Models without effort levels read clearly.** A model that offers no effort setting now shows a "Not offered" control the same size as the normal effort slider, instead of a blank or missing one.
 - **The account panel no longer flashes "signed out."** While Gaffer checks your Claude Code login it shows a brief spinner, then fades in your account, instead of briefly showing the signed-out state first.
 - **No phantom "Update" button.** After a reload the Update control no longer appears for a moment when nothing is available; it shows only once a check confirms a newer version.
