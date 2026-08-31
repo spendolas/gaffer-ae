@@ -3115,7 +3115,7 @@
   // controls (native CEF title tooltips don't render in the panel). The
   // centre glyph doubles as the readout — it shows the current percent.
   wireSpell(textDecEl, function () { return 'Smaller text'; });
-  wireSpell(textResetEl, function () { return 'Text size ' + Math.round(textScale * 100) + '% · tap to reset'; });
+  wireSpell(textResetEl, function () { return 'Reset text'; });
   wireSpell(textIncEl, function () { return 'Larger text'; });
   applyTextScale(); // initialize label + disabled states at load
 
