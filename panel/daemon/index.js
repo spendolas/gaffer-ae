@@ -100,6 +100,9 @@ bridge.onSignIn = async (msg, socket) => {
   const r = await activeSignIn.done;
   activeSignIn = null;
   signInInFlight = false;
+  // A sign-in may have switched accounts — drop the model cache so the next
+  // Settings open discovers the new account's catalog, never the old one's.
+  chatHandler.invalidateModelCache();
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
     if (r.ok && r.status) sendAuthStatus(socket, r.status);
@@ -112,6 +115,8 @@ bridge.onSignOut = async (socket) => {
   catch (e) { sendAuthStatus(socket, { loggedIn: null }); return; }
   const env = augmentedEnv();
   const r = await signOut(bin, { env: env });
+  // Signed out — clear the cached catalog so it can't leak to a later account.
+  chatHandler.invalidateModelCache();
   if (r.ok) sendAuthStatus(socket, { loggedIn: false });
   else sendAuthStatus(socket, await authStatus(bin, { env: env })); // logout failed → report real state
 };

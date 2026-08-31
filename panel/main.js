@@ -130,8 +130,11 @@
   var currentEffort = 'medium'; // low | medium | high | xhigh | max
   // Discovery reads the Claude Code credential silently (open-ACL Keychain item
   // / creds file) — no OS prompt ever fires, so there's no first-visit "Allow"
-  // gate on any platform. States: loading (spinner) | ready | retry.
-  var modelDiscoveryState = 'loading';
+  // gate on any platform. States: pending (blank, spinner deferred) | loading
+  // (spinner) | ready | retry. 'pending' is the open-window before we know
+  // whether the daemon served a fresh disk cache (fast, no spinner) or must do
+  // a live /v1/models fetch (slow, spinner after ~120ms) — see requestModelCatalog.
+  var modelDiscoveryState = 'pending';
   var modelDiscoveryReason = null; // diagnostic only; retry copy stays generic
   var autoCheckUpdates = true;
   var autoModel = false; // off by default; persisted in chat-history.json
@@ -2760,7 +2763,9 @@
     currentEffort = discoveredEfforts.length ? nearestEffort(currentEffort, discoveredEfforts) : null;
   }
   function applyModelOptions(data) {
-    if (modelCatalogTimer) { clearTimeout(modelCatalogTimer); modelCatalogTimer = null; }
+    // A reply landed — cancel both the deferred-spinner timer and the safety
+    // timeout so neither fires after we've resolved (a late spinner would flash).
+    clearModelDiscoveryTimers();
     modelDiscoveryReason = data.modelAccess || null;
     if (data.live && Array.isArray(data.models) && data.models.length) {
       modelDiscoveryState = 'ready';
@@ -3302,38 +3307,63 @@
     setVis(controls, ready, true);
     setVis(gate, !ready, true);
     if (ready) return;
-    // Only two non-ready gate states remain: loading (spinner only, no copy —
-    // design 530:19756) and retry (copy + Try again). Set each element's TARGET
-    // visibility once — never reset-to-shown-then-hide (that fades copy in before
-    // hiding it on a non-snap render into loading, which reads as a flash).
+    // Three non-ready gate states: pending (blank — spinner deferred while we
+    // wait to see if the daemon served a fresh cache), loading (spinner only,
+    // no copy — design 530:19756) and retry (copy + Try again). Set each
+    // element's TARGET visibility once — never reset-to-shown-then-hide (that
+    // fades copy in before hiding it on a non-snap render, which reads as a flash).
     var showSpinner = modelDiscoveryState === 'loading';
-    if (modelDiscoveryState === 'retry') {
+    var showRetry = modelDiscoveryState === 'retry';
+    if (showRetry) {
       title.textContent = 'Couldn’t check models';
       message.textContent = 'Try again to see which Claude Code models you can use.';
       allow.textContent = 'Try again';
       allow.disabled = false;
     }
-    setVis(copy, !showSpinner, false);
-    setVis(allow, !showSpinner, false);
+    setVis(copy, showRetry, false);
+    setVis(allow, showRetry, false);
     setVis(spinner, showSpinner, false);
   }
   var modelCatalogTimer = null;
+  var modelSpinnerDelayTimer = null;
+  // Show the spinner ONLY for a genuine wait. A fresh disk-cache reply is
+  // single-digit ms (daemon read + WS round-trip); a live /v1/models fetch is
+  // 200ms–1s+. Deferring the spinner past this threshold means a cache hit
+  // resolves straight to the models with no spinner frame, while a live fetch
+  // still trips the timer and shows one. Well below any network latency, well
+  // above cache+WS latency.
+  var MODEL_SPINNER_DELAY_MS = 120;
+  function clearModelDiscoveryTimers() {
+    if (modelCatalogTimer) { clearTimeout(modelCatalogTimer); modelCatalogTimer = null; }
+    if (modelSpinnerDelayTimer) { clearTimeout(modelSpinnerDelayTimer); modelSpinnerDelayTimer = null; }
+  }
   function requestModelCatalog() {
     if (!ws || ws.readyState !== 1) {
+      clearModelDiscoveryTimers();
       modelDiscoveryState = 'retry';
       renderModelDiscovery();
       return;
     }
-    modelDiscoveryState = 'loading';
     modelDiscoveryReason = null;
-    renderModelDiscovery();
+    clearModelDiscoveryTimers();
+    // Do NOT flip to 'loading' now. Leave the gate as-is — 'pending' (blank) on
+    // a cold open, or the already-shown 'ready' controls on a warm re-open — so
+    // a fast cache hit never flashes a spinner. The caller (openSettings /
+    // syncSettings) has already rendered the current state.
     ws.send(JSON.stringify({ type: 'list_models' }));
+    // Spinner appears only if the reply is slow enough to be a live fetch.
+    modelSpinnerDelayTimer = setTimeout(function () {
+      modelSpinnerDelayTimer = null;
+      if (modelDiscoveryState !== 'ready') {
+        modelDiscoveryState = 'loading';
+        renderModelDiscovery();
+      }
+    }, MODEL_SPINNER_DELAY_MS);
     // Safety net: the daemon should always reply (applyModelOptions clears this),
     // but if a reply never comes, fall to retry so the user is never stuck.
-    if (modelCatalogTimer) clearTimeout(modelCatalogTimer);
     modelCatalogTimer = setTimeout(function () {
       modelCatalogTimer = null;
-      if (modelDiscoveryState === 'loading') {
+      if (modelDiscoveryState !== 'ready') {
         modelDiscoveryState = 'retry';
         renderModelDiscovery();
       }
@@ -3399,11 +3429,14 @@
     renderModelDiscovery();
   }
   function openSettings() {
-    // Every platform: spinner -> models. The daemon reads the Claude Code
-    // credential silently (its Keychain item has an open ACL — no system prompt
-    // ever fires), so there's no macOS "Allow / approve the prompt" ceremony;
-    // that was staging users for a dialog that structurally can't appear.
-    modelDiscoveryState = 'loading';
+    // The daemon reads the Claude Code credential silently (its Keychain item
+    // has an open ACL — no system prompt ever fires), so there's no macOS
+    // "Allow / approve the prompt" ceremony; that was staging users for a dialog
+    // that structurally can't appear. Leave modelDiscoveryState untouched here:
+    // a cold open stays 'pending' (blank, no spinner) and a warm re-open keeps
+    // its 'ready' controls — requestModelCatalog only reveals the spinner if the
+    // reply is slow (a live fetch), so a fresh cache hit never flashes one.
+    if (modelDiscoveryState !== 'ready') modelDiscoveryState = 'pending';
     // Reset-modals row appears only when at least one dialog is suppressed.
     var resetItem = document.getElementById('setResetDialogsItem');
     if (resetItem) resetItem.hidden = !hasSuppressedModals();
