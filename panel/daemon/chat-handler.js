@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { findClaudeBinary } from './claude-binary.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -48,6 +48,53 @@ var ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 var NO_XHIGH_EFFORTS = ['low', 'medium', 'high', 'max'];
 
 var MODEL_DISCOVERY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// Persisted model-catalog cache TTL. A day is well within a single work
+// session's relevance yet short enough that newly available models surface on
+// the next day's first Settings open even for a user who never chats (chat's
+// background refresh keeps active users current within the day). See
+// ChatHandler.listModelOptions / _loadPersistedCache.
+var MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+// Derive a stable per-account identity for keying the persisted cache — from
+// FILES ONLY, never a subprocess, so a cache-hit open stays fast (a spawned
+// `claude auth status` would add ~500ms and defeat the whole point of skipping
+// the network). NEVER a raw token on disk.
+//   - Explicit API-key / bearer installs: a salted-free sha256 *fingerprint* of
+//     the key (stable — API keys don't rotate; the raw key never leaves memory).
+//   - OAuth installs: the account identity Claude Code persists in ~/.claude.json
+//     (accountUuid preferred — stable and PII-free; email/org uuid as fallbacks).
+// null => identity unknown; callers then decline to serve a persisted catalog as
+// "fresh" (they fall back to a live fetch) and never cross-serve accounts.
+function accountIdFromEnvAndConfig(env) {
+  var explicit = env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN;
+  if (explicit) {
+    try { return 'key:' + createHash('sha256').update(String(explicit)).digest('hex').slice(0, 16); }
+    catch (e) { return null; }
+  }
+  var candidates = [];
+  if (env.CLAUDE_CONFIG_DIR) candidates.push(join(env.CLAUDE_CONFIG_DIR, '.claude.json'));
+  candidates.push(join(homedir(), '.claude.json'));
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      var acc = JSON.parse(readFileSync(candidates[i], 'utf8')).oauthAccount;
+      if (acc) {
+        if (acc.accountUuid) return 'uuid:' + String(acc.accountUuid);
+        if (acc.emailAddress) return 'email:' + String(acc.emailAddress);
+        if (acc.organizationUuid) return 'org:' + String(acc.organizationUuid);
+      }
+    } catch (e) { /* missing/corrupt — try the next candidate */ }
+  }
+  return null;
+}
+
+// A persisted cache belongs to the current account only when both identities
+// are known AND equal. Unknown identity (either side null) never matches — a
+// different account must never inherit the previous account's catalog.
+function accountMatches(persisted, currentAccountId) {
+  return !!(persisted && currentAccountId != null
+    && persisted.accountId != null && persisted.accountId === currentAccountId);
+}
 
 // Parse the Claude Code OAuth blob into { token, expiresAt }. expiresAt (ms
 // epoch) lets discovery detect a stale access token BEFORE calling the API, so
@@ -489,7 +536,8 @@ function makeClassifyRun(claudeBin) {
 }
 
 export class ChatHandler {
-  constructor() {
+  constructor(opts) {
+    opts = opts || {};
     this.activeProcess = null;
     this.sessionId = null;
     this.lastInputTokens = 0;
@@ -504,6 +552,76 @@ export class ChatHandler {
     // fetched live from this account — so serving it isn't the "stale CLI alias"
     // problem the fail-closed rule guards against.
     this.cachedCatalog = null;
+    // Persisted TTL cache of the model catalog: { catalog, fetchedAt, accountId }
+    // written next to .gaffer-config.json (same panel dir), so a fresh catalog
+    // survives daemon restarts (frequent since v0.9.5's restart-on-update) and
+    // avoids a network round-trip on Settings open. Path is injectable for
+    // tests (and via env) so tests never touch the real install's cache.
+    this._cacheFilePath = opts.cacheFilePath
+      || process.env.GAFFER_MODEL_CACHE_PATH
+      || join(PANEL_DIR, '.gaffer-model-cache.json');
+    // Injection seams (tests): fetch, account identity, and clock.
+    this._fetchCatalog = opts.fetchCatalog || null; // else module fetchModelCatalog
+    this._accountIdFn = opts.accountIdFn || null;    // else resolve from disk config
+    this._now = opts.now || Date.now;                // clock for TTL/fetchedAt
+  }
+
+  // Resolve a stable identity for the currently signed-in account from disk
+  // (fast — no subprocess, no network) so keying the cache never slows a
+  // cache-hit open. Never throws — null on any failure, which callers treat as
+  // "can't confirm the account" (go live, don't serve a persisted catalog as
+  // fresh, never cross-serve accounts).
+  async _resolveAccountId() {
+    if (this._accountIdFn) {
+      try { return await this._accountIdFn(); } catch (e) { return null; }
+    }
+    return accountIdFromEnvAndConfig(augmentedEnv());
+  }
+
+  // Read the persisted cache. Tolerant of a missing/corrupt/foreign file:
+  // any problem => null (treated as no cache). Returns
+  // { catalog, fetchedAt, accountId } or null.
+  _loadPersistedCache() {
+    try {
+      var obj = JSON.parse(readFileSync(this._cacheFilePath, 'utf8'));
+      if (!obj || typeof obj !== 'object') return null;
+      if (!obj.catalog || typeof obj.catalog !== 'object') return null;
+      if (typeof obj.fetchedAt !== 'number' || !isFinite(obj.fetchedAt)) return null;
+      return {
+        catalog: obj.catalog,
+        fetchedAt: obj.fetchedAt,
+        accountId: obj.accountId != null ? String(obj.accountId) : null,
+      };
+    } catch (e) { return null; }
+  }
+
+  // Persist a freshly fetched catalog. Best-effort: a read-only/again-Dropbox'd
+  // fs just means the next open refetches. Never throws.
+  _writePersistedCache(catalog, accountId) {
+    try {
+      writeFileSync(this._cacheFilePath, JSON.stringify({
+        catalog: catalog,
+        fetchedAt: this._now(),
+        accountId: accountId != null ? String(accountId) : null,
+      }), 'utf8');
+    } catch (e) { /* best-effort */ }
+  }
+
+  // A persisted cache is fresh when it belongs to the current account and its
+  // fetchedAt is within the TTL. Clock skew defense: a non-finite or future
+  // (negative age) timestamp counts as stale, never as infinitely fresh.
+  _isPersistedCacheFresh(persisted, currentAccountId) {
+    if (!accountMatches(persisted, currentAccountId)) return false;
+    var age = this._now() - persisted.fetchedAt;
+    return age >= 0 && age <= MODEL_CACHE_TTL_MS;
+  }
+
+  // Drop the persisted + in-memory cache. Called on sign-in/sign-out so a
+  // different account never sees the previous account's models.
+  invalidateModelCache() {
+    this.cachedCatalog = null;
+    this.liveModelCapabilities = null;
+    try { unlinkSync(this._cacheFilePath); } catch (e) { /* already gone */ }
   }
 
   // Discover the account's currently callable models from Anthropic's live
@@ -511,24 +629,48 @@ export class ChatHandler {
   // last live catalog (refreshed automatically the next time the token is
   // valid, e.g. right after a chat — see refreshCatalogInBackground).
   async listModelOptions() {
-    // _fetchCatalog is an injection seam for tests; defaults to the live fetch.
+    var currentAccountId = await this._resolveAccountId();
+    var persisted = this._loadPersistedCache();
+
+    // 1) Fresh persisted cache for THIS account → resolve straight from disk,
+    //    no network. `fromCache:true` lets the panel skip the spinner (a
+    //    disk+WS round-trip is single-digit ms). Presents as a normal live
+    //    catalog (modelAccess 'ready') so the picker is identical to a fetch.
+    if (this._isPersistedCacheFresh(persisted, currentAccountId)) {
+      this.cachedCatalog = persisted.catalog;
+      this.liveModelCapabilities = persisted.catalog.capabilitiesByModel;
+      return Object.assign({}, persisted.catalog, {
+        live: true, modelAccess: 'ready', fromCache: true,
+      });
+    }
+
+    // 2) Stale/missing/foreign-account cache → live fetch. `_fetchCatalog` is an
+    //    injection seam for tests; defaults to the live fetch.
     var result = await (this._fetchCatalog || fetchModelCatalog)(augmentedEnv());
     if (result && result.catalog) {
       this.liveModelCapabilities = result.catalog.capabilitiesByModel;
       this.cachedCatalog = result.catalog;
+      this._writePersistedCache(result.catalog, currentAccountId);
       return result.catalog;
     }
-    // Token expired (or the fetch failed) but we have a prior live catalog:
-    // serve it so the picker keeps working instead of stranding on retry.
-    if (this.cachedCatalog) {
-      this.liveModelCapabilities = this.cachedCatalog.capabilitiesByModel;
-      return Object.assign({}, this.cachedCatalog, {
-        modelAccess: 'cached', cached: true,
+
+    // 3) Live fetch failed (token expired / unauthorized / network). Serve a
+    //    usable cache if we have one — the in-memory catalog, or the persisted
+    //    one for THIS account even if slightly past TTL — flagged cached rather
+    //    than failing closed. (The persisted match keeps working across a daemon
+    //    restart that emptied the in-memory catalog.)
+    var fallback = this.cachedCatalog
+      || (accountMatches(persisted, currentAccountId) ? persisted.catalog : null);
+    if (fallback) {
+      this.cachedCatalog = fallback;
+      this.liveModelCapabilities = fallback.capabilitiesByModel;
+      return Object.assign({}, fallback, {
+        live: true, modelAccess: 'cached', cached: true,
       });
     }
-    // No live catalog ever, and none cached. Fail closed: don't surface CLI
-    // aliases the account may not be entitled to. Settings shows retry; the
-    // next chat refreshes the token and discovery goes live.
+    // 4) No live catalog ever, and none cached. Fail closed: don't surface CLI
+    //    aliases the account may not be entitled to. Settings shows retry; the
+    //    next chat refreshes the token and discovery goes live.
     this.liveModelCapabilities = null;
     return {
       models: [], efforts: [], effortsByModel: {}, capabilitiesByModel: {},
@@ -546,11 +688,17 @@ export class ChatHandler {
     if (this._lastCatalogRefresh && now - this._lastCatalogRefresh < 60000) return;
     this._catalogRefreshInFlight = true;
     this._lastCatalogRefresh = now;
-    fetchModelCatalog(augmentedEnv()).then((result) => {
-      if (result && result.catalog) {
-        this.cachedCatalog = result.catalog;
-        this.liveModelCapabilities = result.catalog.capabilitiesByModel;
-      }
+    // Resolve the account first so the write-through keys the persisted cache
+    // to the current identity — keeping active users current on disk without
+    // ever blocking a Settings open on a fetch.
+    Promise.resolve(this._resolveAccountId()).then((accountId) => {
+      return fetchModelCatalog(augmentedEnv()).then((result) => {
+        if (result && result.catalog) {
+          this.cachedCatalog = result.catalog;
+          this.liveModelCapabilities = result.catalog.capabilitiesByModel;
+          this._writePersistedCache(result.catalog, accountId);
+        }
+      });
     }).catch(() => {}).finally(() => { this._catalogRefreshInFlight = false; });
   }
 

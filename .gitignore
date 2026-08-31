@@ -20,5 +20,9 @@ panel/icons/mcp/*.svg
 !panel/icons/mcp/grip.svg
 panel/.gaffer-icons/
 
+# Per-install runtime state (never committed)
+panel/.gaffer-config.json
+panel/.gaffer-model-cache.json
+
 # Local asset store (licensed fonts etc.) — never ship
 assets/
