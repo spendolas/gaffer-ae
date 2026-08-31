@@ -57,6 +57,12 @@
   var alertModalBodyEl = document.getElementById('alertModalBody');
   var alertModalOkEl = document.getElementById('alertModalOk');
   var alertModalCancelEl = document.getElementById('alertModalCancel');
+  var alertModalHeaderEl = document.getElementById('alertModalHeader');
+  var alertModalHeaderTitleEl = document.getElementById('alertModalHeaderTitle');
+  var alertModalDismissEl = document.getElementById('alertModalDismiss');
+  var alertModalDontShowEl = document.getElementById('alertModalDontShow');
+  var alertModalDontShowInputEl = document.getElementById('alertModalDontShowInput');
+  var alertModalDontShowLabelEl = document.getElementById('alertModalDontShowLabel');
 
   // Full-screen takeover fade — fade-in-up on open, fade-out-down on close.
   // Elements keep the `hidden` attr (display:none) semantics; tkShow/tkHide wrap
@@ -1140,6 +1146,31 @@
   var alertModalOnClose = null;
   var alertModalOnConfirm = null;
   var alertModalOnOk = null; // single-button action: runs on the OK button only, not on backdrop/Esc
+  var alertModalDontShowKey = null; // active "don't show again" key; suppressed only when the user proceeds
+
+  // Per-modal "don't show again" — suppressed keys persist in localStorage so a
+  // later showModal({ dontShowAgain: { key } }) skips the dialog and proceeds.
+  function readSuppressedModals() {
+    try { return JSON.parse(localStorage.getItem('gafferSuppressedModals') || '[]') || []; } catch (e) { return []; }
+  }
+  function isModalSuppressed(key) { return readSuppressedModals().indexOf(key) !== -1; }
+  function suppressModal(key) {
+    try {
+      var a = readSuppressedModals();
+      if (a.indexOf(key) === -1) { a.push(key); localStorage.setItem('gafferSuppressedModals', JSON.stringify(a)); }
+    } catch (e) { /* storage blocked → just don't persist */ }
+  }
+  function clearSuppressedModals() { try { localStorage.removeItem('gafferSuppressedModals'); } catch (e) {} }
+  function hasSuppressedModals() { return readSuppressedModals().length > 0; }
+
+  // Bind the last two words with a non-breaking space so a single word can never
+  // hang alone on the final line (a "widow"). Ch99 has no text-wrap:balance/pretty,
+  // so this is the only reliable widow guard for modal body copy.
+  function noWidow(s) {
+    s = String(s == null ? '' : s);
+    var i = s.replace(/\s+$/, '').lastIndexOf(' ');
+    return i === -1 ? s : s.slice(0, i) + ' ' + s.slice(i + 1);
+  }
 
   function showModal(message, opts) {
     opts = opts || {};
@@ -1150,15 +1181,44 @@
       if (typeof opts.onClose === 'function') opts.onClose();
       return;
     }
+    // "Don't show again" opt-out: a previously-suppressed dialog skips straight
+    // to its proceed action (onConfirm/onOk) without ever showing.
+    var dsa = opts.dontShowAgain && opts.dontShowAgain.key ? opts.dontShowAgain : null;
+    if (dsa && isModalSuppressed(dsa.key)) {
+      var proceed = typeof opts.onConfirm === 'function' ? opts.onConfirm
+        : (typeof opts.onOk === 'function' ? opts.onOk : null);
+      if (proceed) proceed();
+      return;
+    }
+    // Title lives in the header row when dismissible, else in the message block.
+    // The X close button is a separate opt-in ({ closable: true }) — off by
+    // default, so modals don't get an X unless they ask for one.
+    var dismissible = !!opts.dismissible;
+    if (alertModalHeaderEl) {
+      alertModalHeaderEl.hidden = !dismissible;
+      if (dismissible && alertModalHeaderTitleEl) alertModalHeaderTitleEl.textContent = opts.title || '';
+    }
+    if (alertModalDismissEl) alertModalDismissEl.hidden = !opts.closable;
     if (alertModalTitleEl) {
-      if (opts.title) {
+      if (opts.title && !dismissible) {
         alertModalTitleEl.textContent = opts.title;
         alertModalTitleEl.hidden = false;
       } else {
         alertModalTitleEl.hidden = true;
       }
     }
-    alertModalBodyEl.textContent = message;
+    alertModalBodyEl.textContent = noWidow(message);
+    // "Don't show again" checkbox row — reset unchecked each show.
+    alertModalDontShowKey = dsa ? dsa.key : null;
+    if (alertModalDontShowEl) {
+      if (dsa) {
+        if (alertModalDontShowInputEl) alertModalDontShowInputEl.checked = false;
+        if (alertModalDontShowLabelEl && dsa.label) alertModalDontShowLabelEl.textContent = dsa.label;
+        alertModalDontShowEl.hidden = false;
+      } else {
+        alertModalDontShowEl.hidden = true;
+      }
+    }
     alertModalOnClose = typeof opts.onClose === 'function' ? opts.onClose : null;
     alertModalOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
     alertModalOnOk = typeof opts.onOk === 'function' ? opts.onOk : null;
@@ -1195,16 +1255,25 @@
   }
 
   if (alertModalEl && alertModalOkEl) {
+    // Populate the optional elements' icons once (X dismiss, checkbox check).
+    if (alertModalDismissEl) { alertModalDismissEl.innerHTML = ''; alertModalDismissEl.appendChild(icon('close')); }
+    var alertCbIconEl = alertModalDontShowEl && alertModalDontShowEl.querySelector('.alert-checkbox .gicon');
+    if (alertCbIconEl && typeof GafferIcons !== 'undefined') alertCbIconEl.innerHTML = GafferIcons.check || '';
+    // Dismiss = drop pending actions; only proceeding (OK/confirm) can suppress.
+    function dismissAlert() { alertModalOnConfirm = null; alertModalOnOk = null; alertModalDontShowKey = null; hideModal(); }
     alertModalOkEl.addEventListener('click', function () {
       var f = alertModalOnConfirm || alertModalOnOk; // capture before hideModal clears state
-      alertModalOnConfirm = null; alertModalOnOk = null;
+      // Persist the opt-out only when the user actually proceeds with the box ticked.
+      if (alertModalDontShowKey && alertModalDontShowInputEl && alertModalDontShowInputEl.checked) suppressModal(alertModalDontShowKey);
+      alertModalOnConfirm = null; alertModalOnOk = null; alertModalDontShowKey = null;
       hideModal();
       if (f) f(); // confirm/onOk action runs after the modal is dismissed
     });
-    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); });
-    dismissOnBackdrop(alertModalEl, function () { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); }); // void click = cancel/dismiss only
+    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', dismissAlert);
+    if (alertModalDismissEl) alertModalDismissEl.addEventListener('click', dismissAlert); // header X = cancel/dismiss
+    dismissOnBackdrop(alertModalEl, dismissAlert); // void click = cancel/dismiss only
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && tkOpen(alertModalEl)) { alertModalOnConfirm = null; alertModalOnOk = null; hideModal(); }
+      if (e.key === 'Escape' && tkOpen(alertModalEl)) dismissAlert();
     });
   }
 
@@ -1742,6 +1811,10 @@
       };
       window.__gaffer.showModal = showModal;
       window.__gaffer.showNoCliModal = showNoCliModal;
+      // Model/effort review hook — drives applyModelOptions() so parity capture
+      // can force any discovered-catalog state (e.g. a no-effort model → the
+      // "Not offered" effort row) without a live daemon round-trip.
+      window.__gaffer.applyModelOptions = applyModelOptions;
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -2472,10 +2545,16 @@
   // Action spell (291:11938) — hover description in the summary row for
   // the left-cluster controls. Fades with the shared 0.15s state ease.
   var actionSpellEl = document.getElementById('actionSpell');
+  // Right-align derives from where the hovered control lives, not a flag: the
+  // spell sits inside the left cluster (.activity-status), so anything hovered
+  // OUTSIDE that cluster is a right-stack control and pulls the spell over to
+  // it. New right-stack icons inherit this automatically — no per-call wiring.
+  var spellCluster = actionSpellEl && actionSpellEl.closest('.activity-status');
   function wireSpell(el, getText) {
     if (!el || !actionSpellEl) return;
     el.addEventListener('mouseenter', function () {
       actionSpellEl.textContent = getText();
+      actionSpellEl.classList.toggle('align-right', !(spellCluster && spellCluster.contains(el)));
       actionSpellEl.classList.add('visible');
     });
     el.addEventListener('mouseleave', function () {
@@ -2494,7 +2573,7 @@
     e.preventDefault();
     showModal("This clears the current conversation and can't be undone.", {
       title: 'Clear chat?', confirmLabel: 'Clear', cancelLabel: 'Cancel',
-      danger: true, onConfirm: clearChat
+      danger: true, dismissible: true, dontShowAgain: { key: 'clear-chat' }, onConfirm: clearChat
     });
   });
   document.getElementById('reloadBtn').addEventListener('click', function (e) {
@@ -2718,12 +2797,31 @@
     var lbl = document.getElementById('setEffortLabel');
     var slider = document.getElementById('setEffortDots');
     if (!levels.length) {
+      // Effort not offered for this model. Figma 529:19259: the secondary value
+      // label (Main Label 484:31618) is visible:false, so it's hidden — not a
+      // dash — and the slider becomes a disabled pill reading "Not offered"
+      // (484:30132), with no dots, thumb, or input.
       currentEffort = null;
-      if (lbl) lbl.textContent = 'Unavailable';
-      if (slider) { slider.hidden = true; slider.innerHTML = ''; }
+      // Remove the secondary value from layout; the effort head reserves the
+      // two-line height via CSS min-height and centers its content, so the lone
+      // "Effort" caption sits vertically centered (aligned with the pill), while
+      // the row keeps the offered variant's height. Figma 529:19259: Main Label
+      // is visible:false and the caption is centered in the fixed-height frame.
+      if (lbl) lbl.hidden = true;
+      if (slider) {
+        slider.hidden = false;
+        slider.classList.add('is-na');
+        slider.innerHTML = '';
+        var na = document.createElement('span');
+        na.className = 'e-na';
+        na.textContent = 'Not offered';
+        na.setAttribute('data-fig', 'I529:19259;484:30132');
+        slider.appendChild(na);
+      }
       return;
     }
-    if (slider) slider.hidden = false;
+    if (lbl) lbl.hidden = false;
+    if (slider) { slider.hidden = false; slider.classList.remove('is-na'); }
     if (levels.indexOf(currentEffort) < 0) currentEffort = nearestEffort(currentEffort, levels);
     var idx = levels.indexOf(currentEffort); if (idx < 0) idx = 0;
     if (lbl) lbl.textContent = labelize(currentEffort);
@@ -2859,6 +2957,7 @@
     }
     function trackX(clientX) { return clientX - slider.getBoundingClientRect().left; }
     function startDrag(clientX) {
+      if (!discoveredEfforts.length) return; // disabled "Not offered" state takes no input
       effortDragging = true;
       slider.classList.add('dragging'); // transition off → thumb tracks the finger 1:1
       var px = trackX(clientX);
@@ -3014,7 +3113,7 @@
     return document.getElementById('settingsBtn').title || 'Settings';
   });
   wireSpell(document.querySelector('.activity-more'), function () {
-    return activityExpanded() ? 'Less' : 'More';
+    return activityExpanded() ? 'Hide MCPs' : 'Show MCPs';
   });
   // No refresh button — the list refreshes under the hood: on expand,
   // then every 60s while the drawer stays open (silent, no flicker).
@@ -3239,16 +3338,25 @@
     updateVariantSelect();
     soundSelect.update();
     renderEffort();
-    // Account / CLI from last auth status
+    // Account / CLI — keyed on authLoggedIn (null = unknown, before the first
+    // auth_status reply). While unknown, hold a spinner and cross-fade to the
+    // resolved row when auth lands — the same .account-slot pattern as the model
+    // picker. Keying the row off lastAuth.loggedIn (undefined during the ~1s async
+    // auth-resolution window on ws.onopen) used to flash "Signed out" -> signed-in.
     var em = document.getElementById('setCliEmail'), meta = document.getElementById('setCliMeta');
     var so = document.getElementById('setSignOutBtn');
     var si = document.getElementById('setSignInBtn');
-    if (lastAuth && lastAuth.loggedIn) {
+    var acctLoading = document.getElementById('accountLoading');
+    var acctRow = document.getElementById('accountRow');
+    var acctKnown = authLoggedIn === true || authLoggedIn === false;
+    if (acctLoading) acctLoading.classList.toggle('is-off', acctKnown); // spinner only while unknown
+    if (acctRow) acctRow.classList.toggle('is-off', !acctKnown);        // resolved row fades in when known
+    if (authLoggedIn === true) {
       em.textContent = lastAuth.email || 'Signed in';
       meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
       so.hidden = false;
       if (si) si.hidden = true;
-    } else {
+    } else if (authLoggedIn === false) {
       em.textContent = 'Signed out';
       meta.textContent = 'CLI';
       so.hidden = true;
@@ -3256,6 +3364,8 @@
       // reach Settings without the full-screen overlay can still get in.
       if (si) si.hidden = false;
     }
+    // Unknown: resolved row is is-off (hidden) and the spinner shows; renderAuth()
+    // re-runs syncSettings when auth_status arrives, cross-fading to the row.
     // Account / API — re-render from apiState so the modal reflects the latest
     // status whenever it's opened (see renderApi() / apiState above).
     renderApi();
@@ -3267,6 +3377,9 @@
     // ever fires), so there's no macOS "Allow / approve the prompt" ceremony;
     // that was staging users for a dialog that structurally can't appear.
     modelDiscoveryState = 'loading';
+    // Reset-modals row appears only when at least one dialog is suppressed.
+    var resetItem = document.getElementById('setResetDialogsItem');
+    if (resetItem) resetItem.hidden = !hasSuppressedModals();
     syncSettings(); tkShow(settingsModalEl);
     requestModelCatalog();
     // Thumb placement measures live dot centers — re-run once the modal is
@@ -3278,6 +3391,12 @@
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
   dismissOnBackdrop(settingsModalEl, closeSettings); // void click only, not a drag out of the card
   // Wire the modal controls back to existing state/handlers.
+  var resetDialogsBtn = document.getElementById('setResetDialogsBtn');
+  if (resetDialogsBtn) resetDialogsBtn.addEventListener('click', function () {
+    clearSuppressedModals();
+    var it = document.getElementById('setResetDialogsItem'); if (it) it.hidden = true;
+    if (typeof showToast === 'function') showToast('success', 'Dialogs reset');
+  });
   document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; saveChat(); });
   document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; saveChat(); });
   // Enabling sound previews the selected cue (mirrors the reply-sound toggle).
@@ -3308,9 +3427,9 @@
     // Gaffer signs in through the Claude Code CLI, so signing out here logs the
     // whole machine out of Claude Code — confirm first (reuses the clear-chat
     // confirm modal). Humane, plain-language copy.
-    showModal("This signs the whole machine out of Claude Code, not just Gaffer. Anything here that uses it will need to sign in again. You can sign back in anytime from the CLI.", {
+    showModal("This signs the whole machine out of Claude Code, not just Gaffer. Gaffer and anything else here that uses your Claude Code login will stop working until you sign back in.", {
       title: 'Sign out of Claude Code?', confirmLabel: 'Sign out', cancelLabel: 'Cancel',
-      danger: true, onConfirm: function () { sendWs({ type: 'sign_out' }); closeSettings(); }
+      danger: true, dismissible: true, onConfirm: function () { sendWs({ type: 'sign_out' }); closeSettings(); }
     });
   });
   // Model / variant / effort / sound controls are wired natively (makeSelect +

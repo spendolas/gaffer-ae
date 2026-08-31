@@ -35,6 +35,7 @@ const EXTRA_ROOTS = [
   // now covered via organisms (component master 191:1273) + template (209:1449).
   // Panel data-fig anchors in the 427:30xx region are stale → coverage-gap until re-anchored.
   { id: '428:3200', slug: 'reply-quote' }, // canonical Reply Quote COMPONENT (427:3102 is a stale draft)
+  { id: '526:18256', slug: 'settings-fullscreen' }, // SettingsFullScreen — models/settings panel surface
   // { id: '284:2052', slug: 'panel-template-instance' }, // inside MCP_IGNORE — excluded per "respect .MCP_IGNORE"
 ];
 // Documentation / reference art on the page — real design, but not a panel
@@ -47,6 +48,12 @@ const NON_SURFACE = new Set([
   '302:4143', // Markdown exemplar — native (reference)
   '303:12339', // Text Styles — Contact Sheet (reference)
   '384:1634', // Palette swatches (reference)
+  // Model-access design work — flow/review boards, not literal panel surfaces.
+  '526:17160', // Model Access / Review (reference)
+  '526:18593', // Model access / User flows (reference)
+  '528:18941', // Designed states · FLOW 3 · Windows (reference)
+  '528:18942', // Designed states · FLOW 3 · Windows (reference)
+  '530:19637', // Model availability / resolved flows (reference)
 ]);
 
 for (const d of ['json', 'png', 'svg']) mkdirSync(join(REFS, d), { recursive: true });
