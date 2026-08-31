@@ -241,6 +241,29 @@ window.__audit = (function () {
         });
       }
     },
+    // Account card async states — spinner while auth is unknown, resolved row
+    // once known (same .account-slot cross-fade as the model picker). renderAuth
+    // is a dev seam; no daemon round-trip.
+    'account-loading': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.renderAuth) window.__gaffer.renderAuth({}); // unknown -> spinner
+    },
+    'account-signed-in': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.renderAuth) window.__gaffer.renderAuth({ loggedIn: true, email: 'you@example.com', orgName: 'Example', subscriptionType: 'team' });
+    },
+    // Update CTA — only appears when a check has confirmed a newer commit. Force
+    // an available commit (dev seam) to capture the shown state.
+    'update-available': function () {
+      reset();
+      if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
+      else document.getElementById('settingsModal').hidden = false;
+      if (window.__gaffer && window.__gaffer.setUpdateAvailable) window.__gaffer.setUpdateAvailable('feedface');
+    },
     // Account / API — 3 Figma states (516:42191 / 480:20902 / 516:43487) driven
     // via the window.__gaffer.setApiState() review hook (scaffold — no real key).
     'api-nokey': function () {

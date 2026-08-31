@@ -1818,6 +1818,16 @@
       // can force any discovered-catalog state (e.g. a no-effort model → the
       // "Not offered" effort row) without a live daemon round-trip.
       window.__gaffer.applyModelOptions = applyModelOptions;
+      // Auth review hook — force the account card's state for parity capture:
+      // renderAuth({}) = unknown (spinner), {loggedIn:true,...} = signed-in,
+      // {loggedIn:false} = signed-out. No daemon round-trip.
+      window.__gaffer.renderAuth = renderAuth;
+      // Update-CTA review hook — set the confirmed-available commit so the
+      // update-available state can be captured without hitting the network.
+      window.__gaffer.setUpdateAvailable = function (commit) {
+        availableUpdateCommit = commit || null;
+        syncSettingsUpdateButton();
+      };
     }
   } catch (e) { /* localStorage blocked → no audit seam, which is the safe default */ }
 
@@ -3247,6 +3257,15 @@
     }
   }
   function slotToggle(el, show) { if (el) el.classList.toggle('is-off', !show); }
+  // Async-card convention: a card that waits on an async check stacks a loading
+  // state and a resolved state in a cross-fade slot (.model-slot / .account-slot).
+  // Show the resolved state ONLY once `resolved` is definitively known; while it's
+  // unknown/pending, hold the loader — never render a definitive UI early (the
+  // flash-of-wrong-state class of bug: account "Signed out", phantom Update CTA).
+  function showAsyncSlot(loadingEl, resolvedEl, resolved) {
+    slotToggle(loadingEl, !resolved);
+    slotToggle(resolvedEl, resolved);
+  }
   var modelDiscoveryLastState = null;
   function renderModelDiscovery() {
     var gate = document.getElementById('modelDiscoveryGate');
@@ -3358,8 +3377,7 @@
     var acctLoading = document.getElementById('accountLoading');
     var acctRow = document.getElementById('accountRow');
     var acctKnown = authLoggedIn === true || authLoggedIn === false;
-    if (acctLoading) acctLoading.classList.toggle('is-off', acctKnown); // spinner only while unknown
-    if (acctRow) acctRow.classList.toggle('is-off', !acctKnown);        // resolved row fades in when known
+    showAsyncSlot(acctLoading, acctRow, acctKnown); // spinner while unknown -> resolved row fades in
     if (authLoggedIn === true) {
       em.textContent = lastAuth.email || 'Signed in';
       meta.textContent = ['CLI', lastAuth.orgName, lastAuth.plan ? labelize(lastAuth.plan) : ''].filter(Boolean).join(' • ');
