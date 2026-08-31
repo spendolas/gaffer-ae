@@ -2,7 +2,7 @@ import { PanelBridge } from './panel-bridge.js';
 import { Queue } from './queue.js';
 import { startMcpServer } from './mcp-server.js';
 import { ChatHandler, augmentedEnv } from './chat-handler.js';
-import { authStatus, signIn, signOut } from './auth.js';
+import { authStatus, authIdentityFromDisk, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
 import { dirname, join as pathJoin } from 'node:path';
@@ -79,8 +79,14 @@ function sendAuthStatus(socket, s) {
     socket.send(JSON.stringify({ type: 'auth_status', loggedIn: s.loggedIn,
       email: s.email, orgName: s.orgName, plan: s.subscriptionType, authMethod: s.authMethod }));
 }
+// The on-connect account card reads identity straight from disk/keychain
+// (single-digit ms) instead of spawning `claude auth status --json` (~500ms on
+// every connect). authIdentityFromDisk never throws; the catch is belt-and-
+// suspenders. authStatus() (the subprocess) is kept for the sign-in/sign-out
+// result paths below, where the CLI has just mutated auth and its own JSON is
+// the authority.
 bridge.onAuthStatus = async (socket) => {
-  try { sendAuthStatus(socket, await authStatus(await findClaudeBinary(), { env: augmentedEnv() })); }
+  try { sendAuthStatus(socket, await authIdentityFromDisk(augmentedEnv())); }
   catch (e) { sendAuthStatus(socket, { loggedIn: null }); }
 };
 bridge.onSignIn = async (msg, socket) => {
