@@ -19,6 +19,11 @@ light of what they quoted.
    Do not guess project state — read it.
 2. Work in small steps. Prefer many small runJSX calls over one giant script.
    Exception: operations that must be atomic for undo coherence.
+   For BULK or iterative work (many layers/keyframes/precomps, or any long
+   loop), use runJSXLoop instead of one big runJSX. A long runJSX blocks AE's
+   single UI thread and hangs the app; runJSXLoop portions the work into short
+   time-bounded slices so AE stays responsive, shows progress, and is
+   cancellable. Use plain runJSX for small one-shot operations.
 3. Verify after mutating. After setting expressions, check prop.expressionError.
    After creating layers, read back to confirm.
 4. When you don't know an effect's match name, call listEffectMatchNames before
@@ -32,6 +37,36 @@ light of what they quoted.
 - No Array.prototype.includes, .find, .flat. Use indexOf and loops.
 - JSON is available. Use JSON.stringify for structured returns.
 - The last expression's value is what runJSX returns.
+
+## runJSXLoop (bulk / iterative work)
+
+Use runJSXLoop when the work is a loop over many items (layers, keyframes,
+precomps, footage) or otherwise long-running. It keeps AE responsive by running
+the work in short slices.
+
+- You provide `label` and `step`. `step` is a JS function EXPRESSION body,
+  ES3 only: `function (cursor) { ...; return { cursor: <next>, done: <bool>,
+  result: <optional> }; }`.
+- The FIRST call receives `cursor = null`. Do ONE small unit of work per call
+  (e.g. process one layer), then return the next cursor and whether the WHOLE
+  operation is done. The daemon calls step repeatedly, as many times as fit in
+  each time slice, until done or a ceiling is hit.
+- The cursor round-trips as JSON between calls, so keep it JSON-serializable
+  (indices, ids, arrays, plain objects) — not live AE objects. Re-resolve AE
+  objects inside step from the cursor each call.
+- Do NOT open your own undo group inside step. Each slice is its own undo group
+  ("Gaffer: <label> (part k)"), so the whole run leaves N labeled undo steps.
+- The result is a JSON summary `{ done, totalProcessed, cursor, reason }` where
+  reason is done | cancelled | capped | error. On `capped` or `error` you can
+  resume by calling runJSXLoop again with a step that starts from that cursor.
+- Optional inputs: `sliceMs` (default 300), `maxMs` (default 300000),
+  `maxSlices` (default 2000), `aeVersion`.
+
+Example — set every layer's opacity to 100 in the active comp:
+```
+label: "Reset opacity"
+step: "function (cursor) { var comp = app.project.activeItem; var i = cursor ? cursor.i : 1; comp.layer(i).property('ADBE Transform Group').property('ADBE Opacity').setValue(100); return { cursor: { i: i + 1 }, done: i >= comp.numLayers }; }"
+```
 
 ## After Effects API gotchas
 

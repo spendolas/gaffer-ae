@@ -24,8 +24,14 @@ bridge.start().catch((err) => {
 });
 
 var chatHandler = new ChatHandler();
-bridge.onChat = (msg, socket) => chatHandler.handleChat(msg, socket);
-bridge.onChatCancel = () => chatHandler.cancel();
+// Cancellation flag for the runJSXLoop chunk driver. The chat-cancel gesture
+// kills the claude subprocess, but a runJSXLoop the agent already started keeps
+// running in this daemon (it is a separate async task), so the driver must poll
+// this flag and stop between slices. Reset at the start of each chat turn so a
+// prior cancel never bleeds into the next run.
+var loopCancelled = false;
+bridge.onChat = (msg, socket) => { loopCancelled = false; chatHandler.handleChat(msg, socket); };
+bridge.onChatCancel = () => { loopCancelled = true; chatHandler.cancel(); };
 bridge.onListModels = async (socket) => {
   try {
     var opts = await chatHandler.listModelOptions();
@@ -130,7 +136,10 @@ bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activ
 
 var queue = new Queue(bridge);
 
-startMcpServer(MCP_PORT, queue).catch((err) => {
+startMcpServer(MCP_PORT, queue, {
+  bridge: bridge,                          // runJSXLoop streams progress via chat_event
+  isCancelled: () => loopCancelled,        // runJSXLoop honors the chat-cancel gesture
+}).catch((err) => {
   if (err.code === 'EADDRINUSE') {
     console.log('Gaffer: port ' + MCP_PORT + ' in use — daemon already running. Exiting.');
     process.exit(0);

@@ -27,13 +27,15 @@ import { register as registerGetLayerEffects } from './tools/getLayerEffects.js'
 import { register as registerGetShapeContents } from './tools/getShapeContents.js';
 import { register as registerGetProjectTree } from './tools/getProjectTree.js';
 import { register as registerGetProjectSettings } from './tools/getProjectSettings.js';
+import { register as registerRunJSXLoop } from './tools/runJSXLoop.js';
 
 /**
  * Creates and starts the MCP HTTP server.
  * Each HTTP session gets its own McpServer instance, but all share
  * the same queue (critical for serialized AE access).
  */
-export function startMcpServer(port, queue) {
+export function startMcpServer(port, queue, ctx) {
+  ctx = ctx || {};
   var app = express();
   app.use(express.json());
 
@@ -94,6 +96,7 @@ export function startMcpServer(port, queue) {
     registerGetShapeContents(server, queue, z);
     registerGetProjectTree(server, queue, z);
     registerGetProjectSettings(server, queue, z);
+    registerRunJSXLoop(server, queue, z, ctx);
 
     return server;
   }
