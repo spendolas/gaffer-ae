@@ -1,0 +1,60 @@
+name: Windows compatibility checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'panel/daemon/**'
+      - 'scripts/windows-tests/**'
+      - 'scripts/check-ps-encoding.mjs'
+      - 'scripts/install-win.ps1'
+      - '.github/workflows/windows-tests.yml'
+  pull_request:
+    paths:
+      - 'panel/daemon/**'
+      - 'scripts/windows-tests/**'
+      - 'scripts/check-ps-encoding.mjs'
+      - 'scripts/install-win.ps1'
+      - '.github/workflows/windows-tests.yml'
+  workflow_dispatch: {}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Real pass/fail gate: every .ps1 must be ASCII-only + UTF-8 BOM, or
+      # PowerShell 5.1 mis-parses it (see scripts/windows-tests/test-1-bom.ps1).
+      - name: PowerShell encoding lint
+        run: node scripts/check-ps-encoding.mjs
+
+      # Daemon unit tests on the actual target OS — catches Windows-path /
+      # process behavior regressions that macOS/Linux CI can't see.
+      - name: Daemon unit tests
+        working-directory: panel/daemon
+        run: |
+          npm ci
+          npm test
+
+      # CI-gating regression test: Stop-Daemon must not let a taskkill
+      # failure abort the calling script (2026-09-01 Windows update-abort bug).
+      - name: Stop-Daemon stray-PID regression test
+        shell: powershell
+        run: .\scripts\windows-tests\test-4-stop-daemon-stray-pid.ps1
+
+      # Diagnostic-only reproductions (test-1 already covered above via the
+      # lint; test-2/3 are eyeballed repros for known Windows child_process
+      # quirks, not strict assertions — see scripts/windows-tests/README.md).
+      # Kept non-blocking since their expected output can vary by Node/OS
+      # patch version.
+      - name: Windows child_process repros (informational)
+        working-directory: scripts/windows-tests
+        continue-on-error: true
+        run: |
+          node test-2-console-flash.js
+          node test-3-detached-isolation.js
