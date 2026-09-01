@@ -828,6 +828,7 @@
           }
         }
         scrollToBottom();
+        pinBottomThroughImageLoads(); // images load after this; re-pin as they do
     }
 
     // Prefer Node fs — handles large payloads (image dataUrls) reliably.
@@ -2173,6 +2174,28 @@
 
   function scrollToBottom() {
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }
+  // Re-pin to the bottom as transcript images load. The initial scrollToBottom()
+  // after a restore runs before images have loaded, so it pins to a too-short
+  // scrollHeight; when the images expand it the view ends up scrolled up
+  // (measured: ~1.8k px of late image height left the panel ~230px above the
+  // bottom). Each image's load re-pins, but only while we're still within that
+  // image's own height of the bottom, so a deliberate scroll-up mid-load is not
+  // yanked (after each re-pin the gap returns to ~0, so the next load's gap is
+  // just that image's height).
+  function pinBottomThroughImageLoads() {
+    var imgs = chatMessagesEl.querySelectorAll('img');
+    function repin() {
+      var el = chatMessagesEl;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= (this.offsetHeight || 0) + 64) {
+        scrollToBottom();
+      }
+    }
+    for (var i = 0; i < imgs.length; i++) {
+      if (imgs[i].complete && imgs[i].naturalHeight) continue;
+      imgs[i].addEventListener('load', repin);
+      imgs[i].addEventListener('error', repin);
+    }
   }
 
   // ── MCP server picker ──
