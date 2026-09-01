@@ -636,21 +636,29 @@
   // focus but must stop LOOKING focused, or it reads as "type here" while
   // typing would land in AE. We toggle body.window-blurred (CSS hides the
   // caret) rather than blurring the field, so returning to the panel restores
-  // it ready to type with no re-click. The panel already relies on window
-  // blur/focus + document.hasFocus() elsewhere (the reply-sound cue only fires
-  // while unfocused, playReplySound), which is the evidence these events track
-  // real OS focus in CEP's Chromium; visibilitychange is a belt-and-braces
-  // fallback for any case where window blur is missed.
+  // it ready to type with no re-click.
+  //
+  // Source of truth is a low-frequency poll of document.hasFocus(): a real app
+  // switch (Cmd+Tab to AE) does NOT fire window 'blur' in this CEP build, and
+  // it does not fire 'visibilitychange' either (the panel stays visible, just
+  // unfocused), so the events alone miss the most common case. document
+  // .hasFocus() DOES reflect real OS focus here (the reply-sound cue relies on
+  // it, playReplySound), so polling it catches the app-switch the events miss.
+  // The window blur/focus + visibilitychange listeners stay for instant
+  // response on the cases they do catch (explicit click-out); the poll is
+  // authoritative and self-corrects any state the events left stale.
   function setWindowBlurred(blurred) {
     document.body.classList.toggle('window-blurred', blurred);
   }
+  function syncWindowFocus() {
+    try { setWindowBlurred(!document.hasFocus()); }
+    catch (e) { /* hasFocus unavailable — leave last known state */ }
+  }
   window.addEventListener('blur', function () { setWindowBlurred(true); });
   window.addEventListener('focus', function () { setWindowBlurred(false); });
-  document.addEventListener('visibilitychange', function () {
-    if (document.hidden) setWindowBlurred(true);
-  });
-  // seed the class from the real state in case the panel loads unfocused
-  try { setWindowBlurred(!document.hasFocus()); } catch (e) { /* hasFocus unavailable */ }
+  document.addEventListener('visibilitychange', syncWindowFocus);
+  syncWindowFocus();                 // seed from real state in case we load unfocused
+  setInterval(syncWindowFocus, 300); // authoritative poll — cheap, catches app-switch
   function playReplySound(kind) {
     if (!soundEnabled) return;
     // the cue exists for when you're elsewhere — silent while focused
