@@ -65,7 +65,7 @@ test('an error slice (ok:false) stops with reason error + partial + cursor', asy
   var out = await runChunkLoop({
     runSlice: function () {
       n++;
-      if (n === 3) return Promise.resolve(JSON.stringify({ ok: false, error: 'Object is invalid', line: 12, cursor: { n: 20 } }));
+      if (n === 3) return Promise.resolve(JSON.stringify({ ok: false, error: 'Object is invalid', line: 12, cursor: { n: 20 }, processed: 7 }));
       return Promise.resolve(JSON.stringify({ ok: true, cursor: { n: n * 10 }, done: false, processed: 10 }));
     },
     label: 'X', sliceMs: 300, maxMs: 999999, maxSlices: 100,
@@ -74,7 +74,7 @@ test('an error slice (ok:false) stops with reason error + partial + cursor', asy
   assert.equal(out.done, false);
   assert.equal(out.reason, 'error');
   assert.equal(out.error, 'Object is invalid');
-  assert.equal(out.totalProcessed, 20, 'two good slices committed before the failure');
+  assert.equal(out.totalProcessed, 27, 'two good slices (20) + the failed slice partial (7) are all credited');
   assert.deepEqual(out.cursor, { n: 20 }, 'cursor from the failed slice is surfaced');
 });
 
