@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.9 — 2026-09-01
+
+**Windows daemon stop is forceful from the start, plus a self-serve fix for a stuck update.**
+
+- **Windows updates stop the daemon reliably.** The updater used to try a graceful close first, but a plain background daemon process often doesn't respond to that at all on Windows — it now force-stops immediately, removing a second way an update could stall.
+- **A stuck update now offers Force stop & retry**, right in the update banner, instead of just failing with a note to check a log file.
+
 ## v0.9.8 — 2026-09-01
 
 **Windows updates no longer abort partway through.**
