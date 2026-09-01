@@ -52,7 +52,7 @@ export function startMcpServer(port, queue, ctx) {
       'runJSX',
       {
         description:
-          'Execute ExtendScript in After Effects. Returns the value of the last expression as a string, or a structured error. Use this to inspect project state, read/write layer properties, create layers, set expressions, apply effects.',
+          'Execute a SMALL, one-shot ExtendScript in After Effects: reads, inspecting state, or a single quick edit (one or a few layers, properties, expressions, effects). Returns the last expression value as a string, or a structured error. Do NOT use this for bulk or iterative work — a script that loops over many layers/keyframes/precomps/footage runs synchronously on AE\'s single UI thread and FREEZES the app until it finishes (no progress, no cancel, and it can outlast the 60s timeout). For anything that loops or touches many items, use runJSXLoop instead: it portions the work into short time-bounded slices so AE stays responsive, shows progress, and is cancellable, at ~no extra total time.',
         inputSchema: {
           code: z.string().describe('ExtendScript code to execute in After Effects'),
           undoLabel: z.string().optional().describe('Label for the undo group in AE history'),
