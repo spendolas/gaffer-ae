@@ -11,39 +11,9 @@ $logPath = Join-Path $env:TEMP "gaffer-update.log"
 Start-Transcript -Path $logPath -Append
 Write-Host "=== Update started: $(Get-Date) ==="
 
-# Stop whatever holds the daemon WebSocket port (9823) - reliable no matter how
-# it launched. The old command-line match ("*daemon*index.js*") never matched the
-# real "node.exe index.js" cmdline, so every update left a stale daemon running.
-# Graceful first (taskkill without /F, and the v0.9.5+ in-process watcher drains
-# when the port stays busy briefly); force only as a last resort. Note: a hidden
-# node console process may not honor a graceful close on Windows, so an in-flight
-# MCP job can still be cut here - the panel blocks updates during a chat turn.
-function Stop-Daemon {
-    $procIds = @()
-    try {
-        $procIds = Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique
-    } catch {}
-    if (-not $procIds -or $procIds.Count -eq 0) {
-        Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        return
-    }
-    foreach ($procId in $procIds) {
-        Write-Host "Stopping daemon (pid: $procId)"
-        try { & taskkill /PID $procId /T 2>$null | Out-Null } catch {}
-    }
-    for ($i = 0; $i -lt 20; $i++) {
-        $still = Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue
-        if (-not $still) { Write-Host "Daemon stopped."; return }
-        Start-Sleep -Milliseconds 500
-    }
-    Write-Host "Daemon did not exit in time - forcing."
-    try {
-        Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique |
-            ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
-    } catch {}
-}
+# Stop-Daemon lives in its own file (dot-sourced) so it stays plain-function-only
+# and can be unit-tested in isolation - see scripts/windows-tests/test-4-stop-daemon-stray-pid.ps1
+. "$PSScriptRoot\stop-daemon.ps1"
 
 # Never overwrite a development checkout - a dev install points the panel
 # at a git repo; /PURGE would clobber uncommitted work.
