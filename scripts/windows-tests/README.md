@@ -5,6 +5,18 @@ Contributed by a Windows field tester (via their Claude) alongside the
 fixes these tests validate. Run before releases that touch child_process
 spawns, PowerShell scripts, or the update flow.
 
+CI (`.github/workflows/windows-tests.yml`) runs on any push/PR touching
+`panel/daemon/**` or this folder, on a real `windows-latest` runner:
+- `scripts/check-ps-encoding.mjs` gates on the same issue test 1 reproduces
+  (checks every real `.ps1` file directly, rather than a synthetic copy) —
+  run test 1 by hand if that check fails and you want to see the actual PS
+  5.1 parser error.
+- `test-4-stop-daemon-stray-pid.ps1` gates for real (regression test for
+  the 2026-09-01 update-abort bug).
+- Tests 2 and 3 run too but are informational only (`continue-on-error`) —
+  their expected output can shift with Node/Windows patch versions, so
+  they're for eyeballing in the run log, not a hard gate.
+
 Small, self-contained tests for the three "silently fails on Windows" issues in the handoff doc (fixes shipped in v0.5.11–v0.5.13). Nothing here touches your Gaffer install — the tests write to `%TEMP%` only.
 
 **Requirements**
