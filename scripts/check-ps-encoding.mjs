@@ -7,8 +7,10 @@ import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const files = execSync("git ls-files '*.ps1'", { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
-  // the Windows repro harness intentionally violates the rule — it IS the repro
-  .filter((f) => !f.startsWith('scripts/windows-tests/'));
+  // test-1-bom.ps1 intentionally violates the rule — it IS the repro. Every
+  // other script under windows-tests/ (including new ones) is real and must
+  // actually run on PS 5.1, so it stays checked like any other .ps1.
+  .filter((f) => f !== 'scripts/windows-tests/test-1-bom.ps1');
 let fail = 0;
 for (const f of files) {
   const buf = readFileSync(f);
