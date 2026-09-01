@@ -645,23 +645,35 @@
   // app-switch, cueing "click to type", instead of a false ready cue. We toggle
   // body.window-blurred (CSS hides the caret) rather than blurring the field.
   var hasKeyboard = false;
-  try { hasKeyboard = document.hasFocus(); } catch (e) { /* leave false */ }
-  function syncCaret() {
-    var ready;
-    try { ready = document.hasFocus() && hasKeyboard; } catch (e) { ready = hasKeyboard; }
-    document.body.classList.toggle('window-blurred', !ready);
-  }
+  var lastFocusedAt = 0;
+  try { if (document.hasFocus()) { hasKeyboard = true; lastFocusedAt = Date.now(); } } catch (e) { /* leave false */ }
+  function syncCaret() { document.body.classList.toggle('window-blurred', !hasKeyboard); }
   // Real input reaching the webview = the panel owns the keyboard. (After an
   // app-switch these never fire until the user clicks in — exactly the signal.)
-  document.addEventListener('pointerdown', function () { hasKeyboard = true; syncCaret(); }, true);
-  document.addEventListener('keydown', function () { hasKeyboard = true; syncCaret(); }, true);
-  // Losing OS focus surrenders the keyboard; a return does not grant it back.
-  window.addEventListener('blur', function () { hasKeyboard = false; syncCaret(); });
-  window.addEventListener('focus', syncCaret);
-  document.addEventListener('visibilitychange', function () { if (document.hidden) hasKeyboard = false; syncCaret(); });
-  // Authoritative poll — a real app-switch fires no blur/visibilitychange (panel
-  // stays visible, just unfocused); losing hasFocus() clears keyboard ownership.
-  setInterval(function () { try { if (!document.hasFocus()) hasKeyboard = false; } catch (e) {} syncCaret(); }, 300);
+  // CEP's Chromium 99 delivers real MouseEvents (mousedown) + touch for HID
+  // input, NOT PointerEvents, so mousedown/touchstart are the load-bearing ones;
+  // pointerdown is kept for completeness. keydown covers keyboard-first focus.
+  function claimKeyboard() { hasKeyboard = true; lastFocusedAt = Date.now(); syncCaret(); }
+  ['mousedown', 'touchstart', 'pointerdown', 'keydown'].forEach(function (evt) {
+    document.addEventListener(evt, claimKeyboard, true);
+  });
+  // Surrender the keyboard only on SUSTAINED focus loss. The first click into an
+  // inactive panel fires a focus->mousedown->blur->focus flurry in ~10ms (the
+  // window 'blur' event is spurious mid-handshake), so clearing on 'blur' wiped
+  // the ownership the click just set (caret needed a second click). Instead a
+  // poll clears it only after hasFocus() has stayed false past a short grace,
+  // which the 10ms flurry never reaches but a real click-out / app-switch does.
+  // The poll is also the only reliable signal for an app-switch, which fires no
+  // blur/visibilitychange at all (panel stays visible, just unfocused).
+  var BLUR_GRACE_MS = 250;
+  setInterval(function () {
+    var focused = true;
+    try { focused = document.hasFocus(); } catch (e) { /* assume focused */ }
+    var now = Date.now();
+    if (focused) lastFocusedAt = now;
+    else if (hasKeyboard && now - lastFocusedAt > BLUR_GRACE_MS) hasKeyboard = false;
+    syncCaret();
+  }, 120);
   syncCaret(); // seed from real state
   function playReplySound(kind) {
     if (!soundEnabled) return;
