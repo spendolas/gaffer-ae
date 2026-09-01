@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.8 — 2026-09-01
+
+**Windows updates no longer abort partway through.**
+
+- **Updates finish reliably on Windows.** A single background process that resisted being closed, or an ordinary `npm` warning during dependency install, could previously abort the whole update script mid-run and leave files half-replaced. The updater now rides through both cases and completes normally; a real `npm install` failure still stops the update and reports it.
+
 ## v0.9.7 — 2026-09-01
 
 **Big operations keep After Effects responsive, plus chat polish.**
