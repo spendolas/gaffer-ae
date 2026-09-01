@@ -47,6 +47,7 @@
   var updateBannerEl = document.getElementById('updateBanner');
   var updateTextEl = document.getElementById('updateText');
   var updateBtnEl = document.getElementById('updateBtn');
+  var forceStopUpdateBtnEl = document.getElementById('forceStopUpdateBtn');
   var dismissUpdateBtnEl = document.getElementById('dismissUpdateBtn');
   var pastePreviewRowEl = document.getElementById('pastePreviewRow');
   var dropOverlayEl = document.getElementById('dropOverlay');
@@ -2483,6 +2484,7 @@
         availableUpdateCommit = remote.commit;
         syncSettingsUpdateButton();
         if (remote.commit === dismissedUpdateCommit) return;
+        resetUpdateBannerButtons();
         updateTextEl.textContent = 'Update available — v' + remote.version;
         updateBannerEl.classList.add('visible');
         syncSettingsUpdateButton();
@@ -2492,7 +2494,57 @@
       });
   }
 
+  // Shared reset so a stuck-update state (Force stop & retry shown, Update
+  // hidden) never bleeds into a later, genuinely fresh "Update available"
+  // banner or a dismiss.
+  function resetUpdateBannerButtons() {
+    updateBtnEl.style.display = '';
+    forceStopUpdateBtnEl.style.display = 'none';
+  }
+
+  // Kills whatever holds the daemon's port directly from Node, bypassing
+  // update.ps1/update.sh entirely — sidesteps the whole $ErrorActionPreference
+  // class of bug (2026-09-01: a plain, non-forceful taskkill inside that
+  // script could abort the update mid-run). Best-effort: callback always
+  // fires, even if the kill itself failed or nothing was listening.
+  function forceStopDaemonPort(callback) {
+    try {
+      var cp = require('child_process');
+      var isWin = process.platform === 'win32';
+      var child;
+      if (isWin) {
+        var ps = (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+        var cmd = 'Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue | '
+          + 'Select-Object -ExpandProperty OwningProcess -Unique | '
+          + 'ForEach-Object { taskkill /PID $_ /F /T }';
+        child = cp.spawn(ps, ['-NoProfile', '-Command', cmd], { windowsHide: true, stdio: 'ignore' });
+      } else {
+        child = cp.spawn('bash', ['-c',
+          'kill -KILL $(lsof -nP -iTCP:9823 -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null; exit 0'
+        ], { stdio: 'ignore' });
+      }
+      var done = false;
+      var finish = function () { if (!done) { done = true; callback(); } };
+      child.on('exit', finish);
+      child.on('error', finish);
+      setTimeout(finish, 5000); // don't let a hung kill command block the retry
+    } catch (e) {
+      console.error('Gaffer: force-stop daemon port failed', e);
+      callback();
+    }
+  }
+
+  function forceStopAndRetryUpdate() {
+    updateTextEl.textContent = 'Stopping…';
+    forceStopUpdateBtnEl.disabled = true;
+    forceStopDaemonPort(function () {
+      forceStopUpdateBtnEl.disabled = false;
+      runUpdate();
+    });
+  }
+
   function runUpdate() {
+    resetUpdateBannerButtons();
     if (isDevInstall) {
       availableUpdateCommit = null;
       showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
@@ -2538,9 +2590,16 @@
           } else if (waited >= 180000) {
             clearInterval(timer);
             window.__gafferUpdating = false;
-            updateBannerEl.classList.remove('visible');
             syncSettingsUpdateButton();
+            // Stays up, offering a self-serve retry, instead of hiding —
+            // a stuck update usually means something still holds the
+            // daemon port, and this kills it directly rather than making
+            // the user hand-run a PowerShell command over chat.
+            updateTextEl.textContent = 'Update did not complete';
             if (actionsEl) actionsEl.style.display = '';
+            updateBtnEl.style.display = 'none';
+            forceStopUpdateBtnEl.style.display = '';
+            updateBannerEl.classList.add('visible');
             showChatNotice('Update did not complete — the updater log has details: '
               + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
           }
@@ -2620,6 +2679,7 @@
       saveChat();
     }
     updateBannerEl.classList.remove('visible');
+    resetUpdateBannerButtons();
     syncSettingsUpdateButton();
   }
 
@@ -3230,6 +3290,7 @@
     });
   }
   updateBtnEl.addEventListener('click', runUpdate);
+  forceStopUpdateBtnEl.addEventListener('click', forceStopAndRetryUpdate);
   dismissUpdateBtnEl.addEventListener('click', dismissUpdate);
   chatInputEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
