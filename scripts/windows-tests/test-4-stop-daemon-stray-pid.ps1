@@ -33,7 +33,7 @@ if (-not (Test-Path $stopDaemonPath)) {
 
 . $stopDaemonPath
 
-Write-Host "Calling Stop-Daemon -ProcIds @(999999) — a PID guaranteed not to exist..."
+Write-Host "Calling Stop-Daemon -ProcIds @(999999) - a PID guaranteed not to exist..."
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $threw = $false
 $errMsg = $null
@@ -54,7 +54,7 @@ if ($threw) {
 }
 
 if ($sw.Elapsed.TotalSeconds -ge 9) {
-    Write-Host "FAIL: Stop-Daemon took $($sw.Elapsed.TotalSeconds)s — fell through to the 10s force-kill"
+    Write-Host "FAIL: Stop-Daemon took $($sw.Elapsed.TotalSeconds)s - fell through to the 10s force-kill"
     Write-Host "      fallback instead of exiting on the first empty poll. Logic regression upstream"
     Write-Host "      of the taskkill fix (Get-NetTCPConnection check)."
     exit 1
