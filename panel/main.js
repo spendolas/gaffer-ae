@@ -631,34 +631,38 @@
   window.addEventListener('focus', function () { unattendedCues = 0; });
   document.addEventListener('pointerdown', function () { unattendedCues = 0; });
   document.addEventListener('keydown', function () { unattendedCues = 0; });
-  // Focused-appearance mirror: when the panel window loses OS focus (AE pulls
-  // focus out when the user switches back to it), the chat input keeps DOM
-  // focus but must stop LOOKING focused, or it reads as "type here" while
-  // typing would land in AE. We toggle body.window-blurred (CSS hides the
-  // caret) rather than blurring the field, so returning to the panel restores
-  // it ready to type with no re-click.
-  //
-  // Source of truth is a low-frequency poll of document.hasFocus(): a real app
-  // switch (Cmd+Tab to AE) does NOT fire window 'blur' in this CEP build, and
-  // it does not fire 'visibilitychange' either (the panel stays visible, just
-  // unfocused), so the events alone miss the most common case. document
-  // .hasFocus() DOES reflect real OS focus here (the reply-sound cue relies on
-  // it, playReplySound), so polling it catches the app-switch the events miss.
-  // The window blur/focus + visibilitychange listeners stay for instant
-  // response on the cases they do catch (explicit click-out); the poll is
-  // authoritative and self-corrects any state the events left stale.
-  function setWindowBlurred(blurred) {
-    document.body.classList.toggle('window-blurred', blurred);
+  // Honest caret: the field should look "ready to type" only when the panel
+  // actually OWNS the keyboard, which is NOT the same as document.hasFocus().
+  // Verified in AE: after an OS app-switch back (Cmd+Tab to AE), hasFocus()
+  // reports true and the field stays activeElement, but AE keeps the keyboard
+  // until you CLICK the panel — typed keys never reach the webview (zero
+  // keydowns captured; they fire AE tool shortcuts instead). registerKeyEvents-
+  // Interest doesn't work in CEP 12, so panel JS cannot reclaim the keyboard.
+  // So we gate the caret on real keyboard ownership: a genuine pointerdown or
+  // keydown that reaches the webview proves the keyboard is ours; losing window
+  // focus clears it, and a mere return does NOT restore it (only a click/keys
+  // that actually arrive do). That keeps the caret honest — hidden after an
+  // app-switch, cueing "click to type", instead of a false ready cue. We toggle
+  // body.window-blurred (CSS hides the caret) rather than blurring the field.
+  var hasKeyboard = false;
+  try { hasKeyboard = document.hasFocus(); } catch (e) { /* leave false */ }
+  function syncCaret() {
+    var ready;
+    try { ready = document.hasFocus() && hasKeyboard; } catch (e) { ready = hasKeyboard; }
+    document.body.classList.toggle('window-blurred', !ready);
   }
-  function syncWindowFocus() {
-    try { setWindowBlurred(!document.hasFocus()); }
-    catch (e) { /* hasFocus unavailable — leave last known state */ }
-  }
-  window.addEventListener('blur', function () { setWindowBlurred(true); });
-  window.addEventListener('focus', function () { setWindowBlurred(false); });
-  document.addEventListener('visibilitychange', syncWindowFocus);
-  syncWindowFocus();                 // seed from real state in case we load unfocused
-  setInterval(syncWindowFocus, 300); // authoritative poll — cheap, catches app-switch
+  // Real input reaching the webview = the panel owns the keyboard. (After an
+  // app-switch these never fire until the user clicks in — exactly the signal.)
+  document.addEventListener('pointerdown', function () { hasKeyboard = true; syncCaret(); }, true);
+  document.addEventListener('keydown', function () { hasKeyboard = true; syncCaret(); }, true);
+  // Losing OS focus surrenders the keyboard; a return does not grant it back.
+  window.addEventListener('blur', function () { hasKeyboard = false; syncCaret(); });
+  window.addEventListener('focus', syncCaret);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) hasKeyboard = false; syncCaret(); });
+  // Authoritative poll — a real app-switch fires no blur/visibilitychange (panel
+  // stays visible, just unfocused); losing hasFocus() clears keyboard ownership.
+  setInterval(function () { try { if (!document.hasFocus()) hasKeyboard = false; } catch (e) {} syncCaret(); }, 300);
+  syncCaret(); // seed from real state
   function playReplySound(kind) {
     if (!soundEnabled) return;
     // the cue exists for when you're elsewhere — silent while focused
