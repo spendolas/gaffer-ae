@@ -45,6 +45,23 @@ test('queue.isIdle: a rejected JSX call still returns the queue to idle', async 
   assert.equal(q.isIdle(), true, '…but the chain drains and idle is restored');
 });
 
+test('queue.enqueuePreWrapped: sends the code verbatim (no wrapInSafety re-wrap)', async () => {
+  var sent = [];
+  var bridge = {
+    send(code, target) { sent.push({ code: code, target: target }); return Promise.resolve('ok'); },
+  };
+  var q = new Queue(bridge);
+  var slice = '(function(){ app.beginUndoGroup("Gaffer: X (part 1)"); return "1"; })();';
+  var task = q.enqueuePreWrapped(slice, '26.0');
+  assert.equal(q.isIdle(), false, 'counted in flight');
+  await task;
+  await flush();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].code, slice, 'bridge received the slice unchanged');
+  assert.equal(sent[0].target, '26.0', 'aeVersion target routed through');
+  assert.equal(q.isIdle(), true, 'idle after drain');
+});
+
 test('queue.isIdle: counts every queued call, idle only when all drain', async () => {
   var bridge = deferredBridge();
   var q = new Queue(bridge);

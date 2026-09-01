@@ -14,7 +14,16 @@ export class Queue {
   }
 
   enqueue(code, undoLabel, readOnly, target) {
-    var wrapped = wrapInSafety(code, undoLabel, readOnly);
+    return this.enqueuePreWrapped(wrapInSafety(code, undoLabel, readOnly), target);
+  }
+
+  // Serialize an already-wrapped JSX string as-is (no wrapInSafety re-wrap).
+  // Used by runJSXLoop, whose slices are wrapped by wrapSlice() — which already
+  // provides the try/catch + JSON return + its own per-part undo group.
+  // Re-wrapping would double the undo group (and strip the slice's part label),
+  // so slices take this path instead. Serialization + in-flight tracking are
+  // identical to enqueue().
+  enqueuePreWrapped(wrapped, target) {
     this.inFlight++;
     var task = this.pending.then(() => this.bridge.send(wrapped, target));
     var settle = () => { this.inFlight--; };
