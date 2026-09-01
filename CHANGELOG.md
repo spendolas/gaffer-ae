@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.7 — 2026-09-01
+
+**Big operations keep After Effects responsive, plus chat polish.**
+
+- **Long and bulk operations no longer freeze After Effects.** Work that touches many layers, keyframes, or precomps now runs in small time-sliced chunks so AE stays responsive throughout, with progress shown and the ability to cancel partway. Previously a single long script could lock AE up until it finished.
+- **The chat caret tells the truth about focus.** It shows only when the panel actually has the keyboard. After you switch to another app and back, AE keeps the keyboard until you click the panel, so the caret now stays hidden (a "click to type" cue) instead of looking ready when typing would land in AE. It returns the moment you click in.
+- **The chat opens at your latest message, even with images.** Conversations with images no longer open scrolled part-way up while the images finish loading.
+- **Assistant messages use a bit more width.**
+- **The text-size reset now reads "Reset text."**
+
 ## v0.9.6 — 2026-08-31
 
 **Settings polish: model, account, and dialog surfaces.**
