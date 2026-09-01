@@ -75,9 +75,10 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
   return '(function () {\n' +
     '  app.beginUndoGroup("Gaffer: ' + safeLabel + ' (part ' + partNum + ')");\n' +
     '  var cursor = ' + cursorJSON + ';\n' +
+    '  var processed = 0;\n' +                       // declared outside try so the catch can report partial progress
     '  try {\n' +
     '    var step = ' + stripped + ';\n' +
-    '    var processed = 0, done = false, out, hasResult = false, results = [];\n' +
+    '    var done = false, out, hasResult = false, results = [];\n' +
     '    $.hiresTimer;\n' +                        // prime (discard first read)
     '    var elapsedUs = 0;\n' +
     '    do {\n' +
@@ -92,7 +93,7 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
     '    if (hasResult) { payload.result = results; }\n' +
     '    return JSON.stringify(payload);\n' +
     '  } catch (e) {\n' +
-    '    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null, cursor: cursor });\n' +
+    '    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null, cursor: cursor, processed: processed });\n' +
     '  } finally {\n' +
     '    app.endUndoGroup();\n' +
     '  }\n' +

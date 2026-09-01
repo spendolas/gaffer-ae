@@ -74,6 +74,7 @@ export async function runChunkLoop(opts) {
     // Step threw inside AE. Completed slices remain — each is its own undo step.
     if (!parsed || parsed.ok === false) {
       if (parsed && typeof parsed.cursor !== 'undefined') cursor = parsed.cursor;
+      totalProcessed += (parsed && parsed.processed) || 0; // credit units done before the throw
       return finish(false, 'error', {
         error: (parsed && parsed.error) || 'Slice failed',
         line: (parsed && parsed.line) || null,

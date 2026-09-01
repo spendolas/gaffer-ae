@@ -35,6 +35,15 @@ test('wrapSlice: embeds the step body and returns a JSON string', () => {
   assert.ok(jsx.includes('"processed"') || jsx.includes('processed:'), 'reports processed count');
 });
 
+test('wrapSlice: the error path also reports cursor + processed (partial progress)', () => {
+  var jsx = wrapSlice(STEP, 'null', 'x', 300, 1);
+  // processed is declared outside the try so the catch can read it.
+  assert.ok(/var processed = 0;\s*\n\s*try/.test(jsx), 'processed declared before try');
+  var errReturn = jsx.slice(jsx.indexOf('ok: false'));
+  assert.ok(errReturn.indexOf('cursor: cursor') !== -1, 'error payload carries the resume cursor');
+  assert.ok(errReturn.indexOf('processed: processed') !== -1, 'error payload carries the partial count');
+});
+
 test('wrapSlice: strips nested undo groups from the step body', () => {
   var withGroup = 'function (c) { app.beginUndoGroup("inner"); var r = { cursor: null, done: true }; app.endUndoGroup(); return r; }';
   var jsx = wrapSlice(withGroup, 'null', 'x', 300, 1);
