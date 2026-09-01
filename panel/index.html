@@ -847,6 +847,16 @@
       position: relative;
       z-index: 1; /* above .chat-placeholder (z:0) so the native caret always paints on top of the placeholder */
     }
+    /* When the panel window loses OS focus (e.g. the user clicks back into
+       After Effects), the textarea keeps DOM focus so it is ready to type the
+       moment they return, but its focused look must not imply that typing
+       lands here. The only focus cue in this design is the native caret
+       (there is no focus ring/border/box-shadow on the field or the pill), so
+       neutralizing the caret fully matches an unfocused field. main.js toggles
+       body.window-blurred on window blur/focus. Chromium 99 has no :has(), so
+       this stays a plain descendant selector. The outline reset is defensive,
+       in case a focus ring is ever added to the field. */
+    body.window-blurred .chat-input { caret-color: transparent; outline: none; }
     /* Grown InputField (240:1465) counterAxisAlignItems: MAX — bottom-align
        once the composer has actually wrapped to 2+ lines, so the last line
        stays flush with Send. Gated on wrapping (not just "has content" —
