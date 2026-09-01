@@ -631,6 +631,26 @@
   window.addEventListener('focus', function () { unattendedCues = 0; });
   document.addEventListener('pointerdown', function () { unattendedCues = 0; });
   document.addEventListener('keydown', function () { unattendedCues = 0; });
+  // Focused-appearance mirror: when the panel window loses OS focus (AE pulls
+  // focus out when the user switches back to it), the chat input keeps DOM
+  // focus but must stop LOOKING focused, or it reads as "type here" while
+  // typing would land in AE. We toggle body.window-blurred (CSS hides the
+  // caret) rather than blurring the field, so returning to the panel restores
+  // it ready to type with no re-click. The panel already relies on window
+  // blur/focus + document.hasFocus() elsewhere (the reply-sound cue only fires
+  // while unfocused, playReplySound), which is the evidence these events track
+  // real OS focus in CEP's Chromium; visibilitychange is a belt-and-braces
+  // fallback for any case where window blur is missed.
+  function setWindowBlurred(blurred) {
+    document.body.classList.toggle('window-blurred', blurred);
+  }
+  window.addEventListener('blur', function () { setWindowBlurred(true); });
+  window.addEventListener('focus', function () { setWindowBlurred(false); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) setWindowBlurred(true);
+  });
+  // seed the class from the real state in case the panel loads unfocused
+  try { setWindowBlurred(!document.hasFocus()); } catch (e) { /* hasFocus unavailable */ }
   function playReplySound(kind) {
     if (!soundEnabled) return;
     // the cue exists for when you're elsewhere — silent while focused
