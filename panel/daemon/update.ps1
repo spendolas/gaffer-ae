@@ -30,7 +30,7 @@ function Stop-Daemon {
     }
     foreach ($procId in $procIds) {
         Write-Host "Stopping daemon (pid: $procId)"
-        & taskkill /PID $procId /T 2>$null | Out-Null
+        try { & taskkill /PID $procId /T 2>$null | Out-Null } catch {}
     }
     for ($i = 0; $i -lt 20; $i++) {
         $still = Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue
@@ -119,8 +119,14 @@ if (-not $npmCmd) {
 }
 Write-Host "  npm: $npmCmd"
 Push-Location $daemonDir
-& $npmCmd install --production
+try { & $npmCmd install --production } catch {}
+$npmExit = $LASTEXITCODE
 Pop-Location
+if ($npmExit -ne 0) {
+    Write-Error "npm install failed (exit $npmExit)"
+    Stop-Transcript
+    exit 1
+}
 
 # Stop any daemon that respawned mid-update (panel reloads on version.json
 # change and boots a clean one)
