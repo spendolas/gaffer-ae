@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pruneSessionFile } from './session-pruner.js';
 import { scoreMessage, classifyTurn, tierToSelection } from './model-router.js';
+import * as telemetry from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -731,6 +732,10 @@ export class ChatHandler {
     // Keep the trust-first default consistent for older panels and headless
     // callers that omit advanced settings: Opus 4.8 at Medium effort.
     var model = msg.model || 'claude-opus-4-8';
+    // Preserve the originally-requested model before any Scrooge/autoModel
+    // downshift reassigns `model` below — telemetry needs both (see
+    // assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1).
+    var requestedModel = model;
     var effort = msg.effort || 'medium';
     // Optional, off by default: a two-stage classifier lightens the turn.
     // Stage 1 is a free local score; the ambiguous middle escalates to one
@@ -778,6 +783,10 @@ export class ChatHandler {
     // Context-window variant: Claude Code encodes 1M as a [1m] model suffix.
     // Skip it when autoModel deliberately downshifted to a non-1M model.
     if (msg.variant === '1m' && !autoDownshifted) model += '[1m]';
+    // Retained (not just local vars) so the 'result' event handler below can
+    // read them for telemetry once the turn completes.
+    this._lastModel = model;
+    this._lastRequestedModel = requestedModel;
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1) args.push('--effort', effort);
@@ -1013,6 +1022,24 @@ export class ChatHandler {
       // the session before the next turn would breach the context window.
       if (event.usage && typeof event.usage.input_tokens === 'number') {
         this.lastInputTokens = event.usage.input_tokens;
+      }
+      // Usage telemetry — model name + token counts + cost estimate only,
+      // never prompt/response content. Always recorded regardless of the
+      // sharing toggle (telemetry.js decides whether to actually send it);
+      // errors inside recordUsage are caught there and never reach here.
+      try {
+        var usage = event.usage || {};
+        telemetry.recordUsage({
+          model: this._lastModel,
+          requestedModel: this._lastRequestedModel,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadTokens: usage.cache_read_input_tokens,
+          cacheCreationTokens: usage.cache_creation_input_tokens,
+          costUsd: event.total_cost_usd,
+        });
+      } catch (e) {
+        console.error('Gaffer telemetry: recordUsage call failed (ignored)', e.message);
       }
       // Final result text — send if we haven't streamed it yet
       if (event.result && event.subtype === 'success') {
