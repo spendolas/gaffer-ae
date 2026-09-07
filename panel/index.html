@@ -1689,6 +1689,22 @@
             </span>
           </div>
         </div>
+        <!-- Share usage stats — mirrors the Scrooge toggle's markup shape.
+             Unlike Scrooge (panel-local chat-state), this round-trips through
+             the daemon: get_share_usage_stats / set_share_usage_stats. -->
+        <div class="settings-item">
+          <div class="row1">
+            <span class="row1-left">
+              <div class="item-col">
+                <span class="item-title">Share usage stats</span>
+                <span class="item-sub dim">Share usage stats to help improve Gaffer. No personalized data is stored.</span>
+              </div>
+            </span>
+            <span class="row1-controls">
+              <label class="toggle-label"><input type="checkbox" id="setShareUsageStats"><span class="toggle big"><span class="knob"></span></span></label>
+            </span>
+          </div>
+        </div>
         <!-- Sounds — Stubs/Menu item 475:10304: Left Block (grow:1, Line 1 holds
              label + Sound Selector) + Controls slot (Toggle), same shared
              row1-left / row1-controls pair the account rows use. -->
