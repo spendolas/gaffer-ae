@@ -28,6 +28,17 @@ import { register as registerGetShapeContents } from './tools/getShapeContents.j
 import { register as registerGetProjectTree } from './tools/getProjectTree.js';
 import { register as registerGetProjectSettings } from './tools/getProjectSettings.js';
 import { register as registerRunJSXLoop } from './tools/runJSXLoop.js';
+import { preflight, guardEnabled } from './instrument.js';
+import { wrapInSafety } from './safety.js';
+
+// Compact, opt-out telemetry for the loop guard: log only when there is a loop,
+// a parse problem, or a rejection, so it stays quiet for ordinary calls.
+function logGuard(tool, telemetry, action) {
+  if (!telemetry) return;
+  if (telemetry.hasLoop || telemetry.parseError || action === 'reject') {
+    console.log('[loopguard] ' + tool + ' ' + action + ' ' + JSON.stringify(telemetry));
+  }
+}
 
 /**
  * Creates and starts the MCP HTTP server.
@@ -61,7 +72,18 @@ export function startMcpServer(port, queue, ctx) {
       },
       async ({ code, undoLabel, aeVersion }) => {
         try {
-          var result = await queue.enqueue(code, undoLabel, false, aeVersion);
+          // Loop guard: reject a provably-infinite loop up front; otherwise run
+          // the instrumented source so any loop self-aborts instead of freezing AE.
+          var pf = preflight(code, { asExpression: false });
+          logGuard('runJSX', pf.telemetry, pf.action);
+          if (pf.action === 'reject') {
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ ok: false, error: pf.message }) }],
+              isError: true,
+            };
+          }
+          var wrapped = wrapInSafety(pf.code, undoLabel, false, { guard: guardEnabled });
+          var result = await queue.enqueuePreWrapped(wrapped, aeVersion);
           return { content: [{ type: 'text', text: result }] };
         } catch (e) {
           return {
