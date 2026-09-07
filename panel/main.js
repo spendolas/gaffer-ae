@@ -139,6 +139,12 @@
   var modelDiscoveryReason = null; // diagnostic only; retry copy stays generic
   var autoCheckUpdates = true;
   var autoModel = false; // off by default; persisted in chat-history.json
+  // Unlike autoModel/autoCheckUpdates above, this is NOT panel-local
+  // chat-state — it round-trips through the daemon (get_share_usage_stats /
+  // set_share_usage_stats), which is the actual source of truth
+  // (.gaffer-config.json). This local var just mirrors the last known reply
+  // so the checkbox has something to show before the first reply lands.
+  var shareUsageStats = true;
   var dismissedUpdateCommit = null;
   var availableUpdateCommit = null; // independent of whether its banner was dismissed
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
@@ -920,6 +926,9 @@
         return;
       }
       if (msg.type === 'chat_event') {
+        // runJSXLoop progress folds onto the running tool pill (tooltip), not a
+        // separate chat item. Everything else is a normal chat notice.
+        if (msg.event === 'jsx_loop_progress') { updateLoopProgress(msg.message); return; }
         showChatNotice(msg.message || msg.event);
         return;
       }
@@ -966,6 +975,12 @@
         return;
       }
       if (msg.type === 'auth_status') { renderAuth(msg); return; }
+      if (msg.type === 'share_usage_stats') {
+        shareUsageStats = !!msg.enabled;
+        var suEl = document.getElementById('setShareUsageStats');
+        if (suEl) suEl.checked = shareUsageStats;
+        return;
+      }
       if (msg.type === 'sign_in_started') {
         document.getElementById('signInProgress').hidden = false;
         document.getElementById('signInError').hidden = true;
@@ -1996,8 +2011,8 @@
     if (!pill) {
       pill = document.createElement('span');
       if (id) pill.dataset.toolId = id;
-      // dash carries no visible label — tool name lives in the tooltip
-      pill.addEventListener('mouseenter', function () { showMcpTooltip(pill, pill.textContent); });
+      // dash carries no visible label — tool name (or live loop progress) lives in the tooltip
+      pill.addEventListener('mouseenter', function () { showMcpTooltip(pill, pill.dataset.progress || pill.textContent); });
       pill.addEventListener('mouseleave', hideMcpTooltip);
       row.appendChild(pill);
     }
@@ -2038,6 +2053,25 @@
     notice.textContent = text;
     chatMessagesEl.appendChild(notice);
     scrollToBottom();
+  }
+
+  // runJSXLoop progress lands on the running tool pill's tooltip (the loop's
+  // live count), so a long bake shows one pulsing dash instead of a stack of
+  // chat notices. AE calls are serialized, so the loop is the most-recent
+  // running pill; its final count stays in the tooltip after it turns green.
+  function updateLoopProgress(message) {
+    if (!message) return;
+    var scope = document.getElementById('currentResponse');
+    if (!scope) return;
+    var running = scope.querySelectorAll('.tool-pill.running');
+    var pill = running.length ? running[running.length - 1] : null;
+    if (!pill) {
+      var all = scope.querySelectorAll('.tool-pill');
+      pill = all.length ? all[all.length - 1] : null;
+    }
+    if (!pill) return;
+    pill.dataset.progress = message;
+    if (mcpTooltipTile === pill) showMcpTooltip(pill, message); // live-refresh while hovering
   }
 
   // Toast — dark pill (Toast set 464:10032). `type` (info|success|warning|error|
@@ -2215,8 +2249,10 @@
   // Optional second line carries state detail (Connected / Click to
   // authorise / Error: <title> ...).
   var mcpTooltipEl = null;
+  var mcpTooltipTile = null; // element the tooltip is currently anchored to (for live refresh)
   function showMcpTooltip(tile, text, detail) {
     hideMcpTooltip();
+    mcpTooltipTile = tile;
     mcpTooltipEl = document.createElement('div');
     mcpTooltipEl.className = 'mcp-tooltip';
     var title = document.createElement('div');
@@ -2237,6 +2273,7 @@
   }
   function hideMcpTooltip() {
     if (mcpTooltipEl) { mcpTooltipEl.remove(); mcpTooltipEl = null; }
+    mcpTooltipTile = null;
   }
 
   // Tile state (audit §4.6): amber = needs auth, red = failed,
@@ -3545,6 +3582,7 @@
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
     document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
+    var suEl0 = document.getElementById('setShareUsageStats'); if (suEl0) suEl0.checked = shareUsageStats;
     // Labels + effort dots are owned by their controls (makeSelect / renderEffort);
     // refresh them so the modal opens reflecting current state.
     updateModelSelect();
@@ -3608,6 +3646,7 @@
     if (resetItem) resetItem.hidden = !hasSuppressedModals();
     syncSettings(); tkShow(settingsModalEl);
     requestModelCatalog();
+    sendWs({ type: 'get_share_usage_stats' });
     // Thumb placement measures live dot centers — re-run once the modal is
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
@@ -3625,6 +3664,33 @@
   });
   document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; saveChat(); });
   document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; saveChat(); });
+  // Share usage stats — daemon-persisted, not saveChat() state. Turning it ON
+  // just sends the change. Turning it OFF asks for confirmation first (Key
+  // decision 7): the toggle only controls sending, not local recording, so
+  // the modal states that explicitly rather than letting the toggle copy
+  // alone imply "off" stops collecting entirely.
+  document.getElementById('setShareUsageStats').addEventListener('change', function (e) {
+    var checkbox = e.target;
+    if (checkbox.checked) {
+      shareUsageStats = true;
+      sendWs({ type: 'set_share_usage_stats', enabled: true });
+      return;
+    }
+    // Revert visually until/unless the user actually confirms turning it off.
+    checkbox.checked = true;
+    showModal(
+      "Gaffer needs your support, please consider keeping usage sharing on. Turning this off only stops sending new data — Gaffer keeps recording usage locally either way, and it will be sent once you turn sharing back on.",
+      {
+        title: 'Turn off usage sharing?', confirmLabel: 'Turn off', cancelLabel: 'Keep it on',
+        dismissible: true,
+        onConfirm: function () {
+          shareUsageStats = false;
+          checkbox.checked = false;
+          sendWs({ type: 'set_share_usage_stats', enabled: false });
+        },
+      }
+    );
+  });
   // Enabling sound previews the selected cue (mirrors the reply-sound toggle).
   document.getElementById('setSoundOn').addEventListener('change', function (e) { soundEnabled = e.target.checked; if (soundEnabled) playSelectedCue(); saveChat(); });
   // Preview button plays the currently SELECTED cue (not a cue type) — gated by

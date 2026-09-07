@@ -21,6 +21,12 @@ export class PanelBridge {
     this.onChatCancel = null;
     this.onListMcps = null;
     this.onListModels = null;
+    this.onGetShareUsageStats = null;
+    this.onSetShareUsageStats = null;
+    // Fired when the panel registry drops to zero — the real-world moment
+    // matching "AE closed," even though the daemon process itself survives
+    // (it's designed to keep running across multiple AE instances).
+    this.onLastPanelDisconnected = null;
   }
 
   start() {
@@ -103,6 +109,8 @@ export class PanelBridge {
           if (msg.type === 'sign_in') { if (this.onSignIn) this.onSignIn(msg, socket); return; }
           if (msg.type === 'sign_out') { if (this.onSignOut) this.onSignOut(socket); return; }
           if (msg.type === 'cancel_sign_in') { if (this.onCancelSignIn) this.onCancelSignIn(); return; }
+          if (msg.type === 'get_share_usage_stats') { if (this.onGetShareUsageStats) this.onGetShareUsageStats(socket); return; }
+          if (msg.type === 'set_share_usage_stats') { if (this.onSetShareUsageStats) this.onSetShareUsageStats(msg, socket); return; }
 
           // Legacy: JSX response (no type field)
           var entry = this.pending.get(msg.id);
@@ -126,6 +134,7 @@ export class PanelBridge {
         if (key && this.panels.get(key) && this.panels.get(key).socket === socket) {
           console.log('Gaffer: panel disconnected (AE ' + key + ')');
           this.panels.delete(key);
+          if (this.panels.size === 0 && this.onLastPanelDisconnected) this.onLastPanelDisconnected();
         }
         // Reject pending requests for this socket
         for (var [id, entry] of this.pending) {

@@ -73,6 +73,14 @@ if [ -f "$PANEL_DIR/chat-history.json" ]; then
   cp "$PANEL_DIR/chat-history.json" "$BACKUP"
 fi
 
+# Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) —
+# without this it's silently wiped by rsync --delete on every update.
+CONFIG_BACKUP=""
+if [ -f "$PANEL_DIR/.gaffer-config.json" ]; then
+  CONFIG_BACKUP="$TMP_DIR/gaffer-config.backup.json"
+  cp "$PANEL_DIR/.gaffer-config.json" "$CONFIG_BACKUP"
+fi
+
 # Stop existing daemon (panel will detect disconnect and continue)
 echo "Stopping daemon..."
 stop_daemon
@@ -81,6 +89,7 @@ stop_daemon
 echo "Replacing files..."
 rsync -a --delete \
   --exclude 'chat-history.json' \
+  --exclude '.gaffer-config.json' \
   --exclude 'daemon/node_modules' \
   --exclude 'daemon/dist' \
   "$EXTRACTED/panel/" "$PANEL_DIR/"
@@ -88,6 +97,11 @@ rsync -a --delete \
 # Restore chat history
 if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
   cp "$BACKUP" "$PANEL_DIR/chat-history.json"
+fi
+
+# Restore .gaffer-config.json
+if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then
+  cp "$CONFIG_BACKUP" "$PANEL_DIR/.gaffer-config.json"
 fi
 
 # npm install in daemon
