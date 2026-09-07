@@ -18,17 +18,24 @@
 //   8. Set GAFFER_TELEMETRY_URL to that URL wherever the daemon reads its
 //      environment (see panel/daemon/telemetry.js).
 //
-// Payload shape expected, sent by telemetry.js's flush():
-//   { date, installId, byModel: { <model>: { turns, inputTokens,
-//     outputTokens, cacheReadTokens, cacheCreationTokens, costUsd } } }
+// Payload shape expected, sent by telemetry.js's flush(). byModel is keyed
+// by a composite "actualModel::requestedModel" string (not actual model
+// alone) — Scrooge/autoModel can downshift the same actual model from
+// different originally-requested models, and those need to stay
+// distinguishable for measuring Scrooge's effect (see
+// assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1):
+//   { date, installId, byModel: { "<model>::<requestedModel>": { turns,
+//     inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
+//     costUsd } } }
 
 function doPost(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
 
   if (sheet.getLastRow() === 0) {
     sheet.appendRow([
-      'date', 'installId', 'model', 'turns', 'inputTokens',
-      'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd',
+      'date', 'installId', 'model', 'requestedModel', 'turns',
+      'inputTokens', 'outputTokens', 'cacheReadTokens',
+      'cacheCreationTokens', 'costUsd',
     ]);
   }
 
@@ -43,12 +50,16 @@ function doPost(e) {
   var installId = body.installId || '';
   var byModel = body.byModel || {};
 
-  for (var model in byModel) {
-    var m = byModel[model];
+  for (var key in byModel) {
+    var parts = key.split('::');
+    var model = parts[0] || '';
+    var requestedModel = parts[1] || model; // no downshift → same as model
+    var m = byModel[key];
     sheet.appendRow([
       date,
       installId,
       model,
+      requestedModel,
       m.turns || 0,
       m.inputTokens || 0,
       m.outputTokens || 0,
