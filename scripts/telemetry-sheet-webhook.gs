@@ -23,17 +23,21 @@
 // alone) — Scrooge/autoModel can downshift the same actual model from
 // different originally-requested models, and those need to stay
 // distinguishable for measuring Scrooge's effect (see
-// assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1):
-//   { date, installId, byModel: { "<model>::<requestedModel>": { turns,
-//     inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
-//     costUsd } } }
+// assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1).
+// sentAt is a fresh ISO timestamp generated at flush time — a single
+// calendar date can legitimately produce more than one row (day-close,
+// a mid-day disconnect/crash, end-of-day), and sentAt is what lets a
+// later reader tell those apart (Key decision 5):
+//   { date, sentAt, installId, byModel: { "<model>::<requestedModel>": {
+//     turns, inputTokens, outputTokens, cacheReadTokens,
+//     cacheCreationTokens, costUsd } } }
 
 function doPost(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
 
   if (sheet.getLastRow() === 0) {
     sheet.appendRow([
-      'date', 'installId', 'model', 'requestedModel', 'turns',
+      'date', 'sentAt', 'installId', 'model', 'requestedModel', 'turns',
       'inputTokens', 'outputTokens', 'cacheReadTokens',
       'cacheCreationTokens', 'costUsd',
     ]);
@@ -47,6 +51,7 @@ function doPost(e) {
   }
 
   var date = body.date || '';
+  var sentAt = body.sentAt || '';
   var installId = body.installId || '';
   var byModel = body.byModel || {};
 
@@ -57,6 +62,7 @@ function doPost(e) {
     var m = byModel[key];
     sheet.appendRow([
       date,
+      sentAt,
       installId,
       model,
       requestedModel,
