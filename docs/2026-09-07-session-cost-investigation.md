@@ -1,8 +1,9 @@
 # Investigation: Why a Simple Gaffer Task Cost $10
 
 Date: 2026-09-07
-Status: Root causes confirmed via direct transcript evidence, fixes not yet
-implemented.
+Status: Root causes confirmed via direct transcript evidence.
+Update 2026-09-07: root causes 1 and 2 fixed (verified against source, 131/131
+tests). Results and decisions-pending in `docs/2026-09-07-session-cost-fixes.md`.
 
 ## Plain-language summary
 

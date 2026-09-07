@@ -5,7 +5,8 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { pruneSessionFile } from './session-pruner.js';
+// session-pruner.js intentionally not imported: mid-session pruning was disabled
+// (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import { scoreMessage, classifyTurn, tierToSelection } from './model-router.js';
 import * as telemetry from './telemetry.js';
 
@@ -331,10 +332,24 @@ function shortToolLabel(name, input) {
   return hint ? n + ': ' + hint : n;
 }
 
-// When the running session crosses this many input tokens we summarize it
+// When the running session crosses this many context tokens we summarize it
 // and start fresh on the next turn. ~75% of the 200K Opus context — leaves
 // headroom so the summarizing call itself doesn't hit the wall.
 var COMPACT_THRESHOLD_TOKENS = 150000;
+
+// Real total context a single API call processed = uncached input + tokens read
+// from cache + tokens written to cache. The compaction gate MUST use this, not
+// usage.input_tokens alone: input_tokens is only the uncached slice, which stays
+// in the single digits to low tens once prompt caching is warm, so it never
+// reaches COMPACT_THRESHOLD_TOKENS. Gating on it left the guard dead and let one
+// session grow for 8 days / 437M cumulative cache-read tokens without a reset.
+// See docs/2026-09-07-session-cost-investigation.md (root cause 1).
+export function contextTokensFromUsage(usage) {
+  if (!usage) return 0;
+  return (usage.input_tokens || 0)
+    + (usage.cache_read_input_tokens || 0)
+    + (usage.cache_creation_input_tokens || 0);
+}
 
 var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
 
@@ -541,7 +556,7 @@ export class ChatHandler {
     opts = opts || {};
     this.activeProcess = null;
     this.sessionId = null;
-    this.lastInputTokens = 0;
+    this.lastContextTokens = 0;
     this.compactedSummary = null;
     this.compacting = false;
     this.claudeBin = null;
@@ -919,20 +934,20 @@ export class ChatHandler {
       // a later Settings open still shows current models even if the token has
       // since lapsed. Fire-and-forget, throttled.
       this.refreshCatalogInBackground();
-      // Shed replayed image payloads from the persisted transcript before the
-      // next --resume. Safe window: this turn's process has exited. Skipped
-      // while a background compaction holds the session. Never throws.
-      // MUST stay synchronous: the atomic rewrite's safety vs. the next
-      // --resume and vs. a background compaction (_compactSession, which also
-      // resumes this session) depends on blocking the event loop until the
-      // rename completes — an async rewrite would reopen a read-during-write
-      // window. Do not convert to fs.promises.
-      if (this.sessionId && !this.compacting) {
-        pruneSessionFile(this.sessionId);
-      }
+      // Image-pruning DISABLED (2026-09-07). pruneSessionFile() rewrote old
+      // image blocks in the transcript to shed their tokens, but rewriting any
+      // earlier message changes the cached prompt prefix and INVALIDATES the
+      // cache for everything after it, forcing a full, cache-write-priced
+      // rewrite of the downstream context that costs far more than the image
+      // tokens it saved (measured: one prune was followed by a call writing
+      // 280,132 fresh tokens). Session growth is now bounded by the compaction
+      // gate below (fixed in the same change), so mid-session pruning is all
+      // cost and no benefit. See docs/2026-09-07-session-cost-investigation.md
+      // (root cause 2). To revisit, prune only in a way that never rewrites an
+      // already-cached prefix; session-pruner.js stays as the reference impl.
       // If the session is approaching the context wall, summarize it now in
       // the background so the next user turn can start fresh with continuity.
-      if (this.sessionId && this.lastInputTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
+      if (this.sessionId && this.lastContextTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
         this._compactSession(socket);
       }
     });
@@ -1018,10 +1033,11 @@ export class ChatHandler {
         return;
       }
       this.sessionId = event.session_id || this.sessionId;
-      // Track the input-token total reported by the CLI so we can compact
-      // the session before the next turn would breach the context window.
-      if (event.usage && typeof event.usage.input_tokens === 'number') {
-        this.lastInputTokens = event.usage.input_tokens;
+      // Track the REAL total context this call processed (see
+      // contextTokensFromUsage), so the gate below can compact before the next
+      // turn breaches the window. Gating on input_tokens alone was dead code.
+      if (event.usage) {
+        this.lastContextTokens = contextTokensFromUsage(event.usage);
       }
       // Usage telemetry — model name + token counts + cost estimate only,
       // never prompt/response content. Always recorded regardless of the
@@ -1085,7 +1101,7 @@ export class ChatHandler {
         // Drop the bloated session so the next chat starts fresh; the
         // summary will be prepended to the next user message.
         this.sessionId = null;
-        this.lastInputTokens = 0;
+        this.lastContextTokens = 0;
         if (socket && socket.readyState === 1) {
           socket.send(JSON.stringify({
             type: 'chat_event',
