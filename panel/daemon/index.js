@@ -5,6 +5,7 @@ import { ChatHandler, augmentedEnv } from './chat-handler.js';
 import { authStatus, authIdentityFromDisk, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
+import * as telemetry from './telemetry.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -134,6 +135,22 @@ bridge.onSignOut = async (socket) => {
 };
 bridge.onCancelSignIn = () => { if (activeSignIn) { activeSignIn.cancel(); activeSignIn = null; } signInInFlight = false; };
 
+bridge.onGetShareUsageStats = (socket) => {
+  if (socket && socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: 'share_usage_stats', enabled: telemetry.isEnabled() }));
+  }
+};
+bridge.onSetShareUsageStats = (msg, socket) => {
+  telemetry.setEnabled(!!msg.enabled);
+  if (socket && socket.readyState === 1) {
+    socket.send(JSON.stringify({ type: 'share_usage_stats', enabled: telemetry.isEnabled() }));
+  }
+};
+// "Last panel disconnected" is the real-world moment matching "AE closed" —
+// the daemon process itself keeps running, so flush now rather than waiting
+// on a day-rollover that might not come for a long time.
+bridge.onLastPanelDisconnected = () => { telemetry.flush().catch(() => {}); };
+
 var queue = new Queue(bridge);
 
 startMcpServer(MCP_PORT, queue, {
@@ -191,11 +208,20 @@ if (reloadTimer.unref) reloadTimer.unref();
 // active chat. SIGTERM (update.sh's stop) DRAINS first: it waits for the chat,
 // sign-in, and any in-flight JSX to finish so an update never cuts off real
 // work, then exits (hard cap past the 60s JSX timeout so it can't hang).
+// Bounded wait for telemetry's async flush POST — never block shutdown
+// indefinitely, but give it a fair shot rather than skipping it outright.
+function flushTelemetryThen(cb) {
+  var done = false;
+  var finish = () => { if (done) return; done = true; cb(); };
+  telemetry.flush().then(finish).catch(finish);
+  setTimeout(finish, 300);
+}
+
 process.on('SIGINT', () => {
   console.log('\nGaffer: shutting down');
   chatHandler.cancel();
   bridge.stop();
-  process.exit(0);
+  flushTelemetryThen(() => process.exit(0));
 });
 var draining = false;
 process.on('SIGTERM', () => {
@@ -208,7 +234,8 @@ process.on('SIGTERM', () => {
     if (idle || Date.now() > deadline) {
       if (!idle) console.log('Gaffer: drain timed out — exiting anyway');
       try { bridge.stop(); } catch (e) { /* ignore */ }
-      process.exit(0);
+      flushTelemetryThen(() => process.exit(0));
+      return;
     }
     setTimeout(waitIdle, 250);
   })();
