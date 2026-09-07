@@ -134,6 +134,11 @@ Screenshot and compare after visual changes — don't trust numbers alone.
   index or deleted item), "Cannot set value" (wrong shape), "Expression
   disabled" (check expressionError).
 - If an operation fails, do NOT retry unchanged. Inspect why, adjust.
+- A runaway loop cannot freeze AE: Gaffer guards every loop. A provably endless
+  loop (while(true) with no exit) is refused before it runs, and any loop that
+  runs past a short safety ceiling is stopped with a clear "safety ceiling"
+  error. If you see that error, your step did too much in one call, split the
+  work smaller and use runJSXLoop so each step is ONE unit.
 
 ## Output
 

@@ -1,5 +1,6 @@
 import { wrapSlice } from '../safety.js';
 import { runChunkLoop } from '../chunk-driver.js';
+import { preflight } from '../instrument.js';
 
 // Approved defaults (see docs/superpowers/specs/2026-09-01-portioned-jsx-execution-design.md).
 var DEFAULT_SLICE_MS = 300;      // per-slice time budget in AE
@@ -55,11 +56,26 @@ export function register(server, queue, z, ctx) {
         var effMaxMs = Number(maxMs) > 0 ? Number(maxMs) : DEFAULT_MAX_MS;
         var effMaxSlices = Number(maxSlices) > 0 ? Number(maxSlices) : DEFAULT_MAX_SLICES;
 
+        // Loop guard: parse + instrument the step body ONCE here (not per slice).
+        // Reject a provably-infinite inner loop; otherwise every loop in the step
+        // gets a __gafferTick so a mis-sized unit self-aborts instead of freezing.
+        var pf = preflight(step, { asExpression: true });
+        if (pf.telemetry && (pf.telemetry.hasLoop || pf.telemetry.parseError || pf.action === 'reject')) {
+          console.log('[loopguard] runJSXLoop ' + pf.action + ' ' + JSON.stringify(pf.telemetry));
+        }
+        if (pf.action === 'reject') {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ ok: false, error: pf.message, done: false, totalProcessed: 0, reason: 'error' }) }],
+            isError: true,
+          };
+        }
+        var effStep = pf.code;
+
         // Each slice: JSON-inject the current cursor, wrap it, and run it through
         // the SAME serialized queue/bridge path runJSX uses (aeVersion routes it).
         var runSlice = function (cursor, part) {
           var cursorJSON = JSON.stringify(typeof cursor === 'undefined' ? null : cursor);
-          var wrapped = wrapSlice(step, cursorJSON, label, effSliceMs, part);
+          var wrapped = wrapSlice(effStep, cursorJSON, label, effSliceMs, part);
           return queue.enqueuePreWrapped(wrapped, aeVersion);
         };
 
