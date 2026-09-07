@@ -53,6 +53,14 @@ if (Test-Path "$panelDir\chat-history.json") {
     Copy-Item "$panelDir\chat-history.json" $backup
 }
 
+# Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) -
+# without this it is silently wiped by robocopy /PURGE on every update.
+$configBackup = $null
+if (Test-Path "$panelDir\.gaffer-config.json") {
+    $configBackup = Join-Path $tmpDir "gaffer-config.backup.json"
+    Copy-Item "$panelDir\.gaffer-config.json" $configBackup
+}
+
 # Stop daemon
 Write-Host "Stopping daemon..."
 Stop-Daemon
@@ -60,12 +68,17 @@ Stop-Daemon
 # Replace files (preserve user data)
 Write-Host "Replacing files..."
 robocopy "$extracted\panel" $panelDir /E /PURGE `
-    /XF chat-history.json `
+    /XF chat-history.json .gaffer-config.json `
     /XD node_modules dist | Out-Null
 
 # Restore chat history
 if ($backup -and (Test-Path $backup)) {
     Copy-Item $backup "$panelDir\chat-history.json" -Force
+}
+
+# Restore .gaffer-config.json
+if ($configBackup -and (Test-Path $configBackup)) {
+    Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
 }
 
 # npm install - CEP spawns this script with a STRIPPED PATH, so bare `npm`
