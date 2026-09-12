@@ -1,5 +1,9 @@
 # Token optimization — design
 
+> **FULLY SUPERSEDED (2026-09-09).** Both designed levers are gone: the image
+> pruner was disabled (2026-09-07, cache-invalidating) and the model downshift
+> ("Save tokens" / Scrooge) was removed entirely (2026-09-09). History only.
+
 **Branch:** `feat/token-optimization`
 **Date:** 2026-08-24
 **Status:** approved, pre-implementation

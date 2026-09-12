@@ -12,6 +12,17 @@ cd "$DAEMON_DIR"
 if ! npx esbuild --version &>/dev/null 2>&1; then
   echo "Installing esbuild..."
   npm install --save-dev esbuild
+  # npm 10+/12 blocks dependency install scripts by default, so esbuild's
+  # postinstall — which downloads its platform-native binary — can be skipped,
+  # leaving `npx esbuild` unrunnable (seen on Windows npm 12). Detect that here
+  # and tell the maintainer how to finish, instead of failing cryptically below.
+  if ! npx esbuild --version &>/dev/null 2>&1; then
+    echo "ERROR: esbuild installed but its native binary is missing." >&2
+    echo "Your npm blocked esbuild's postinstall script. Approve it and retry, e.g.:" >&2
+    echo "    npm rebuild esbuild        # re-runs the install script for that package" >&2
+    echo "  (or approve scripts for your npm version, then re-run this build)." >&2
+    exit 1
+  fi
 fi
 
 # 1. Bundle ESM → CJS

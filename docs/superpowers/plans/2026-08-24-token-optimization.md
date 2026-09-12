@@ -1,5 +1,11 @@
 # Token Optimization Implementation Plan
 
+> **FULLY SUPERSEDED (2026-09-09).** Both mechanisms this plan introduced are gone:
+> the mid-session image pruner was disabled (2026-09-07, PR #2 — it invalidated the
+> prompt cache and cost more than it saved), and the optional model downshift
+> ("Save tokens" / Scrooge) was removed entirely (2026-09-09 — chat always runs on
+> exactly the requested model/effort). Kept for history only; do not implement.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Cut per-turn input tokens in Gaffer panel chat by stubbing replayed image payloads out of the resumed transcript, plus two isolated levers (prompt conciseness, an optional model downshift).

@@ -7,7 +7,6 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
-import { scoreMessage, classifyTurn, tierToSelection } from './model-router.js';
 import * as telemetry from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -332,10 +331,84 @@ function shortToolLabel(name, input) {
   return hint ? n + ': ' + hint : n;
 }
 
-// When the running session crosses this many context tokens we summarize it
-// and start fresh on the next turn. ~75% of the 200K Opus context — leaves
-// headroom so the summarizing call itself doesn't hit the wall.
-var COMPACT_THRESHOLD_TOKENS = 150000;
+// When the running session crosses this many context tokens we summarize it and
+// start fresh on the next turn. The threshold is VARIANT-AWARE: it must sit
+// below the session's own context window or the gate never fires. A flat 500K
+// (the 0.10.0 first cut) was wrong both ways — a standard 200K-window session
+// can never reach 500K, so compaction was silently dead for it, and a 1m session
+// got compacted at half its 1M capacity. So:
+//   - standard (200K window): 150K — fires with headroom before the 200K wall.
+//   - 1m (1M window): 800K — respects an opted-in large context, still leaves
+//     ~200K of headroom below the wall and clears the sonnet-5 summarizer easily.
+var COMPACT_THRESHOLD_STANDARD = 150000;
+var COMPACT_THRESHOLD_1M = 800000;
+export function compactThreshold(variant) {
+  return variant === '1m' ? COMPACT_THRESHOLD_1M : COMPACT_THRESHOLD_STANDARD;
+}
+
+// Fallback model for the one-shot summarization in _compactSession, used when
+// the leading model's own window can't safely re-read the session (see
+// compactionSummarizerModel). Must have a context window comfortably above the
+// threshold, since it re-reads the entire pre-compaction session in one call.
+// sonnet-5 (1M) clears 800K with margin; Haiku (200K) would not.
+var COMPACT_SUMMARIZER_MODEL = 'claude-sonnet-5';
+
+// Headroom the summarizer needs on top of the session it re-reads: its own
+// ~400-word summary output + prompt + measurement slop. Small in absolute terms.
+var COMPACT_SUMMARIZER_HEADROOM = 20000;
+
+// Pick the model to summarize a session for compaction. Prefer the model that
+// actually LED the conversation (this._lastModel) — its cache is already warm,
+// so the summarizer gets a cache-READ instead of a cold cache-WRITE on a fresh
+// model. Only reuse it when its effective context window (the 1M variant if the
+// model carries a [1m] suffix, else its base window) clears the session size
+// plus headroom; otherwise fall back to COMPACT_SUMMARIZER_MODEL. The guard
+// matters when a smaller-window model led the last turn but the accumulated
+// session is larger than its window (a manual mid-conversation model switch can
+// still cause this even with autoModel gone). Pure + capLookup-injected for test.
+export function compactionSummarizerModel(lastModel, lastContextTokens, capLookup) {
+  if (lastModel) {
+    var is1m = /\[1m\]$/.test(lastModel);
+    var cap = capLookup ? capLookup(lastModel) : null;
+    var windows = (cap && cap.contextWindows) || [];
+    var effective = windows.length === 0 ? 0
+      : (is1m && cap.oneM ? Math.max.apply(null, windows) : Math.min.apply(null, windows));
+    if (effective >= (lastContextTokens || 0) + COMPACT_SUMMARIZER_HEADROOM) {
+      return lastModel;
+    }
+  }
+  return COMPACT_SUMMARIZER_MODEL;
+}
+
+// Pure gate for the compaction decision, variant-aware — exported so a test can
+// prove the behavior (standard fires at 150K, 1m only near 800K) rather than
+// re-asserting a constant.
+export function shouldCompactSession(contextTokens, variant) {
+  return (contextTokens || 0) >= compactThreshold(variant);
+}
+
+// Resolve which session id a turn should resume. Normally the panel-supplied id
+// wins, falling back to the daemon's own. THE EXCEPTION: a compaction nulls the
+// daemon's sessionId, but the panel keeps echoing the OLD id on the next turn —
+// which resurrected the just-compacted huge session and re-compacted it every
+// turn (summaries discarded, full cache re-read). So an id equal to the
+// specifically-abandoned one is refused, forcing the fresh session (and its
+// carried-forward summary) to take. Only that exact id is refused; any other
+// live id is unaffected.
+export function resolveSessionId(msgSessionId, currentSessionId, abandonedId) {
+  var id = msgSessionId || currentSessionId || null;
+  if (id && abandonedId && id === abandonedId) return null;
+  return id;
+}
+
+// Which session a turn resumes. An explicit "start fresh" (Clear chat sets
+// newConversation) forces a brand-new session regardless of any id the panel
+// still echoes — otherwise Clear chat is cosmetic and the next message silently
+// resumes the old session. Any other turn defers to resolveSessionId.
+export function sessionIdForTurn(newConversation, msgSessionId, currentSessionId, abandonedId) {
+  if (newConversation) return null;
+  return resolveSessionId(msgSessionId, currentSessionId, abandonedId);
+}
 
 // Real total context a single API call processed = uncached input + tokens read
 // from cache + tokens written to cache. The compaction gate MUST use this, not
@@ -496,59 +569,6 @@ export function augmentedEnv() {
     if (pathParts.indexOf(p) === -1) pathParts.push(p);
   }
   return { ...process.env, PATH: pathParts.join(':') };
-}
-
-// One-shot classifier runner for the autoModel middle band: haiku, hermetic,
-// fresh session. Returns (prompt) => Promise<stdout>. Never rejects — resolves
-// '' on timeout/error so classifyTurn falls back to 'complex' (no downshift).
-//
-// --safe-mode strips every customization (hooks, plugins, skills, LSP, auto
-// memory, CLAUDE.md) but KEEPS keychain auth — unlike --bare, which skips the
-// keychain and then demands ANTHROPIC_API_KEY. So the classifier stays on the
-// user's subscription with nothing bleeding in. classifierEnv() also kills the
-// blocking non-essential startup round-trips (update check / telemetry / error
-// reporting), trimming a few seconds off cold-start. Measured ~4–7s (was ~7–15s).
-//
-// Not warm, not API-direct, by design: a resident stream-json session shares one
-// conversation and haiku drifts from classifying into chatting (context poison),
-// and the CLI inits lazily on first message so an idle process pre-pays nothing.
-// A direct Messages-API call with the subscription OAuth token IS ~1s and works,
-// but was declined — it's a grey-area use of the token and could face an end-user
-// keychain-access prompt. Staying on the CLI keeps auth boring and universal.
-var CLASSIFY_TIMEOUT_MS = 20000;
-// augmentedEnv + non-essential-traffic off. Scoped to the classifier subprocess
-// only — the main chat keeps telemetry/updates. Documented Claude Code vars.
-function classifierEnv() {
-  return {
-    ...augmentedEnv(),
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-    DISABLE_AUTOUPDATER: '1',
-    DISABLE_TELEMETRY: '1',
-    DISABLE_ERROR_REPORTING: '1',
-  };
-}
-function makeClassifyRun(claudeBin) {
-  return function (prompt) {
-    return new Promise(function (resolve) {
-      var done = false;
-      var finish = function (v) { if (!done) { done = true; resolve(v); } };
-      try {
-        var child = spawn(claudeBin, [
-          '-p', '--model', 'haiku',
-          '--safe-mode', // strip customizations, keep keychain auth (not --bare)
-          '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-          '--dangerously-skip-permissions',
-        ], { stdio: ['pipe', 'pipe', 'pipe'], env: classifierEnv(), windowsHide: true });
-        var out = '';
-        var timer = setTimeout(function () { try { child.kill('SIGTERM'); } catch (e) {} finish(''); }, CLASSIFY_TIMEOUT_MS);
-        child.stdout.on('data', function (c) { out += c.toString(); });
-        child.on('close', function () { clearTimeout(timer); finish(out); });
-        child.on('error', function () { clearTimeout(timer); finish(''); });
-        child.stdin.write(prompt);
-        child.stdin.end();
-      } catch (e) { finish(''); }
-    });
-  };
 }
 
 export class ChatHandler {
@@ -722,6 +742,12 @@ export class ChatHandler {
     this.cancel();
     this._lastEmit = null;
     this._toolNames = {};
+    // Reset per-turn context occupancy so the compaction gate can only ever read
+    // a value THIS turn actually measured (repopulated from assistant-step usage
+    // in _processEvent). Structurally prevents a stale value from a prior turn or
+    // a dropped session — sessionId is nulled in several paths that historically
+    // did not clear this — from leaking into the gate.
+    this.lastContextTokens = 0;
 
     try {
       var claudeBin = await findClaudeBinary();
@@ -747,38 +773,12 @@ export class ChatHandler {
     // Keep the trust-first default consistent for older panels and headless
     // callers that omit advanced settings: Opus 4.8 at Medium effort.
     var model = msg.model || 'claude-opus-4-8';
-    // Preserve the originally-requested model before any Scrooge/autoModel
-    // downshift reassigns `model` below — telemetry needs both (see
-    // assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1).
-    var requestedModel = model;
+    // Chat always runs on exactly the requested model/effort — no automatic
+    // switching. requestedModel mirrors the final model for telemetry; the 1m
+    // variant suffix is included so it matches the final `model` (which gets
+    // [1m] appended below) in the usage log.
+    var requestedModel = model + (msg.variant === '1m' ? '[1m]' : '');
     var effort = msg.effort || 'medium';
-    // Optional, off by default: a two-stage classifier lightens the turn.
-    // Stage 1 is a free local score; the ambiguous middle escalates to one
-    // cheap haiku call. trivial → haiku/low + drop 1M; moderate → sonnet/medium
-    // (keeps 1M); complex → unchanged. Never upshifts, never touches a pinned
-    // id. Logged so the lever can be measured before it earns its keep.
-    var autoDownshifted = false;
-    if (msg.autoModel) {
-      // Stage 1: free local score. Stage 2 (haiku) only on the ambiguous
-      // middle — logged with its verdict + latency so the lever can be
-      // evaluated from real usage before it earns its keep.
-      var tier = scoreMessage(msg.message);
-      if (tier === 'unsure') {
-        var _t0 = Date.now();
-        tier = await classifyTurn(msg.message, { run: makeClassifyRun(claudeBin) });
-        console.log('[automodel] classify unsure -> ' + tier + ' in ' + (Date.now() - _t0) + 'ms');
-      }
-      var sel = tierToSelection(tier, { model: model, effort: effort, variant: msg.variant });
-      if (sel.downshifted) {
-        console.log('[automodel] ' + tier + ': ' + model + '/' + (effort || '-')
-          + (msg.variant === '1m' ? '/1m' : '')
-          + ' -> ' + sel.model + '/' + (sel.effort || '-')
-          + (sel.dropContext && msg.variant === '1m' ? ' (1m dropped)' : ''));
-        model = sel.model;
-        effort = sel.effort;
-        autoDownshifted = sel.dropContext;
-      }
-    }
     // Validate advanced controls against the same model matrix sent to
     // Settings. This is a server-side guard for stale panels or hand-crafted
     // websocket messages; the UI also hides unsupported choices. Account/plan
@@ -787,7 +787,7 @@ export class ChatHandler {
     var capabilityKey = String(model || '').replace(/\[1m\]$/, '');
     var capability = (this.liveModelCapabilities && this.liveModelCapabilities[capabilityKey])
       || modelCapability(model, null);
-    if (msg.variant === '1m' && !autoDownshifted && !capability.oneM) {
+    if (msg.variant === '1m' && !capability.oneM) {
       if (socket.readyState === 1) socket.send(JSON.stringify({
         type: 'chat_error',
         error: '1M context is not supported by ' + model + '.',
@@ -796,12 +796,14 @@ export class ChatHandler {
     }
     if (effort && capability.efforts.indexOf(effort) === -1) effort = null;
     // Context-window variant: Claude Code encodes 1M as a [1m] model suffix.
-    // Skip it when autoModel deliberately downshifted to a non-1M model.
-    if (msg.variant === '1m' && !autoDownshifted) model += '[1m]';
+    if (msg.variant === '1m') model += '[1m]';
     // Retained (not just local vars) so the 'result' event handler below can
     // read them for telemetry once the turn completes.
     this._lastModel = model;
     this._lastRequestedModel = requestedModel;
+    // The compaction gate is variant-aware (a 1m session has a far larger wall);
+    // remember this turn's context variant for the gate in the close handler.
+    this._lastVariant = msg.variant;
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1) args.push('--effort', effort);
@@ -821,7 +823,25 @@ export class ChatHandler {
     args.push('--allowedTools', allowed);
     console.log('Gaffer chat args: enabledMcps=' + JSON.stringify(enabled) + ' allowed=' + allowed);
 
-    var sessionId = msg.sessionId || this.sessionId;
+    // An explicit "start fresh" from the panel (Clear chat) unconditionally
+    // drops the daemon's held session BEFORE resolveSessionId runs — distinct
+    // from an absent id, which just means the panel hasn't loaded one yet and
+    // should resume what the daemon holds. Without this, Clear chat is cosmetic:
+    // the daemon keeps its id and the next message silently resumes the old
+    // (possibly huge) session behind an empty window.
+    if (msg.newConversation) {
+      this.sessionId = null;
+      this._abandonedSessionId = null;
+    }
+    // sessionIdForTurn forces fresh on newConversation (Clear chat); otherwise
+    // resolveSessionId refuses the just-abandoned id so a fresh (summarized)
+    // session takes instead of the panel re-echoing the huge one back.
+    var sessionId = sessionIdForTurn(msg.newConversation, msg.sessionId, this.sessionId, this._abandonedSessionId);
+    if (!sessionId) this.sessionId = null; // honor the reset even if the panel re-sent the old id
+    // Latch is one-shot: once we've gone fresh past the abandoned id, forget it.
+    if (this._abandonedSessionId && (msg.sessionId === this._abandonedSessionId || !sessionId)) {
+      this._abandonedSessionId = null;
+    }
     if (sessionId) {
       args.push('--resume', sessionId);
       this.sessionId = sessionId;
@@ -833,12 +853,11 @@ export class ChatHandler {
     var env = augmentedEnv();
     console.log('Gaffer chat PATH: ' + env.PATH);
     // Resolved model/effort actually handed to the CLI this turn — the record
-    // for tracing what a panel selection maps to (and what autoModel changed).
+    // for tracing what a panel selection maps to.
     console.log('Gaffer chat spawn: --model ' + model
       + (effort && EFFORTS.indexOf(effort) !== -1 ? ' --effort ' + effort : ' (no --effort)')
       + ' | variant=' + (msg.variant || 'standard')
-      + ' resume=' + (sessionId ? 'yes' : 'new')
-      + ' autoModel=' + (msg.autoModel ? 'on' : 'off'));
+      + ' resume=' + (sessionId ? 'yes' : 'new'));
 
     // Cache for the background compaction call.
     this.claudeBin = claudeBin;
@@ -947,7 +966,7 @@ export class ChatHandler {
       // already-cached prefix; session-pruner.js stays as the reference impl.
       // If the session is approaching the context wall, summarize it now in
       // the background so the next user turn can start fresh with continuity.
-      if (this.sessionId && this.lastContextTokens >= COMPACT_THRESHOLD_TOKENS && !this.compacting) {
+      if (this.sessionId && shouldCompactSession(this.lastContextTokens, this._lastVariant) && !this.compacting) {
         this._compactSession(socket);
       }
     });
@@ -962,6 +981,19 @@ export class ChatHandler {
 
   _processEvent(event, socket) {
     if (socket.readyState !== 1) return;
+
+    // Track CURRENT context-window occupancy from each assistant step's own
+    // usage (input + cache_read + cache_creation of THIS step). This is the live
+    // window size the compaction gate needs. It is deliberately NOT taken from
+    // the `result` event, whose usage is CUMULATIVE across every tool round-trip
+    // in the turn — each round-trip re-reads the full context from cache, so on a
+    // multi-tool turn the result usage is a large multiple of the real window and
+    // spuriously trips the gate (fired compaction at ~80K real context in the
+    // 2026-09-12 regression). The last assistant step's usage is the true
+    // occupancy. See docs/2026-09-07-session-cost-investigation.md.
+    if (event.type === 'assistant' && event.message && event.message.usage) {
+      this.lastContextTokens = contextTokensFromUsage(event.message.usage);
+    }
 
     if (event.type === 'assistant' && event.message && event.message.content) {
       for (var block of event.message.content) {
@@ -1033,12 +1065,12 @@ export class ChatHandler {
         return;
       }
       this.sessionId = event.session_id || this.sessionId;
-      // Track the REAL total context this call processed (see
-      // contextTokensFromUsage), so the gate below can compact before the next
-      // turn breaches the window. Gating on input_tokens alone was dead code.
-      if (event.usage) {
-        this.lastContextTokens = contextTokensFromUsage(event.usage);
-      }
+      // NOTE: lastContextTokens is intentionally NOT set here. The `result`
+      // event's usage is CUMULATIVE across the whole turn (every tool
+      // round-trip's cache reads summed), which over-counts the real window on a
+      // multi-tool turn and spuriously trips the compaction gate. Occupancy is
+      // tracked per assistant step at the top of _processEvent instead. The
+      // cumulative figure IS correct for cost, so telemetry below still uses it.
       // Usage telemetry — model name + token counts + cost estimate only,
       // never prompt/response content. Always recorded regardless of the
       // sharing toggle (telemetry.js decides whether to actually send it);
@@ -1072,15 +1104,25 @@ export class ChatHandler {
     if (!this.claudeBin) return;
     this.compacting = true;
     var resumingId = this.sessionId;
+    // Summarize on the model that led the conversation when its window can safely
+    // re-read the session (warm cache -> cache-read, not a cold cache-write on a
+    // fresh model); fall back to COMPACT_SUMMARIZER_MODEL otherwise.
+    var self = this;
+    var summarizer = compactionSummarizerModel(this._lastModel, this.lastContextTokens, function (id) {
+      var key = String(id || '').replace(/\[1m\]$/, '');
+      return (self.liveModelCapabilities && self.liveModelCapabilities[key]) || modelCapability(id, null);
+    });
+    console.log('Gaffer compact: summarizing on ' + summarizer
+      + (summarizer === this._lastModel ? ' (reused leading model, warm cache)' : ' (fallback)'));
     if (socket && socket.readyState === 1) {
       socket.send(JSON.stringify({
         type: 'chat_event',
         event: 'compacting',
-        message: 'Compacting conversation to fit context window…',
+        message: 'Summarizing older messages to keep this conversation fast and cheap…',
       }));
     }
 
-    var args = ['-p', '--model', 'haiku', '--resume', resumingId, '--dangerously-skip-permissions'];
+    var args = ['-p', '--model', summarizer, '--resume', resumingId, '--dangerously-skip-permissions'];
     var child = spawn(this.claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: this.envForSpawn,
@@ -1098,8 +1140,12 @@ export class ChatHandler {
       this.compacting = false;
       if (code === 0 && out.trim()) {
         this.compactedSummary = out.trim();
-        // Drop the bloated session so the next chat starts fresh; the
-        // summary will be prepended to the next user message.
+        // Drop the bloated session so the next chat starts fresh; the summary
+        // will be prepended to the next user message. Remember the abandoned id:
+        // the panel still holds it and will re-send it next turn, so
+        // resolveSessionId must refuse it or the huge session is resurrected and
+        // re-compacted every turn (the loop that burned ~$6/turn).
+        this._abandonedSessionId = resumingId;
         this.sessionId = null;
         this.lastContextTokens = 0;
         if (socket && socket.readyState === 1) {
@@ -1107,6 +1153,9 @@ export class ChatHandler {
             type: 'chat_event',
             event: 'compacted',
             message: 'Conversation compacted. Continuing with summary.',
+            // Tell the panel the session was reset so it stops echoing the dead
+            // id (defense-in-depth; the daemon latch already refuses it).
+            sessionId: null,
           }));
         }
       } else {
@@ -1114,7 +1163,7 @@ export class ChatHandler {
           socket.send(JSON.stringify({
             type: 'chat_event',
             event: 'compact_failed',
-            message: 'Could not compact conversation — context will reset on overflow.',
+            message: 'Could not compact conversation, context will reset on overflow.',
           }));
         }
       }
