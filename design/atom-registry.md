@@ -72,7 +72,7 @@ Status legend: ⬜ unverified · ✅ verified default+variants · ⚠️ finding
 | InputRow | 195:1429 | molecule | InputField + Button(send/stop) | mode{idle,busy,typed} |
 | ActivitySettingsRow | 185:1193 | molecule | Dropdown + Toggle + Button | kind{model,mcps,update} |
 | ActivityLog | 191:1343 | organism | ActivitySettingsRow×n | expanded{false,true} |
-| Menu item | 478:12980 | molecule | per-Section mix | Section{Update,Scrooge,Sounds,Account CLI,Account API,Models} + Hovered |
+| Menu item | 478:12980 | molecule | per-Section mix | Section{Update,Sounds,Account CLI,Account API,Models} + Hovered |
 | SelectedTextActions | 507:40583 | molecule | Button(hollow)×2 | the CTA pill; container glue verified this session |
 | Toast stack | 480:23820 | organism | Toast×n | — |
 | Bubble variants | 195:1388/1380 | molecule | Bubble + ImageChip/CopyBtn | override: hasImages/withCopy |
@@ -98,7 +98,7 @@ Menu item (VERTICAL, pad 12, gap 12, HUG height)
 │  │  └─ Text (grow:1, VERTICAL)
 │  │     ├─ Line 1 (HORIZONTAL, gap 8): Main Label + Badge? + Sound Selector?
 │  │     ├─ Secondary (HORIZONTAL, gap 2): Pt1 · Pt2 · Pt3 (bullet-separated)
-│  │     └─ Multiline? (TEXT, FILL — e.g. Scrooge description)
+│  │     └─ Multiline? (TEXT, FILL — e.g. Share usage stats description)
 │  └─ Controls (hug, gap 4): Toggle? / Button1? / Button2?
 └─ Row 2? (HORIZONTAL, gap 8): Button + version(grow:1, FILL) + Controls(Toggle/Buttons)
 ```

@@ -26,6 +26,21 @@ function desktopAppCli() {
   } catch (e) { return []; }
 }
 
+// Fixed (non-desktop-app) Windows install locations, newest-first by likelihood.
+// The native installer (`irm https://claude.ai/install.ps1 | iex`) — Anthropic's
+// recommended install — drops claude.exe under %USERPROFILE%\.local\bin, and it
+// is NOT on PATH by default, so it MUST be probed here or a fresh Windows install
+// reads as "Claude CLI not found". The others cover an older Programs install and
+// WinGet's shim link. Pure + env-injected so a test can assert the set.
+export function win32ClaudeCandidates(env) {
+  env = env || process.env;
+  return [
+    join(env.USERPROFILE || '', '.local', 'bin', 'claude.exe'),
+    join(env.LOCALAPPDATA || '', 'Programs', 'claude-code', 'claude.exe'),
+    join(env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'),
+  ];
+}
+
 export async function findClaudeBinary() {
   // the desktop-app CLI path changes on every auto-update — re-resolve if
   // the cached binary vanished mid-daemon-life
@@ -47,10 +62,7 @@ export async function findClaudeBinary() {
 
   // 2. Known locations
   var candidates = process.platform === 'win32'
-    ? [
-        join(process.env.LOCALAPPDATA || '', 'Programs', 'claude-code', 'claude.exe'),
-        join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'),
-      ].concat(desktopAppCli())
+    ? win32ClaudeCandidates().concat(desktopAppCli())
     : [
         '/opt/homebrew/bin/claude',  // Apple Silicon Homebrew
         '/usr/local/bin/claude',     // Intel Homebrew

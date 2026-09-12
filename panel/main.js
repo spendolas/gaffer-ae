@@ -120,6 +120,10 @@
 
   // Chat state
   var currentSessionId = null;
+  // Set by clearChat(); rides the very next chat send as newConversation:true so
+  // the daemon unconditionally drops its held session (Clear chat is otherwise
+  // cosmetic — the daemon keeps the old session and silently resumes it).
+  var pendingNewConversation = false;
   var chatBusy = false;
   var authLoggedIn = null; // null = unknown/indeterminate, true/false once daemon reports
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
@@ -138,8 +142,7 @@
   var modelDiscoveryState = 'pending';
   var modelDiscoveryReason = null; // diagnostic only; retry copy stays generic
   var autoCheckUpdates = true;
-  var autoModel = false; // off by default; persisted in chat-history.json
-  // Unlike autoModel/autoCheckUpdates above, this is NOT panel-local
+  // Unlike autoCheckUpdates above, this is NOT panel-local
   // chat-state — it round-trips through the daemon (get_share_usage_stats /
   // set_share_usage_stats), which is the actual source of truth
   // (.gaffer-config.json). This local var just mirrors the last known reply
@@ -715,7 +718,6 @@
       variant: currentVariant,
       effort: currentEffort,
       autoCheckUpdates: autoCheckUpdates,
-      autoModel: autoModel,
       soundEnabled: soundEnabled,
       soundVariant: soundVariant,
       textScale: textScale,
@@ -782,10 +784,6 @@
         if (typeof data.autoCheckUpdates === 'boolean') {
           autoCheckUpdates = data.autoCheckUpdates;
           var acEl = document.getElementById('setAutoCheck'); if (acEl) acEl.checked = autoCheckUpdates;
-        }
-        if (typeof data.autoModel === 'boolean') {
-          autoModel = data.autoModel;
-          var scEl = document.getElementById('setScrooge'); if (scEl) scEl.checked = autoModel;
         }
         if (typeof data.soundEnabled === 'boolean') {
           soundEnabled = data.soundEnabled;
@@ -929,6 +927,11 @@
         // runJSXLoop progress folds onto the running tool pill (tooltip), not a
         // separate chat item. Everything else is a normal chat notice.
         if (msg.event === 'jsx_loop_progress') { updateLoopProgress(msg.message); return; }
+        // A compaction reset the daemon's session; drop our copy of the id so we
+        // stop echoing the dead one back (which would resurrect + re-compact the
+        // huge session every turn). The daemon refuses it too, but keep the
+        // panel's state honest.
+        if (msg.event === 'compacted') currentSessionId = null;
         showChatNotice(msg.message || msg.event);
         return;
       }
@@ -1439,8 +1442,9 @@
       effort: discoveredEfforts.length ? currentEffort : null,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
-      autoModel: autoModel,
+      newConversation: pendingNewConversation,
     }));
+    pendingNewConversation = false;
     chatInputEl.value = '';
     resizeChatInput(); // collapse to one (scaled) line
     sendBtnEl.classList.remove('typed');
@@ -2194,6 +2198,9 @@
   function clearChat() {
     chatMessagesEl.innerHTML = '';
     currentSessionId = null;
+    // Tell the daemon, on the next send, to genuinely start fresh — nulling the
+    // panel's currentSessionId alone doesn't reach the daemon's held session.
+    pendingNewConversation = true;
     chatHistory = [];
     clearReplyQuotes();
     saveChat();
@@ -2486,6 +2493,21 @@
     });
   }
 
+  // True only when remoteVer is a STRICTLY newer semver than localVer. The update
+  // banner must gate on this, not on a bare commit mismatch: a differing commit
+  // can be an equal or OLDER release, and offering that as an "update" prompts a
+  // downgrade (seen: a 0.10.0 install told to "update" to 0.9.9). Missing/garbled
+  // versions compare as not-newer, so a bad remote never nags.
+  function isNewerVersion(remoteVer, localVer) {
+    function parts(v) { return String(v == null ? '' : v).split('.').map(function (n) { return parseInt(n, 10) || 0; }); }
+    var r = parts(remoteVer), l = parts(localVer);
+    for (var i = 0; i < Math.max(r.length, l.length); i++) {
+      var a = r[i] || 0, b = l[i] || 0;
+      if (a !== b) return a > b;
+    }
+    return false;
+  }
+
   function checkForUpdate(silent) {
     if (isDevInstall) {
       availableUpdateCommit = null;
@@ -2509,7 +2531,10 @@
           if (!silent) showModal('Local version unknown. Reinstall to enable updates.');
           return;
         }
-        if (remote.commit === versionData.commit) {
+        // Up to date unless the remote is a genuinely NEWER version. A bare
+        // commit mismatch is not enough — an equal or older release must never
+        // surface as an available update (that offered a downgrade).
+        if (remote.commit === versionData.commit || !isNewerVersion(remote.version, versionData.version)) {
           availableUpdateCommit = null;
           updateBannerEl.classList.remove('visible');
           syncSettingsUpdateButton();
@@ -2522,7 +2547,7 @@
         syncSettingsUpdateButton();
         if (remote.commit === dismissedUpdateCommit) return;
         resetUpdateBannerButtons();
-        updateTextEl.textContent = 'Update available — v' + remote.version;
+        updateTextEl.textContent = 'Update available, v' + remote.version;
         updateBannerEl.classList.add('visible');
         syncSettingsUpdateButton();
       }).catch(function (e) {
@@ -3283,8 +3308,8 @@
   wireSpell(textIncEl, function () { return 'Larger text'; });
   applyTextScale(); // initialize label + disabled states at load
 
-  // Auto-check, Save-tokens (Scrooge) and Check-now are owned by the Settings
-  // modal now (setAutoCheck / setScrooge / setCheckNowBtn handlers below).
+  // Auto-check and Check-now are owned by the Settings modal now
+  // (setAutoCheck / setCheckNowBtn handlers below).
   // Drawer expand/collapse is class-driven with a height transition —
   // native <details> toggling can't animate, so it stays `open` and the
   // .expanded class shows/hides the animated .activity-body.
@@ -3580,7 +3605,6 @@
     // state, including checks that completed while Settings was already open.
     syncSettingsUpdateButton();
     document.getElementById('setAutoCheck').checked = autoCheckUpdates;
-    document.getElementById('setScrooge').checked = autoModel;
     document.getElementById('setSoundOn').checked = soundEnabled;
     var suEl0 = document.getElementById('setShareUsageStats'); if (suEl0) suEl0.checked = shareUsageStats;
     // Labels + effort dots are owned by their controls (makeSelect / renderEffort);
@@ -3663,7 +3687,6 @@
     if (typeof showToast === 'function') showToast('success', 'Dialogs reset');
   });
   document.getElementById('setAutoCheck').addEventListener('change', function (e) { autoCheckUpdates = e.target.checked; saveChat(); });
-  document.getElementById('setScrooge').addEventListener('change', function (e) { autoModel = e.target.checked; saveChat(); });
   // Share usage stats — daemon-persisted, not saveChat() state. Turning it ON
   // just sends the change. Turning it OFF asks for confirmation first (Key
   // decision 7): the toggle only controls sending, not local recording, so

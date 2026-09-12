@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.0 - 2026-09-09
+
+**Long chats now cost far less, and stay fast, because they finally reset themselves.**
+
+- **The conversation reset that was supposed to keep chats affordable now actually works.** It was silently broken and had never once fired, so a single chat could stay alive for days and quietly re-read its entire history on every message, running up real cost. Chats now summarize themselves and start genuinely fresh once they grow large, keeping the running cost bounded.
+- **The reset point is sized to your context window, and summaries are cheaper to make.** Chats on the large 1M context run much longer before resetting, so you keep more continuous history, while standard chats reset earlier to stay under their smaller window. The reset summary is now written by the same model the chat was already using when its window allows, which is faster and cheaper than spinning up a different one.
+- **Chats no longer reset far too early.** The check that decides when a chat is large enough to summarize was over-counting any turn that used several tools at once, so a chat could reset after a single question while it was still small. It now measures the true size of the conversation, so a chat resets only when it is genuinely large.
+- **"Save tokens (beta)" has been removed.** The optional setting that automatically re-routed simpler prompts to cheaper models is gone. Chats now always run on exactly the model and effort you pick. If you had it turned on, your chats will simply run on your chosen model from now on.
+- **"Clear chat" now truly starts over.** Clearing the chat used to wipe only the window while the assistant quietly kept the old conversation in memory and picked it back up on your next message. It now starts a genuinely fresh conversation.
+- **Runaway scripts can no longer freeze After Effects.** A script that loops without end is stopped early, and AE stays responsive.
+- **On Windows, Gaffer now finds Claude Code installed the normal way.** A Claude Code installed with the official installer lands in a spot Gaffer did not check, so a correct install could still read as "Claude CLI not found." Gaffer now looks there too, so it works without any extra setup.
+- **The update prompt never offers an older version.** The check that decides whether an update is available now compares versions properly, so a newer install is never told to "update" to an older release.
+- The "conversation compacted" notice now describes what actually happens, instead of implying a hard limit was hit.
+
 ## v0.9.9 — 2026-09-01
 
 **Windows daemon stop is forceful from the start, plus a self-serve fix for a stuck update.**

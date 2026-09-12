@@ -1428,7 +1428,7 @@
     .settings-item .item-sub.lg { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); } /* version #666 T12 */
     .settings-item .item-sub.dim {
       font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-dim); /* Multiline subtitle #777 T12 */
-      width: 0; min-width: 100%; /* Scrooge's description is a long single-
+      width: 0; min-width: 100%; /* a long single-
         line string that would otherwise want ~500px unwrapped, dominating
         the settings-card hug-to-widest sizing above; width:0 makes it
         contribute nothing to that intrinsic pass (min-width:100% is a
@@ -1674,24 +1674,8 @@
             </span>
           </div>
         </div>
-        <!-- Scrooge — canonical row: Left Block (label + beta badge + multiline
-             description) + Controls (Scrooge toggle). -->
-        <div class="settings-item" data-fig="I478:18268;478:11752">
-          <div class="row1">
-            <span class="row1-left">
-              <div class="item-col">
-                <span class="item-title" data-fig="I478:18268;478:11752;475:10185">Scrooge mode<span class="beta-badge" data-fig="I478:18268;478:11752;475:10186;181:1043">beta</span></span>
-                <span class="item-sub dim" data-fig="I478:18268;478:11752;478:11726">Re-routing prompts to cheaper models on simpler tasks. Scrooge can make mistakes.</span>
-              </div>
-            </span>
-            <span class="row1-controls">
-              <label class="toggle-label"><input type="checkbox" id="setScrooge"><span class="toggle big" data-fig="I478:18268;478:11752;475:10192"><span class="knob"></span></span></label>
-            </span>
-          </div>
-        </div>
-        <!-- Share usage stats — mirrors the Scrooge toggle's markup shape.
-             Unlike Scrooge (panel-local chat-state), this round-trips through
-             the daemon: get_share_usage_stats / set_share_usage_stats. -->
+        <!-- Share usage stats — daemon-persisted (get_share_usage_stats /
+             set_share_usage_stats), unlike the panel-local toggles above. -->
         <div class="settings-item">
           <div class="row1">
             <span class="row1-left">

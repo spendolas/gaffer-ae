@@ -222,7 +222,6 @@ window.__audit = (function () {
       // Match Figma's depicted toggle states so the diff compares like-for-like
       // (design = off #000@.5 / on primary-ghost; state is runtime).
       document.getElementById('setAutoCheck').checked = false;
-      document.getElementById('setScrooge').checked = false;
       document.getElementById('setSoundOn').checked = true;
     },
     // Effort "Not offered" row (Figma 529:19259) — drive the real catalog path
