@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node --test test/"
+    "//test": "Auto-discovery (no path arg). Do NOT pass 'test/': Node 22+ treats a bare directory arg to --test as a module entry and fails with MODULE_NOT_FOUND on Windows; a glob would break Node 20. No path works on both.",
+    "test": "node --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
