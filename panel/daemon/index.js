@@ -81,10 +81,11 @@ bridge.onAuthMcp = async (msg, socket) => {
 
 let activeSignIn = null;
 let signInInFlight = false;
-function sendAuthStatus(socket, s) {
+function sendAuthStatus(socket, s, claudeAvailable) {
   if (socket && socket.readyState === 1)
     socket.send(JSON.stringify({ type: 'auth_status', loggedIn: s.loggedIn,
-      email: s.email, orgName: s.orgName, plan: s.subscriptionType, authMethod: s.authMethod }));
+      email: s.email, orgName: s.orgName, plan: s.subscriptionType, authMethod: s.authMethod,
+      claudeAvailable: claudeAvailable }));
 }
 // The on-connect account card reads identity straight from disk/keychain
 // (single-digit ms) instead of spawning `claude auth status --json` (~500ms on
@@ -93,8 +94,16 @@ function sendAuthStatus(socket, s) {
 // result paths below, where the CLI has just mutated auth and its own JSON is
 // the authority.
 bridge.onAuthStatus = async (socket) => {
-  try { sendAuthStatus(socket, await authIdentityFromDisk(augmentedEnv())); }
-  catch (e) { sendAuthStatus(socket, { loggedIn: null }); }
+  // Whether Claude Code itself is present, not just whether creds are on disk:
+  // a machine with stale creds but no CLI would otherwise read as "signed in"
+  // and paint a chat that can't actually run. findClaudeBinary caches, so this
+  // is cheap after the first resolve. Reported alongside the disk-based auth so
+  // the panel gate can require BOTH before revealing chat.
+  let claudeAvailable;
+  try { await findClaudeBinary(); claudeAvailable = true; }
+  catch (e) { claudeAvailable = false; }
+  try { sendAuthStatus(socket, await authIdentityFromDisk(augmentedEnv()), claudeAvailable); }
+  catch (e) { sendAuthStatus(socket, { loggedIn: null }, claudeAvailable); }
 };
 bridge.onSignIn = async (msg, socket) => {
   if (signInInFlight || activeSignIn) return;

@@ -338,46 +338,42 @@ function shortToolLabel(name, input) {
 // can never reach 500K, so compaction was silently dead for it, and a 1m session
 // got compacted at half its 1M capacity. So:
 //   - standard (200K window): 150K — fires with headroom before the 200K wall.
-//   - 1m (1M window): 800K — respects an opted-in large context, still leaves
-//     ~200K of headroom below the wall and clears the sonnet-5 summarizer easily.
+//   - 1m (1M window): 850K — respects an opted-in large context, still leaves
+//     ~150K of headroom below the wall and clears the summarizer's own headroom.
 var COMPACT_THRESHOLD_STANDARD = 150000;
-var COMPACT_THRESHOLD_1M = 800000;
+var COMPACT_THRESHOLD_1M = 850000;
 export function compactThreshold(variant) {
   return variant === '1m' ? COMPACT_THRESHOLD_1M : COMPACT_THRESHOLD_STANDARD;
 }
-
-// Fallback model for the one-shot summarization in _compactSession, used when
-// the leading model's own window can't safely re-read the session (see
-// compactionSummarizerModel). Must have a context window comfortably above the
-// threshold, since it re-reads the entire pre-compaction session in one call.
-// sonnet-5 (1M) clears 800K with margin; Haiku (200K) would not.
-var COMPACT_SUMMARIZER_MODEL = 'claude-sonnet-5';
 
 // Headroom the summarizer needs on top of the session it re-reads: its own
 // ~400-word summary output + prompt + measurement slop. Small in absolute terms.
 var COMPACT_SUMMARIZER_HEADROOM = 20000;
 
-// Pick the model to summarize a session for compaction. Prefer the model that
-// actually LED the conversation (this._lastModel) — its cache is already warm,
-// so the summarizer gets a cache-READ instead of a cold cache-WRITE on a fresh
-// model. Only reuse it when its effective context window (the 1M variant if the
-// model carries a [1m] suffix, else its base window) clears the session size
-// plus headroom; otherwise fall back to COMPACT_SUMMARIZER_MODEL. The guard
-// matters when a smaller-window model led the last turn but the accumulated
-// session is larger than its window (a manual mid-conversation model switch can
-// still cause this even with autoModel gone). Pure + capLookup-injected for test.
+// Pick the model to summarize a session for compaction: ALWAYS the model that
+// actually led the conversation, or nothing at all. Its cache is already warm,
+// so the summarizer gets a cache-READ instead of a cold cache-WRITE.
+//
+// There is deliberately NO fallback to a different model. Summarizing on some
+// other model would resume this session under a model whose cache is empty
+// (caches are model-scoped), cold-writing the ENTIRE session at that model's
+// write rate — measured at ~62K of cache_creation on one real fallback. So the
+// fallback was both silent (the user's conversation quietly changed models) and
+// expensive exactly when it fired. Returning null instead means compaction is
+// skipped; the session then grows until the existing context-overflow path
+// resets it, which is rare (the thresholds sit well inside each model's window)
+// and at least tells the user what happened.
+// Pure + capLookup-injected for test.
 export function compactionSummarizerModel(lastModel, lastContextTokens, capLookup) {
-  if (lastModel) {
-    var is1m = /\[1m\]$/.test(lastModel);
-    var cap = capLookup ? capLookup(lastModel) : null;
-    var windows = (cap && cap.contextWindows) || [];
-    var effective = windows.length === 0 ? 0
-      : (is1m && cap.oneM ? Math.max.apply(null, windows) : Math.min.apply(null, windows));
-    if (effective >= (lastContextTokens || 0) + COMPACT_SUMMARIZER_HEADROOM) {
-      return lastModel;
-    }
-  }
-  return COMPACT_SUMMARIZER_MODEL;
+  if (!lastModel) return null;
+  var is1m = /\[1m\]$/.test(lastModel);
+  var cap = capLookup ? capLookup(lastModel) : null;
+  var windows = (cap && cap.contextWindows) || [];
+  var effective = windows.length === 0 ? 0
+    : (is1m && cap.oneM ? Math.max.apply(null, windows) : Math.min.apply(null, windows));
+  return effective >= (lastContextTokens || 0) + COMPACT_SUMMARIZER_HEADROOM
+    ? lastModel
+    : null;
 }
 
 // Pure gate for the compaction decision, variant-aware — exported so a test can
@@ -929,7 +925,7 @@ export class ChatHandler {
         console.log('Gaffer: stale session ' + sessionId + ' — retrying fresh');
         self.sessionId = null;
         if (socket.readyState === 1) {
-          socket.send(JSON.stringify({ type: 'chat_event', message: 'Previous session expired — starting a fresh one.' }));
+          socket.send(JSON.stringify({ type: 'chat_event', message: 'Previous session expired, starting a fresh one.' }));
         }
         var retryMsg = Object.assign({}, msg, { sessionId: null, __retriedFreshSession: true });
         self.handleChat(retryMsg, socket);
@@ -1005,7 +1001,7 @@ export class ChatHandler {
             this.sessionId = null;
             socket.send(JSON.stringify({
               type: 'chat_error',
-              error: 'Conversation too long for the model. Session reset — your next message starts a fresh context.',
+              error: 'Conversation too long for the model. Session reset, your next message starts a fresh context.',
             }));
             return;
           }
@@ -1060,7 +1056,7 @@ export class ChatHandler {
         this.sessionId = null;
         socket.send(JSON.stringify({
           type: 'chat_error',
-          error: 'Conversation too long for the model. Session reset — your next message starts a fresh context.',
+          error: 'Conversation too long for the model. Session reset, your next message starts a fresh context.',
         }));
         return;
       }
@@ -1102,18 +1098,24 @@ export class ChatHandler {
   // null out the sessionId so the next turn starts new.
   _compactSession(socket) {
     if (!this.claudeBin) return;
-    this.compacting = true;
     var resumingId = this.sessionId;
-    // Summarize on the model that led the conversation when its window can safely
-    // re-read the session (warm cache -> cache-read, not a cold cache-write on a
-    // fresh model); fall back to COMPACT_SUMMARIZER_MODEL otherwise.
+    // Summarize on the model that led the conversation, or not at all — never
+    // silently on another model (see compactionSummarizerModel).
     var self = this;
     var summarizer = compactionSummarizerModel(this._lastModel, this.lastContextTokens, function (id) {
       var key = String(id || '').replace(/\[1m\]$/, '');
       return (self.liveModelCapabilities && self.liveModelCapabilities[key]) || modelCapability(id, null);
     });
-    console.log('Gaffer compact: summarizing on ' + summarizer
-      + (summarizer === this._lastModel ? ' (reused leading model, warm cache)' : ' (fallback)'));
+    if (!summarizer) {
+      // The conversation outgrew what its own model can re-read in one call.
+      // Skipping beats both a doomed full-context call and a silent model swap;
+      // the session continues until the context-overflow path resets it.
+      console.log('Gaffer compact: skipped — ' + (this._lastModel || 'unknown model')
+        + ' cannot re-read ' + this.lastContextTokens + ' tokens, and we never summarize on another model');
+      return;
+    }
+    this.compacting = true;
+    console.log('Gaffer compact: summarizing on ' + summarizer + ' (leading model, warm cache)');
     if (socket && socket.readyState === 1) {
       socket.send(JSON.stringify({
         type: 'chat_event',
