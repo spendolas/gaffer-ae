@@ -1328,6 +1328,14 @@
       opacity: 0; visibility: hidden; transform: translateY(8px); /* takeover fade-in-up / out-down */
       transition: opacity 0.18s ease-out, transform 0.18s ease-out, visibility 0.18s ease-out; }
     .signin-card.visible { opacity: 1; visibility: visible; transform: none; }
+    /* Boot cover must be instant (no fade) so the persisted chat is never briefly
+       visible through a fading-in overlay; the fade applies only to later resolves. */
+    .signin-card.instant { transition: none; }
+    /* Tri-state: pending spinner vs the sign-in gate. .signin-modal sets display:flex,
+       which overrides the bare [hidden], so an explicit [hidden] rule is required. */
+    .signin-pending { display: flex; align-items: center; justify-content: center; }
+    .signin-pending[hidden] { display: none; }
+    .signin-modal[hidden] { display: none; }
     /* ModalContainer 524:4040 — bg/input, r16, pad4 gap4 (settings-card twin).
        min-width 200 = the Figma spec width as a floor; hugs wider content. */
     .signin-modal { display: flex; flex-direction: column; align-items: center; gap: 4px;
@@ -1553,6 +1561,13 @@
   <div id="chatMessages" class="chat-messages"></div>
 
   <div id="signInCard" class="signin-card" hidden data-fig="524:4062">
+    <!-- Pending: auth/claude-availability unknown. A neutral spinner (deferred
+         past a grace window) holds the takeover so the persisted chat is never
+         shown as a definitive "signed in and working" view before the daemon
+         confirms. Cross-fades to the gate (signed out) or reveals chat (signed in). -->
+    <div id="signInPending" class="signin-pending" hidden aria-hidden="true">
+      <span class="typing-indicator"><i></i><i></i><i></i></span>
+    </div>
     <div class="signin-modal" data-fig="524:4040">
       <div class="signin-body" data-fig="524:4041">
         <div class="signin-message" data-fig="524:4042">

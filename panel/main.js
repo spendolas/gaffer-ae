@@ -126,6 +126,7 @@
   var pendingNewConversation = false;
   var chatBusy = false;
   var authLoggedIn = null; // null = unknown/indeterminate, true/false once daemon reports
+  var claudeAvailable = null; // null = unknown; false = daemon can't find the Claude CLI
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
   // Trust-first default: use the less expensive Opus 4.8 tier until Settings
   // has refreshed the account's current model availability. The full id keeps
@@ -297,17 +298,53 @@
       forgetBtn.hidden = false;
     }
   }
+  // The full-panel takeover overlay is a TRI-STATE, mirroring the .account-slot
+  // cross-fade: the persisted chat must never render as a definitive "signed in
+  // and working" view while auth is still unknown (the flash-of-wrong-state
+  // anti-pattern — a fresh Windows box painted a working chat, then flipped to
+  // the gate once the daemon reported the CLI missing). Cover the chat until the
+  // daemon confirms BOTH a valid auth session AND that Claude Code is available;
+  // only then reveal chat, else show the sign-in gate.
+  var authSpinnerAllowed = false;
+  var authSpinnerTimer = null;
+  function armAuthSpinnerDefer() {
+    if (authSpinnerTimer || authSpinnerAllowed) return; // already waiting / already shown
+    authSpinnerTimer = setTimeout(function () {
+      authSpinnerTimer = null;
+      authSpinnerAllowed = true;
+      applyAuthGate();
+    }, 200); // grace: a fast auth resolve reveals chat with no spinner flash
+  }
+  function clearAuthSpinnerDefer() {
+    if (authSpinnerTimer) { clearTimeout(authSpinnerTimer); authSpinnerTimer = null; }
+    authSpinnerAllowed = false;
+  }
+  function applyAuthGate() {
+    var card = document.getElementById('signInCard');
+    if (!card) return;
+    var modal = card.querySelector('.signin-modal');
+    var pending = document.getElementById('signInPending');
+    // claudeAvailable may be absent on older daemons -> treat missing (null) as
+    // non-blocking so a working install is never gated behind a flag it never sends.
+    var signedIn = authLoggedIn === true && claudeAvailable !== false;
+    var blocked = authLoggedIn === false || claudeAvailable === false;
+    var isPending = !signedIn && !blocked; // authLoggedIn still unknown (null)
+    card.hidden = false;
+    card.classList.toggle('visible', !signedIn); // cover the chat unless confirmed signed-in
+    if (modal) modal.hidden = !blocked;          // sign-in gate only when actually blocked
+    // Spinner deferred past the grace window; blank opaque cover holds until then.
+    if (pending) pending.hidden = !(isPending && authSpinnerAllowed);
+    if (isPending) armAuthSpinnerDefer();
+  }
   function renderAuth(s) {
     lastAuth = s || {};
     authLoggedIn = (typeof s.loggedIn === 'boolean') ? s.loggedIn : null;
+    if (typeof s.claudeAvailable === 'boolean') claudeAvailable = s.claudeAvailable;
     // Auth resolved (or moved back to unknown): cancel any pending spinner-defer
     // so a fast reply never trips a late spinner, and a later unknown window
     // re-arms fresh.
-    if (authLoggedIn === true || authLoggedIn === false) clearAccountSpinnerDefer();
-    var card = document.getElementById('signInCard');
-    var signedOut = authLoggedIn === false;
-    if (card) card.classList.toggle('visible', signedOut);
-    if (card) { card.hidden = false; } // display controlled by .visible
+    if (authLoggedIn === true || authLoggedIn === false) { clearAccountSpinnerDefer(); clearAuthSpinnerDefer(); }
+    applyAuthGate();
     // The account identity now lives in the Settings modal's CLI card (fed from
     // lastAuth via syncSettings); refresh it if the modal is open.
     if (typeof settingsModalEl !== 'undefined' && settingsModalEl && tkOpen(settingsModalEl)) syncSettings();
@@ -2514,7 +2551,7 @@
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
       markUpdateChecked();
-      if (!silent) showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      if (!silent) showModal('Dev install (git checkout), the panel updater is disabled. Pull changes with git instead.');
       return;
     }
     // Fetch remote version.json directly — content match means same release.
@@ -2609,7 +2646,7 @@
     resetUpdateBannerButtons();
     if (isDevInstall) {
       availableUpdateCommit = null;
-      showModal('Dev install (git checkout) — the panel updater is disabled. Pull changes with git instead.');
+      showModal('Dev install (git checkout), the panel updater is disabled. Pull changes with git instead.');
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
       return;
@@ -3756,6 +3793,18 @@
   soundSelect.update();
   wireEffortSlider();
   renderEffort();
+  // Cover the chat INSTANTLY (no fade) before restoring persisted messages, so a
+  // signed-out or fresh boot never flashes the old chat before auth resolves. The
+  // overlay holds in its pending state until the daemon's first auth_status reply.
+  (function coverChatUntilAuthResolves() {
+    var card = document.getElementById('signInCard');
+    if (!card) return;
+    card.classList.add('instant');
+    card.hidden = false;
+    applyAuthGate();       // authLoggedIn is null here -> pending cover, no chat
+    void card.offsetWidth; // flush layout so 'instant' applies to this state
+    card.classList.remove('instant');
+  })();
   restoreChat(function () {
     // Give restored DOM/style changes one frame to settle before future user
     // scale changes may animate. This prevents the visible post-load drift

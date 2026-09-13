@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.10.1 - 2026-09-13
+
+**Your chat never quietly changes model, and the panel never shows a chat you cannot actually use.**
+
+- **A chat is only ever summarized by the model you picked for it.** When a chat reset itself, it could previously hand the summarizing job to a different model, which quietly changed the model behind your conversation and cost noticeably more to do. Now the chat's own model always writes the summary, and if it genuinely cannot, the reset is skipped rather than switching models behind your back.
+- **Chats on the large 1M context run a little longer before resetting**, so you keep more history in one go.
+- **The panel no longer briefly shows a working chat before it knows you are signed in.** On a machine without Claude Code installed, or before sign-in finished, the panel could paint a full chat window for a moment and then replace it with the sign-in screen. It now waits until it knows, so what you see is always real.
+- Clearer wording on two messages that appear when a conversation is reset or a previous session has expired.
+
 ## v0.10.0 - 2026-09-09
 
 **Long chats now cost far less, and stay fast, because they finally reset themselves.**

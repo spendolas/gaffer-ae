@@ -14,7 +14,7 @@ import {
 // window) must trip BELOW its wall or it never fires; 1m (1M window) trips high
 // so an opted-in large session isn't compacted at half capacity.
 var THRESHOLD_STD = 150000;
-var THRESHOLD_1M = 800000;
+var THRESHOLD_1M = 850000;
 
 test('missing / empty usage is 0-safe', () => {
   assert.equal(contextTokensFromUsage(undefined), 0);
@@ -36,7 +36,7 @@ test('individual missing fields do not throw', () => {
 
 test('THE BUG: input_tokens alone never trips the gate; the real total does', () => {
   // A warm-cache turn past a 1m session's wall: tiny uncached slice, huge cache.
-  var usage = { input_tokens: 12, cache_read_input_tokens: 820000, cache_creation_input_tokens: 1822 };
+  var usage = { input_tokens: 12, cache_read_input_tokens: 870000, cache_creation_input_tokens: 1822 };
   // Old (buggy) gate read input_tokens only -> 12, never >= threshold -> dead code.
   assert.ok(usage.input_tokens < THRESHOLD_1M, 'uncached slice stays tiny under caching');
   // Fixed gate reads the real total -> over the 1m threshold -> compaction fires.
@@ -62,8 +62,8 @@ test('standard (200K window) compacts before its wall — flat 500K would NEVER 
 });
 
 test('1m (1M window) compacts near its wall, not at half capacity', () => {
-  assert.equal(shouldCompactSession(820000, '1m'), true, '820K 1m compacts');
-  assert.equal(shouldCompactSession(THRESHOLD_1M, '1m'), true, 'exactly 800K (inclusive)');
+  assert.equal(shouldCompactSession(870000, '1m'), true, '870K 1m compacts');
+  assert.equal(shouldCompactSession(THRESHOLD_1M, '1m'), true, 'exactly 850K (inclusive)');
   assert.equal(shouldCompactSession(500000, '1m'), false, '500K 1m is only half-full, no compact');
 });
 
@@ -123,24 +123,25 @@ var CAP = {
 function capLookup(id) { return CAP[String(id || '').replace(/\[1m\]$/, '')] || null; }
 
 test('compactionSummarizerModel: reuses the leading 1m model when its window clears the session', () => {
-  // opus[1m] led an 800K session -> its 1M window clears 800K+headroom -> reuse
-  // (warm cache = cache-read, not a cold write on a fresh sonnet).
-  assert.equal(compactionSummarizerModel('claude-opus-4-8[1m]', 800000, capLookup), 'claude-opus-4-8[1m]');
+  // opus[1m] led an 850K session -> its 1M window clears 850K+headroom -> reuse
+  // (warm cache = cache-read, not a cold write on a fresh model).
+  assert.equal(compactionSummarizerModel('claude-opus-4-8[1m]', 850000, capLookup), 'claude-opus-4-8[1m]');
 });
 
-test('compactionSummarizerModel: falls back to sonnet-5 when the leading window is too small', () => {
-  // The guard case Future named: a smaller-window model led right before a large
-  // session compacted (a manual switch can still cause this with autoModel gone).
-  assert.equal(compactionSummarizerModel('claude-haiku-4-5', 500000, capLookup), 'claude-sonnet-5', 'haiku 200K cannot read 500K');
+test('compactionSummarizerModel: returns null rather than silently summarizing on another model', () => {
+  // No fallback exists by design: summarizing on a different model resumes this
+  // session under an empty (model-scoped) cache and cold-writes the WHOLE thing
+  // at that model's write rate. Silent AND expensive, so we skip instead.
+  assert.equal(compactionSummarizerModel('claude-haiku-4-5', 500000, capLookup), null, 'haiku 200K cannot read 500K');
   // A standard (no [1m]) opus caps at 200K; a ~190K session leaves no headroom.
-  assert.equal(compactionSummarizerModel('claude-opus-4-8', 190000, capLookup), 'claude-sonnet-5', 'standard window too tight');
+  assert.equal(compactionSummarizerModel('claude-opus-4-8', 190000, capLookup), null, 'standard window too tight');
   // But a standard model on a small session is safely reused.
   assert.equal(compactionSummarizerModel('claude-opus-4-8', 150000, capLookup), 'claude-opus-4-8', 'reuse when there is headroom');
 });
 
-test('compactionSummarizerModel: unknown / missing leading model falls back safely', () => {
-  assert.equal(compactionSummarizerModel(null, 500000, capLookup), 'claude-sonnet-5');
-  assert.equal(compactionSummarizerModel('mystery-model', 100000, capLookup), 'claude-sonnet-5', 'no capability -> fallback');
+test('compactionSummarizerModel: unknown / missing leading model skips compaction', () => {
+  assert.equal(compactionSummarizerModel(null, 500000, capLookup), null);
+  assert.equal(compactionSummarizerModel('mystery-model', 100000, capLookup), null, 'no capability -> skip, never another model');
 });
 
 // ── The compaction gate must measure CURRENT window occupancy, not per-turn
@@ -155,21 +156,21 @@ function fakeSocket() { return { readyState: 1, sent: [], send(m) { this.sent.pu
 
 test('compaction gate: uses last-assistant occupancy, NOT the result event cumulative usage', () => {
   var h = new ChatHandler();
-  h._lastVariant = '1m'; // 800K threshold
+  h._lastVariant = '1m'; // 850K threshold
   var sock = fakeSocket();
 
   // Assistant steps; context grows to ~80,802 by the final step (true occupancy).
   h._processEvent({ type: 'assistant', message: { usage: { input_tokens: 2, cache_read_input_tokens: 40000, cache_creation_input_tokens: 500 }, content: [{ type: 'text', text: 'step 1' }] } }, sock);
   h._processEvent({ type: 'assistant', message: { usage: { input_tokens: 2, cache_read_input_tokens: 80000, cache_creation_input_tokens: 800 }, content: [{ type: 'text', text: 'final' }] } }, sock);
 
-  // The result event's usage is CUMULATIVE over the turn (~825K) — correct for
+  // The result event's usage is CUMULATIVE over the turn (~895K) — correct for
   // COST, but it must NOT drive the occupancy gate.
-  h._processEvent({ type: 'result', subtype: 'success', session_id: 's1', result: 'done', usage: { input_tokens: 20, cache_read_input_tokens: 820000, cache_creation_input_tokens: 5000 } }, sock);
+  h._processEvent({ type: 'result', subtype: 'success', session_id: 's1', result: 'done', usage: { input_tokens: 20, cache_read_input_tokens: 890000, cache_creation_input_tokens: 5000 } }, sock);
 
   assert.equal(h.lastContextTokens, 80802, 'gate must reflect the last assistant step occupancy (~80K)');
-  assert.equal(shouldCompactSession(h.lastContextTokens, h._lastVariant), false, 'an 80K window must NOT trip the 800K 1m gate');
+  assert.equal(shouldCompactSession(h.lastContextTokens, h._lastVariant), false, 'an 80K window must NOT trip the 850K 1m gate');
   // The cumulative figure is the wrong value that WOULD have fired the gate.
-  assert.equal(shouldCompactSession(contextTokensFromUsage({ input_tokens: 20, cache_read_input_tokens: 820000, cache_creation_input_tokens: 5000 }), '1m'), true, 'cumulative usage is the gate-tripping value the old code used');
+  assert.equal(shouldCompactSession(contextTokensFromUsage({ input_tokens: 20, cache_read_input_tokens: 890000, cache_creation_input_tokens: 5000 }), '1m'), true, 'cumulative usage is the gate-tripping value the old code used');
 });
 
 test('compaction gate: a real assistant step overwrites any stale prior value', () => {
