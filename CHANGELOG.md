@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.2 - 2026-09-14
+
+**Signing out for good no longer looks like Gaffer stuck loading forever.**
+
+- **An expired sign-in now correctly asks you to sign in again**, instead of leaving the panel stuck on a loading screen with no way out. Previously, once a session genuinely expired, Gaffer could mistake that for "still checking" and wait forever instead of showing the sign-in screen.
+- **The panel now gives up gracefully after a few seconds if it truly cannot tell whether you are signed in**, rather than waiting indefinitely. Clicking sign in always recovers a working session.
+
 ## v0.10.1 - 2026-09-13
 
 **Your chat never quietly changes model, and the panel never shows a chat you cannot actually use.**
