@@ -127,6 +127,7 @@
   var chatBusy = false;
   var authLoggedIn = null; // null = unknown/indeterminate, true/false once daemon reports
   var claudeAvailable = null; // null = unknown; false = daemon can't find the Claude CLI
+  var authPendingTimedOut = false; // defense-in-depth: see armAuthPendingTimeout below
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
   // Trust-first default: use the less expensive Opus 4.8 tier until Settings
   // has refreshed the account's current model availability. The full id keeps
@@ -319,6 +320,29 @@
     if (authSpinnerTimer) { clearTimeout(authSpinnerTimer); authSpinnerTimer = null; }
     authSpinnerAllowed = false;
   }
+  // Defense-in-depth: authLoggedIn can in principle stay null forever — not just
+  // from a slow reply, but from a daemon-side read that can never resolve either
+  // way (an unreadable/corrupt credential file, a permissions error, anything
+  // that isn't a clean true/false). Without this, that reads as "still checking"
+  // forever and the chat cover never lifts. 8s is generous next to the normal
+  // reply time (single-digit ms, no subprocess) but still short enough that a
+  // real user isn't left staring at a blank panel. Timing out just falls back to
+  // the ordinary sign-in gate — clicking Sign in always recovers a real session
+  // regardless of why the automatic check couldn't.
+  var AUTH_PENDING_TIMEOUT_MS = 8000;
+  var authPendingTimeoutTimer = null;
+  function armAuthPendingTimeout() {
+    if (authPendingTimeoutTimer || authPendingTimedOut) return;
+    authPendingTimeoutTimer = setTimeout(function () {
+      authPendingTimeoutTimer = null;
+      authPendingTimedOut = true;
+      applyAuthGate();
+    }, AUTH_PENDING_TIMEOUT_MS);
+  }
+  function clearAuthPendingTimeout() {
+    if (authPendingTimeoutTimer) { clearTimeout(authPendingTimeoutTimer); authPendingTimeoutTimer = null; }
+    authPendingTimedOut = false;
+  }
   function applyAuthGate() {
     var card = document.getElementById('signInCard');
     if (!card) return;
@@ -327,14 +351,14 @@
     // claudeAvailable may be absent on older daemons -> treat missing (null) as
     // non-blocking so a working install is never gated behind a flag it never sends.
     var signedIn = authLoggedIn === true && claudeAvailable !== false;
-    var blocked = authLoggedIn === false || claudeAvailable === false;
-    var isPending = !signedIn && !blocked; // authLoggedIn still unknown (null)
+    var blocked = authLoggedIn === false || claudeAvailable === false || authPendingTimedOut;
+    var isPending = !signedIn && !blocked; // authLoggedIn still unknown (null), and not yet timed out
     card.hidden = false;
     card.classList.toggle('visible', !signedIn); // cover the chat unless confirmed signed-in
-    if (modal) modal.hidden = !blocked;          // sign-in gate only when actually blocked
+    if (modal) modal.hidden = !blocked;          // sign-in gate once actually blocked OR timed out
     // Spinner deferred past the grace window; blank opaque cover holds until then.
     if (pending) pending.hidden = !(isPending && authSpinnerAllowed);
-    if (isPending) armAuthSpinnerDefer();
+    if (isPending) { armAuthSpinnerDefer(); armAuthPendingTimeout(); }
   }
   function renderAuth(s) {
     lastAuth = s || {};
@@ -343,7 +367,7 @@
     // Auth resolved (or moved back to unknown): cancel any pending spinner-defer
     // so a fast reply never trips a late spinner, and a later unknown window
     // re-arms fresh.
-    if (authLoggedIn === true || authLoggedIn === false) { clearAccountSpinnerDefer(); clearAuthSpinnerDefer(); }
+    if (authLoggedIn === true || authLoggedIn === false) { clearAccountSpinnerDefer(); clearAuthSpinnerDefer(); clearAuthPendingTimeout(); }
     applyAuthGate();
     // The account identity now lives in the Settings modal's CLI card (fed from
     // lastAuth via syncSettings); refresh it if the modal is open.
@@ -745,7 +769,14 @@
 
   // ── Chat persistence (via ExtendScript file I/O) ──
 
-  var chatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history.json';
+  // Scope history by AE version so two AE instances' panels no longer overwrite
+  // each other's transcript in the shared extension folder (multi-panel isolation;
+  // the daemon keys chat state by the same aeVersion). The legacy single file is
+  // read once as a fallback so upgrading users don't lose their history — new
+  // saves always go to the scoped file.
+  var chatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history-'
+    + String(aeVersion).replace(/[^a-zA-Z0-9._-]/g, '_') + '.json';
+  var legacyChatFilePath = cs.getSystemPath(SystemPath.EXTENSION) + '/chat-history.json';
 
   function saveChat() {
     var data = JSON.stringify({
@@ -877,8 +908,11 @@
     if (typeof require !== 'undefined') {
       try {
         var fs = require('node:fs');
-        if (fs.existsSync(chatFilePath)) {
-          var raw = fs.readFileSync(chatFilePath, 'utf8');
+        // Scoped file wins; else migrate once from the legacy shared file.
+        var readPath = fs.existsSync(chatFilePath) ? chatFilePath
+          : (fs.existsSync(legacyChatFilePath) ? legacyChatFilePath : null);
+        if (readPath) {
+          var raw = fs.readFileSync(readPath, 'utf8');
           if (raw) applyData(JSON.parse(raw));
         }
         finishRestore();
@@ -888,6 +922,7 @@
 
     var jsx = "(function() {"
       + "var f = new File('" + chatFilePath.replace(/'/g, "\\'") + "');"
+      + "if (!f.exists) f = new File('" + legacyChatFilePath.replace(/'/g, "\\'") + "');"
       + "if (!f.exists) return '';"
       + "f.open('r'); var d = f.read(); f.close();"
       + "return d;"
