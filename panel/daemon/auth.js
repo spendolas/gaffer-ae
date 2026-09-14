@@ -124,19 +124,26 @@ function readOauthAccount(env) {
   return null;
 }
 
-// The credential file route (all platforms; the primary route off macOS). A
-// present-but-unparseable file is NOT a definitive absence.
-function readCredentialFile(env) {
+// The credential file route (all platforms; the primary route off macOS).
+// A well-formed file with no usable token (e.g. after a sign-out, or an
+// expired session the CLI blanked out) is a DEFINITIVE absence — same as the
+// file not existing. Only a genuinely unparseable file (corrupt/partial
+// write) is indeterminate.
+export function readCredentialFile(env) {
   const dir = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  let raw;
   try {
-    const parsed = parseOauthCredential(readFileSync(join(dir, '.credentials.json'), 'utf8'));
-    return parsed ? { present: true, token: parsed.token, subscriptionType: parsed.subscriptionType }
-      : { present: false, definitive: false };
+    raw = readFileSync(join(dir, '.credentials.json'), 'utf8');
   } catch (e) {
     // ENOENT => the file genuinely isn't there (a definitive absence for this
     // route); any other fs error is indeterminate.
     return { present: false, definitive: !!(e && e.code === 'ENOENT') };
   }
+  const parsed = parseOauthCredential(raw);
+  if (parsed) return { present: true, token: parsed.token, subscriptionType: parsed.subscriptionType };
+  let wellFormed = false;
+  try { JSON.parse(raw); wellFormed = true; } catch (e) { /* corrupt/partial write */ }
+  return { present: false, definitive: wellFormed };
 }
 
 // macOS stores the credential in the login keychain under "Claude Code-
