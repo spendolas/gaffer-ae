@@ -17,7 +17,7 @@ test('wrapInSafety (read-only): suppresses dialogs around the eval, restores the
   assert.ok(jsx.includes('app.endSuppressDialogs(false)'), 'suppression ends');
   // beginSuppressDialogs must run before the risky eval, and its end call must
   // be in a finally so a thrown error still restores dialogs.
-  assert.ok(jsx.indexOf('app.beginSuppressDialogs()') < jsx.indexOf('eval('), 'suppression starts before eval');
+  assert.ok(jsx.indexOf('app.beginSuppressDialogs()') < jsx.indexOf('var __result = eval('), 'suppression starts before eval');
   var finallyIdx = jsx.indexOf('finally');
   assert.ok(finallyIdx > -1 && jsx.indexOf('app.endSuppressDialogs(false)') > finallyIdx,
     'endSuppressDialogs runs in the finally block');
@@ -52,13 +52,13 @@ test('wrapInSafety (read-only): shadows alert/confirm/prompt before the eval, so
   assert.ok(/var alert\s*=\s*function/.test(jsx), 'alert shadowed');
   assert.ok(/confirm\s*=\s*function/.test(jsx), 'confirm shadowed');
   assert.ok(/prompt\s*=\s*function/.test(jsx), 'prompt shadowed');
-  assert.ok(jsx.indexOf('var alert') < jsx.indexOf('eval('), 'shadow declared before the eval runs');
+  assert.ok(jsx.indexOf('var alert') < jsx.indexOf('var __result = eval('), 'shadow declared before the eval runs');
 });
 
 test('wrapInSafety (mutating): shadows alert/confirm/prompt before the eval', () => {
   var jsx = wrapInSafety('1+1', 'x', false);
   assert.ok(/var alert\s*=\s*function/.test(jsx), 'alert shadowed');
-  assert.ok(jsx.indexOf('var alert') < jsx.indexOf('eval('), 'shadow declared before the eval runs');
+  assert.ok(jsx.indexOf('var alert') < jsx.indexOf('var __result = eval('), 'shadow declared before the eval runs');
 });
 
 test('wrapInSafety: functionally executed, alert() inside the agent code never escapes to a real global', () => {
@@ -72,4 +72,57 @@ test('wrapInSafety: functionally executed, alert() inside the agent code never e
   var out = JSON.parse(fn(app));
   assert.equal(out.ok, true, 'alert() did not throw or escape the shadow: ' + JSON.stringify(out));
   assert.equal(out.result, '42', 'execution continued past the alert() call');
+});
+
+// Regression coverage for a SEPARATE, more fundamental bug found the same day:
+// live against real AE, typeof JSON === "undefined" in an otherwise-normal
+// session. Every wrapper depends on JSON.stringify to report its result, and
+// its own catch branch ALSO calls JSON.stringify - so a missing JSON meant an
+// uncaught exception, which evalScript's callback surfaces as an EMPTY
+// string with zero error info. Indistinguishable from a hang; the real cause
+// behind "daemon executes but never returns results".
+test('wrapInSafety: still works when the target engine has no native JSON at all', () => {
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () {},
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
+  var jsx = wrapInSafety('40 + 2', 'x', false);
+  // JSON passed as an explicit local param, never given a value - shadows the
+  // real Node global entirely, simulating the engine that has none.
+  var fn = new Function('app', 'JSON', 'return ' + jsx);
+  var raw = fn(app, undefined);
+  assert.equal(typeof raw, 'string', 'produced a real string, not undefined/thrown');
+  var out = JSON.parse(raw); // real Node JSON here, just to inspect the result
+  assert.equal(out.ok, true, 'polyfill let the wrapper complete: ' + raw);
+  assert.equal(out.result, '42');
+});
+
+test('wrapInSafety: JSON polyfill correctly round-trips nested objects, arrays, and escaped strings', () => {
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () {},
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
+  var code = 'JSON.stringify({nested: {a: [1, 2, {b: true, c: null}]}, s: "quote\\" newline\\n tab\\t backslash\\\\"})';
+  var jsx = wrapInSafety(code, 'x', false);
+  var fn = new Function('app', 'JSON', 'return ' + jsx);
+  var raw = fn(app, undefined);
+  var out = JSON.parse(raw);
+  assert.equal(out.ok, true, raw);
+  var inner = JSON.parse(out.result); // the agent code's own JSON.stringify output, via the polyfill
+  assert.deepEqual(inner.nested.a, [1, 2, { b: true, c: null }]);
+  assert.equal(inner.s, 'quote" newline\n tab\t backslash\\');
+});
+
+test('wrapInSafety: real native JSON is preferred and untouched when present (no behavior change in the normal case)', () => {
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () {},
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
+  var jsx = wrapInSafety('JSON.stringify({real: true})', 'x', false);
+  // JSON NOT shadowed here - the real Node global is visible, exactly like a
+  // normal healthy ExtendScript engine with native JSON.
+  var fn = new Function('app', 'return ' + jsx);
+  var out = JSON.parse(fn(app));
+  assert.equal(out.ok, true);
+  assert.deepEqual(JSON.parse(out.result), { real: true });
 });
