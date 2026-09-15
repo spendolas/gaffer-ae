@@ -32,6 +32,24 @@ test('wrapSlice: also shadows alert/confirm/prompt - beginSuppressDialogs alone 
   assert.ok(jsx.indexOf('var alert') < jsx.indexOf('app.beginUndoGroup'), 'shadow declared before anything runs');
 });
 
+test('wrapSlice: still works when the target engine has no native JSON at all', () => {
+  // Same fundamental bug as the dialog freeze, found the same day: a slice
+  // also builds its return payload with JSON.stringify, so a missing JSON
+  // would throw uncaught here too, indistinguishable from a hang.
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () {},
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
+  var jsx = wrapSlice(STEP, 'null', 'x', 300, 1);
+  var fn = new Function('app', '$', 'JSON', 'return ' + jsx);
+  var dollar = {}; Object.defineProperty(dollar, 'hiresTimer', { get: function () { return 1000; } });
+  var raw = fn(app, dollar, undefined);
+  assert.equal(typeof raw, 'string', 'produced a real string, not undefined/thrown');
+  var out = JSON.parse(raw); // real Node JSON here, just to inspect the result
+  assert.equal(out.ok, true, 'polyfill let the slice complete: ' + raw);
+  assert.equal(out.processed, 5);
+});
+
 test('wrapSlice: injects the budget and uses $.hiresTimer', () => {
   var jsx = wrapSlice(STEP, 'null', 'x', 250, 1);
   assert.ok(jsx.includes('$.hiresTimer'), 'uses $.hiresTimer');

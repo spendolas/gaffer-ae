@@ -66,6 +66,56 @@ function budgetCatchBranch() {
   );
 }
 
+// Defensive JSON.stringify/parse fallback for when the ExtendScript engine's
+// own JSON is missing - verified live: typeof JSON === "undefined" in an
+// otherwise-normal AE session (cause unconfirmed - possibly a preferences/
+// engine-state issue specific to that install, not reproduced as a general
+// rule). Without this, EVERY wrapper below throws inside its own try/catch
+// (whose error branch ALSO calls JSON.stringify) - an uncaught exception
+// that evalScript's callback surfaces as an EMPTY string, not a catchable
+// error. That's indistinguishable from a hang and was the real cause behind
+// the "daemon executes but never returns results" bug (2026-09-15) - not the
+// dialog-freeze bug above, a separate and more fundamental one. Character-
+// loop escaping (not regex literals) to stay simple and ES3-safe. Only
+// activates when JSON is truly absent - zero behavior change otherwise.
+function jsonPolyfillPrelude() {
+  var lines = [
+    '  if (typeof JSON === "undefined") {',
+    '    JSON = {};',
+    '    JSON.stringify = function __gafferStringify(o) {',
+    '      if (o === null || typeof o === "undefined") return "null";',
+    '      if (typeof o === "string") {',
+    '        var __s = "";',
+    '        for (var __i = 0; __i < o.length; __i++) {',
+    '          var __c = o.charAt(__i);',
+    '          if (__c === "\\\\") __s += "\\\\\\\\";',
+    '          else if (__c === "\\"") __s += "\\\\\\"";',
+    '          else if (__c === "\\n") __s += "\\\\n";',
+    '          else if (__c === "\\r") __s += "\\\\r";',
+    '          else if (__c === "\\t") __s += "\\\\t";',
+    '          else __s += __c;',
+    '        }',
+    '        return "\\"" + __s + "\\"";',
+    '      }',
+    '      if (typeof o === "number" || typeof o === "boolean") return String(o);',
+    '      if (o instanceof Array) {',
+    '        var __parts = [];',
+    '        for (var __j = 0; __j < o.length; __j++) __parts.push(__gafferStringify(o[__j]));',
+    '        return "[" + __parts.join(",") + "]";',
+    '      }',
+    '      if (typeof o === "object") {',
+    '        var __kv = [];',
+    '        for (var __k in o) { if (o.hasOwnProperty(__k) && typeof o[__k] !== "undefined" && typeof o[__k] !== "function") __kv.push(__gafferStringify(__k) + ":" + __gafferStringify(o[__k])); }',
+    '        return "{" + __kv.join(",") + "}";',
+    '      }',
+    '      return "null";',
+    '    };',
+    '    JSON.parse = function (__t) { return eval("(" + __t + ")"); };',
+    '  }',
+  ];
+  return lines.join('\n') + '\n';
+}
+
 // Shadow the 3 ExtendScript globals that show a blocking modal dialog.
 // app.beginSuppressDialogs() does NOT cover these - verified live, that call
 // only suppresses AE's own internal dialogs (missing font/effect, a script
@@ -88,7 +138,7 @@ export function wrapInSafety(code, undoLabel, readOnly, opts) {
   var cat = guard ? budgetCatchBranch() : '';
   if (readOnly) {
     return `(function() {
-${dialogShadowPrelude()}  app.beginSuppressDialogs();
+${jsonPolyfillPrelude()}${dialogShadowPrelude()}  app.beginSuppressDialogs();
 ${pre}  try {
     var __result = eval(${JSON.stringify(code)});
     return JSON.stringify({ ok: true, result: String(__result != null ? __result : "undefined") });
@@ -102,7 +152,7 @@ ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line |
   var stripped = stripNestedUndoGroups(code);
   var label = undoLabel || stripped.substring(0, 40).replace(/[\r\n]/g, ' ');
   return `(function() {
-${dialogShadowPrelude()}  app.beginSuppressDialogs();
+${jsonPolyfillPrelude()}${dialogShadowPrelude()}  app.beginSuppressDialogs();
   app.beginUndoGroup("Gaffer: ${escapeForJSX(label)}");
 ${pre}  try {
     var __result = eval(${JSON.stringify(stripped)});
@@ -146,6 +196,7 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
   // single step that blows past this (a fat inner loop) throws the budget signal.
   var guardMs = Math.max(3 * budget, 1000);
   return '(function () {\n' +
+    jsonPolyfillPrelude() +
     dialogShadowPrelude() +
     '  app.beginSuppressDialogs();\n' +
     '  app.beginUndoGroup("Gaffer: ' + safeLabel + ' (part ' + partNum + ')");\n' +
