@@ -2,6 +2,16 @@
  * Wraps user ExtendScript in try/catch + JSON return.
  * Mutating ops also wrap in undo group ("Gaffer: ..." prefix).
  * Read-only ops skip undo group for ~5-10ms savings per call.
+ *
+ * Every wrapper also brackets execution in app.beginSuppressDialogs()/
+ * endSuppressDialogs(false) — try/catch cannot intercept a native AE alert
+ * dialog (an explicit alert() call, or certain engine faults AE surfaces as a
+ * dialog rather than a catchable JS exception). AE is single-threaded, so an
+ * unsuppressed dialog blocks the whole app until a human clicks it, which
+ * never happens on an unattended/automated run: the evalScript callback the
+ * daemon is awaiting never fires, and the request just sits until the 60s
+ * bridge timeout — no exception, no result, exactly the daemon "goes silent
+ * mid-turn" symptom this was added to close off.
  */
 
 function escapeForJSX(str) {
@@ -56,6 +66,21 @@ function budgetCatchBranch() {
   );
 }
 
+// Shadow the 3 ExtendScript globals that show a blocking modal dialog.
+// app.beginSuppressDialogs() does NOT cover these - verified live, that call
+// only suppresses AE's own internal dialogs (missing font/effect, a script
+// error surfaced as a dialog rather than a catchable exception), not a script
+// explicitly calling alert()/confirm()/prompt(). An unshadowed alert() left a
+// real "Script Alert" dialog open in AE, blocking the single UI thread until
+// a human clicked OK - which never happens on an unattended run, so the
+// daemon's evalScript await just sat there with no result and no error until
+// the 60s bridge timeout. Neutering all three here is also the correct
+// behavior for this tool, not a compromise: nothing is watching a runJSX call
+// execute in real time to click through a dialog it wasn't asked to show.
+function dialogShadowPrelude() {
+  return '  var alert = function () {}, confirm = function () { return false; }, prompt = function () { return null; };\n';
+}
+
 export function wrapInSafety(code, undoLabel, readOnly, opts) {
   opts = opts || {};
   var guard = !!opts.guard;
@@ -63,17 +88,21 @@ export function wrapInSafety(code, undoLabel, readOnly, opts) {
   var cat = guard ? budgetCatchBranch() : '';
   if (readOnly) {
     return `(function() {
+${dialogShadowPrelude()}  app.beginSuppressDialogs();
 ${pre}  try {
     var __result = eval(${JSON.stringify(code)});
     return JSON.stringify({ ok: true, result: String(__result != null ? __result : "undefined") });
   } catch (e) {
 ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null });
+  } finally {
+    app.endSuppressDialogs(false);
   }
 })();`;
   }
   var stripped = stripNestedUndoGroups(code);
   var label = undoLabel || stripped.substring(0, 40).replace(/[\r\n]/g, ' ');
   return `(function() {
+${dialogShadowPrelude()}  app.beginSuppressDialogs();
   app.beginUndoGroup("Gaffer: ${escapeForJSX(label)}");
 ${pre}  try {
     var __result = eval(${JSON.stringify(stripped)});
@@ -82,6 +111,7 @@ ${pre}  try {
 ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null });
   } finally {
     app.endUndoGroup();
+    app.endSuppressDialogs(false);
   }
 })();`;
 }
@@ -116,6 +146,8 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
   // single step that blows past this (a fat inner loop) throws the budget signal.
   var guardMs = Math.max(3 * budget, 1000);
   return '(function () {\n' +
+    dialogShadowPrelude() +
+    '  app.beginSuppressDialogs();\n' +
     '  app.beginUndoGroup("Gaffer: ' + safeLabel + ' (part ' + partNum + ')");\n' +
     '  var cursor = ' + cursorJSON + ';\n' +
     // Shared microsecond accumulator: fed both by the do/while (between steps)
@@ -147,6 +179,7 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
     '    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null, cursor: cursor, processed: processed });\n' +
     '  } finally {\n' +
     '    app.endUndoGroup();\n' +
+    '    app.endSuppressDialogs(false);\n' +
     '  }\n' +
     '})();';
 }
