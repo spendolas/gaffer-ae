@@ -8,7 +8,10 @@ import { wrapSlice, wrapInSafety } from '../safety.js';
 // `$.hiresTimer` access reports (models "since last access"): a big value makes
 // the freeze guard trip on its next sample, a tiny one lets work finish.
 function runJSX(jsx, hiresDelta) {
-  var app = { beginUndoGroup: function () {}, endUndoGroup: function () {} };
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () {},
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
   var dollar = { _d: hiresDelta };
   Object.defineProperty(dollar, 'hiresTimer', { get: function () { return this._d; } });
   // eslint-disable-next-line no-new-func
@@ -65,7 +68,10 @@ test('guarded wrapInSafety still closes its undo group on a budget abort', () =>
   var pf = preflight('var poke = true; function spin(){}; for (var i=0;i<1000000;i++){ spin(); }', { asExpression: false });
   var jsx = wrapInSafety(pf.code, 'Spin', false, { guard: true });
   var closed = 0;
-  var app = { beginUndoGroup: function () {}, endUndoGroup: function () { closed++; } };
+  var app = {
+    beginUndoGroup: function () {}, endUndoGroup: function () { closed++; },
+    beginSuppressDialogs: function () {}, endSuppressDialogs: function () {},
+  };
   var dollar = {}; Object.defineProperty(dollar, 'hiresTimer', { get: function () { return 5000000; } });
   // eslint-disable-next-line no-new-func
   var fn = new Function('app', '$', 'JSON', 'return ' + jsx);

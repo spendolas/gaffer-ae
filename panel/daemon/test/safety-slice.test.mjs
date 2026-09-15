@@ -10,6 +10,28 @@ test('wrapSlice: labels the undo group with the part number', () => {
   assert.ok(jsx.includes('app.endUndoGroup()'), 'undo group closes');
 });
 
+test('wrapSlice: suppresses dialogs around the step loop, restores even on error', () => {
+  // Regression: a stray AE alert dialog inside a step blocks the whole app
+  // until a human clicks it - never on an unattended run - so the daemon's
+  // evalScript await just hangs. Suppression must bracket every slice too.
+  var jsx = wrapSlice(STEP, 'null', 'x', 300, 1);
+  assert.ok(jsx.includes('app.beginSuppressDialogs()'), 'suppression begins');
+  assert.ok(jsx.includes('app.endSuppressDialogs(false)'), 'suppression ends');
+  assert.ok(jsx.indexOf('app.beginSuppressDialogs()') < jsx.indexOf('app.beginUndoGroup'),
+    'suppression starts before the undo group opens');
+  var finallyIdx = jsx.indexOf('finally');
+  assert.ok(finallyIdx > -1
+    && jsx.indexOf('app.endUndoGroup()') > finallyIdx
+    && jsx.indexOf('app.endSuppressDialogs(false)') > finallyIdx,
+    'both endUndoGroup and endSuppressDialogs run in the finally block');
+});
+
+test('wrapSlice: also shadows alert/confirm/prompt - beginSuppressDialogs alone does not cover an explicit alert() call', () => {
+  var jsx = wrapSlice(STEP, 'null', 'x', 300, 1);
+  assert.ok(/var alert\s*=\s*function/.test(jsx), 'alert shadowed');
+  assert.ok(jsx.indexOf('var alert') < jsx.indexOf('app.beginUndoGroup'), 'shadow declared before anything runs');
+});
+
 test('wrapSlice: injects the budget and uses $.hiresTimer', () => {
   var jsx = wrapSlice(STEP, 'null', 'x', 250, 1);
   assert.ok(jsx.includes('$.hiresTimer'), 'uses $.hiresTimer');
