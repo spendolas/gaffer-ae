@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.4 - 2026-09-24
+
+**The reply tray, update banner, and attachment preview now always stack in the right order above the chat input.**
+
+- Fixed the stack above the chat input being backwards: the attachment preview could end up sitting closest to the input, and the reply-quote tray furthest away, the opposite of the intended order (quotes closest, then the update banner, then attachments). The order is now pinned directly, so a future change can't flip it again by accident.
+
 ## v0.10.3 - 2026-09-24
 
 **Two AE windows no longer share one conversation, and Gaffer stops guessing wrong about Figma.**

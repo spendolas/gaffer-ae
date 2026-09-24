@@ -1268,6 +1268,12 @@
       pointer-events: none;
     }
     .input-overlays > * { pointer-events: auto; }
+    /* Stack order is pinned here, not by markup position: from the input row
+       upward it is always reply quotes -> update banner -> attachment preview
+       (flex column = low `order` paints at the top of the stack). */
+    .input-overlays > .paste-preview-row { order: 1; }
+    .input-overlays > .update-banner { order: 2; }
+    .input-overlays > .reply-quotes { order: 3; }
     /* UpdateBanner 290:8929 — pill docks flush on the input row
        (r 16/16/0/0), its bottom washed by the chat fader (Figma render) */
     .update-banner {
@@ -1593,8 +1599,13 @@
   </div>
 
   <div class="chat-input-area">
+    <!-- Stack order above the input, bottom (nearest the input) upward:
+         reply quote tray -> update banner -> attachment preview. DOM order here
+         is the reverse (flex column paints first child at the top) and is
+         pinned by the `order` values in .input-overlays CSS, so a future edit
+         that moves a child in the markup cannot change what the user sees. -->
     <div class="input-overlays">
-      <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
+      <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
       <div id="updateBanner" class="update-banner">
         <div class="banner-pill" data-fig="284:1631">
           <span id="updateText" class="banner-text" data-fig="191:1231">Update available</span>
@@ -1605,9 +1616,7 @@
           </span>
         </div>
       </div>
-      <!-- Paste preview last = topmost paint (Figma InputArea itemReverseZIndex:
-           first-listed child [Preview Row Wrapper] paints on top) -->
-      <div class="paste-preview-row" id="pastePreviewRow" data-fig="191:1237"></div>
+      <div class="reply-quotes" id="replyQuotes" data-fig="428:3200"></div>
     </div>
     <div class="chat-input-row empty" data-fig="185:1132">
       <!-- Placeholder is a sibling BEHIND the textarea (not the native
