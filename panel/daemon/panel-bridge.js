@@ -90,7 +90,9 @@ export class PanelBridge {
             return;
           }
           if (msg.type === 'chat_cancel') {
-            if (this.onChatCancel) this.onChatCancel();
+            // Pass the socket so the cancel routes to that panel's chat handler
+            // only (per-key isolation) — Stop in one panel must not kill another's turn.
+            if (this.onChatCancel) this.onChatCancel(socket);
             return;
           }
           if (msg.type === 'list_mcps') {

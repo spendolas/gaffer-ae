@@ -2,6 +2,7 @@ import { PanelBridge } from './panel-bridge.js';
 import { Queue } from './queue.js';
 import { startMcpServer } from './mcp-server.js';
 import { ChatHandler, augmentedEnv } from './chat-handler.js';
+import { createChatRegistry } from './chat-registry.js';
 import { authStatus, authIdentityFromDisk, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
@@ -24,18 +25,26 @@ bridge.start().catch((err) => {
   process.exit(1);
 });
 
-var chatHandler = new ChatHandler();
+// Chat state is isolated per panel (per bridge key / aeVersion) so two connected
+// AE instances no longer share one conversation, process slot, or compaction
+// state. See chat-registry.js. Account-level effects (model-cache, cancel-all,
+// idle) fan out with registry.each()/anyBusy(). Routing keys on socket._gafferKey,
+// which the bridge sets in _registerSocket before any chat message dispatches.
+var chatRegistry = createChatRegistry(() => new ChatHandler());
+var handlerFor = (socket) => chatRegistry.for(socket && socket._gafferKey);
 // Cancellation flag for the runJSXLoop chunk driver. The chat-cancel gesture
 // kills the claude subprocess, but a runJSXLoop the agent already started keeps
 // running in this daemon (it is a separate async task), so the driver must poll
 // this flag and stop between slices. Reset at the start of each chat turn so a
-// prior cancel never bleeds into the next run.
+// prior cancel never bleeds into the next run. NOTE: this flag stays daemon-wide
+// (not per-key) — threading it through the MCP server is out of this stopgap's
+// scope; the per-key isolation covers the chat subprocess itself.
 var loopCancelled = false;
-bridge.onChat = (msg, socket) => { loopCancelled = false; chatHandler.handleChat(msg, socket); };
-bridge.onChatCancel = () => { loopCancelled = true; chatHandler.cancel(); };
+bridge.onChat = (msg, socket) => { loopCancelled = false; handlerFor(socket).handleChat(msg, socket); };
+bridge.onChatCancel = (socket) => { loopCancelled = true; handlerFor(socket).cancel(); };
 bridge.onListModels = async (socket) => {
   try {
-    var opts = await chatHandler.listModelOptions();
+    var opts = await handlerFor(socket).listModelOptions();
     if (socket && socket.readyState === 1) {
       socket.send(JSON.stringify({
         type: 'models',
@@ -62,7 +71,7 @@ bridge.onListModels = async (socket) => {
   }
 };
 bridge.onListMcps = async (socket) => {
-  var result = await chatHandler.listMcps(function (icons) {
+  var result = await handlerFor(socket).listMcps(function (icons) {
     // background favicon fetches finished — push them to the panel
     if (socket && socket.readyState === 1) {
       socket.send(JSON.stringify({ type: 'mcp_icons', icons: icons }));
@@ -73,7 +82,7 @@ bridge.onListMcps = async (socket) => {
   }
 };
 bridge.onAuthMcp = async (msg, socket) => {
-  var result = await chatHandler.authMcp(msg.id);
+  var result = await handlerFor(socket).authMcp(msg.id);
   if (socket && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'mcp_auth_done', id: msg.id, ok: result.ok, error: result.error }));
   }
@@ -124,7 +133,7 @@ bridge.onSignIn = async (msg, socket) => {
   signInInFlight = false;
   // A sign-in may have switched accounts — drop the model cache so the next
   // Settings open discovers the new account's catalog, never the old one's.
-  chatHandler.invalidateModelCache();
+  chatRegistry.each((h) => h.invalidateModelCache());
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
     if (r.ok && r.status) sendAuthStatus(socket, r.status);
@@ -138,7 +147,7 @@ bridge.onSignOut = async (socket) => {
   const env = augmentedEnv();
   const r = await signOut(bin, { env: env });
   // Signed out — clear the cached catalog so it can't leak to a later account.
-  chatHandler.invalidateModelCache();
+  chatRegistry.each((h) => h.invalidateModelCache());
   if (r.ok) sendAuthStatus(socket, { loggedIn: false });
   else sendAuthStatus(socket, await authStatus(bin, { env: env })); // logout failed → report real state
 };
@@ -203,7 +212,7 @@ var reloadTimer = setInterval(() => {
   var cur = currentSig();
   if (sigChanged(reloadLastSig, cur)) { reloadLastSig = cur; reloadLastChangeAt = Date.now(); reloadArmed = true; }
   if (!reloadArmed) return;
-  var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn && queue.isIdle();
+  var idle = !chatRegistry.anyBusy() && !signInInFlight && !activeSignIn && queue.isIdle();
   if (shouldReload({ changed: sigChanged(reloadBaseline, reloadLastSig), lastChangeAt: reloadLastChangeAt, settleMs: 1500, idle: idle }, Date.now())) {
     clearInterval(reloadTimer);
     console.log('Gaffer: code changed — reloading daemon');
@@ -228,7 +237,7 @@ function flushTelemetryThen(cb) {
 
 process.on('SIGINT', () => {
   console.log('\nGaffer: shutting down');
-  chatHandler.cancel();
+  chatRegistry.each((h) => h.cancel());
   bridge.stop();
   flushTelemetryThen(() => process.exit(0));
 });
@@ -239,7 +248,7 @@ process.on('SIGTERM', () => {
   console.log('Gaffer: SIGTERM — draining in-flight work before exit');
   var deadline = Date.now() + 65000;
   (function waitIdle() {
-    var idle = !chatHandler.activeProcess && !signInInFlight && !activeSignIn && queue.isIdle();
+    var idle = !chatRegistry.anyBusy() && !signInInFlight && !activeSignIn && queue.isIdle();
     if (idle || Date.now() > deadline) {
       if (!idle) console.log('Gaffer: drain timed out — exiting anyway');
       try { bridge.stop(); } catch (e) { /* ignore */ }

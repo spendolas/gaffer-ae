@@ -1,6 +1,11 @@
 /**
- * importFromFigma tool — accepts Figma layer data, generates ExtendScript,
+ * importFromFigma tool — accepts Figma layer data (typically read from Grip, the
+ * live Figma connection, and reshaped to this schema), generates ExtendScript,
  * creates matching AE layers deterministically.
+ *
+ * NOTE: the string the model actually sees is the `description` field on the
+ * registerTool call below, NOT this JSDoc — keep the two in sync by hand. Don't
+ * name specific Grip tools in either; they can change and the agent discovers them.
  */
 import { translateToJSX } from './figma-translator.js';
 
@@ -69,7 +74,7 @@ export function register(server, queue, z) {
     'importFromFigma',
     {
       description:
-        'Import Figma layers into After Effects. Creates matching AE layers deterministically from structured layer data. Call Figma MCP get_design_context first to get the design, then format the result into the layers schema and pass it here.',
+        'Import Figma layers into After Effects. Creates matching AE layers deterministically from structured layer data. Read the design from Grip first (the live, preferred Figma connection), reshape that result into the layers schema below, then pass it here. A REST-based Figma connector can also supply this data, but only for published content and it cannot edit the canvas.',
       inputSchema: {
         layers: z.array(LayerSchema).describe('Array of Figma layer objects to create in AE'),
         artboard: z.object({
