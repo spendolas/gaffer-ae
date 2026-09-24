@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.3 - 2026-09-24
+
+**Two AE windows no longer share one conversation, and Gaffer stops guessing wrong about Figma.**
+
+- **Two open AE instances now get their own separate conversations.** Previously every connected AE window shared one chat behind the scenes, so a fresh conversation in one window could pick up another window's history, Stop could cancel the wrong window's turn, and one window's usage could reset the other's chat early. Each AE instance now keeps its own conversation, process, and reset timing, fully separate.
+- **Gaffer now knows Grip is your live Figma connection.** With both Grip and another Figma connector enabled, Gaffer could reach for the other one, find it not signed in, and wrongly tell you it had no Figma access at all, even though Grip was connected the whole time. Gaffer now knows Grip is the one that sees your actual open file and prefers it, and if a connector genuinely needs signing in, it points you at Settings instead of a command that does not exist in the panel.
+
 ## v0.10.2 - 2026-09-14
 
 **Signing out for good no longer looks like Gaffer stuck loading forever.**

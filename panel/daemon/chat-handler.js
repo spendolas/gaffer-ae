@@ -420,6 +420,33 @@ export function contextTokensFromUsage(usage) {
     + (usage.cache_creation_input_tokens || 0);
 }
 
+// System-prompt additions describing the user's enabled connectors, appended after
+// gaffer.md on a new conversation. Fixes a discovery gap: Grip's tool names are
+// generic (get_document/get_page/search_nodes) and rarely mention Figma, so with a
+// REST Figma connector also enabled the model reached for the REST one, found it
+// unauthenticated, and wrongly told the user it had no Figma access — while Grip was
+// connected to the open file the whole time. Naming Grip as THE live Figma connection
+// fixes it; and since the panel has its own sign-in and no terminal, the model must
+// never give /mcp / CLI advice for an unauthenticated connector. Pure + exported for test.
+export function connectorPromptAdditions(enabledMcps) {
+  var enabled = Array.isArray(enabledMcps) ? enabledMcps.filter(Boolean) : [];
+  var out = '';
+  if (enabled.indexOf('grip') !== -1) {
+    out += '\n\n## Figma\n\nGrip is the live connection to the open Figma file and is the '
+      + 'preferred way to work with Figma. Use Grip\'s tools for anything involving Figma: it '
+      + 'sees unsaved and unpublished state and can edit the canvas. A REST-based Figma '
+      + 'connector, if also enabled, only reads published data and cannot write, so prefer '
+      + 'Grip for the document the user is looking at. If Grip reports no plugin connected, '
+      + 'tell the user to run the Grip plugin in Figma, not that you have no Figma access.\n';
+  }
+  if (enabled.length) {
+    out += '\n\n## Connectors\n\nIf an enabled connector turns out to be unauthenticated or '
+      + 'unreachable, tell the user to open Gaffer Settings to connect it. Do NOT suggest '
+      + 'running /mcp or any command-line step: this panel has its own sign-in and no terminal.\n';
+  }
+  return out;
+}
+
 var COMPACT_PROMPT = "Summarize this entire conversation as a continuity briefing for yourself in a fresh session. Preserve: the user's project context, their goals, key decisions made, tools used and what they returned, the current state of the After Effects project, and any unfinished work. Be specific, ~400 words max. Output the summary directly with no preamble.";
 
 // ── MCP tile icons ──────────────────────────────────────────────────
@@ -818,6 +845,12 @@ export class ChatHandler {
     var allowed = GAFFER_TOOLS.concat(extra).join(',');
     args.push('--allowedTools', allowed);
     console.log('Gaffer chat args: enabledMcps=' + JSON.stringify(enabled) + ' allowed=' + allowed);
+
+    // Tell the model what its enabled connectors are for (Grip is the live Figma
+    // connection) and that unauthenticated connectors are a Settings problem, not a
+    // /mcp one. Pure + exported so a test can prove the copy. Only appended on a new
+    // conversation, below, same as the rest of the system prompt.
+    systemPrompt += connectorPromptAdditions(enabled);
 
     // An explicit "start fresh" from the panel (Clear chat) unconditionally
     // drops the daemon's held session BEFORE resolveSessionId runs — distinct
