@@ -1,9 +1,7 @@
 import { accessSync, readFileSync, readdirSync, constants } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { getConfigPath } from './config-path.js';
 
 var cached = null;
 
@@ -49,10 +47,11 @@ export async function findClaudeBinary() {
     catch (e) { cached = null; }
   }
 
-  // 1. Config file (written by installer)
+  // 1. Per-install config file — `claudeBin` pinned by the README install
+  // step or hand-edited by the user. Same file telemetry.js owns; the path
+  // comes from config-path.js so the two can never disagree.
   try {
-    var configPath = join(__dirname, '..', '.gaffer-config.json');
-    var config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    var config = JSON.parse(readFileSync(getConfigPath(), 'utf-8'));
     if (config.claudeBin) {
       accessSync(config.claudeBin, constants.X_OK);
       cached = config.claudeBin;
@@ -123,6 +122,6 @@ export async function findClaudeBinary() {
   throw new Error(
     'Claude CLI not found (or only an npm shim, which cannot be spawned on Windows). '
     + 'Install the native build from https://claude.ai/code, or point Gaffer at your binary via '
-    + '<extension-dir>/.gaffer-config.json: {"claudeBin": "C:/full/path/claude.exe"}'
+    + getConfigPath() + ': {"claudeBin": "C:/full/path/claude.exe"}'
   );
 }

@@ -100,13 +100,14 @@ Before you begin, read these rules. They apply to every step below.
    }
    ```
 
-6. **Pin the claude binary path** so the daemon doesn't have to guess at runtime (AE-spawned subprocesses inherit a stripped PATH):
+6. **Pin the claude binary path** so the daemon doesn't have to guess at runtime (AE-spawned subprocesses inherit a stripped PATH). The pin goes into Gaffer's per-user config file, which lives OUTSIDE the extension directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) so reinstalls and updates never touch it. That file also holds the install's anonymous `installId` and settings, so MERGE into it, never overwrite it:
    ```bash
    # macOS
    CLAUDE_PATH="$(command -v claude)"
-   INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+   CONFIG_DIR="$HOME/Library/Application Support/Gaffer"
    if [ -n "$CLAUDE_PATH" ] && [ -x "$CLAUDE_PATH" ]; then
-     printf '{"claudeBin":"%s"}\n' "$CLAUDE_PATH" > "$INSTALL_DIR/.gaffer-config.json"
+     mkdir -p "$CONFIG_DIR"
+     node -e 'const fs=require("fs");const p=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};c.claudeBin=process.argv[2];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")' "$CONFIG_DIR/config.json" "$CLAUDE_PATH"
    else
      echo "WARNING: claude not found on PATH, skipping config pin"
    fi
@@ -114,9 +115,16 @@ Before you begin, read these rules. They apply to every step below.
    # Windows (PowerShell) — pin ONLY a real .exe; npm shims (.ps1/.cmd)
    # cannot be spawned by the daemon and must not be pinned
    $cmd = Get-Command claude -ErrorAction SilentlyContinue
-   $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
+   $configDir = "$env:APPDATA\Gaffer"
    if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') {
-     @{claudeBin=$cmd.Source} | ConvertTo-Json -Compress | Set-Content "$installDir\.gaffer-config.json"
+     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+     $configPath = "$configDir\config.json"
+     $cfg = @{}
+     if (Test-Path $configPath) {
+       (Get-Content $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
+     }
+     $cfg.claudeBin = $cmd.Source
+     $cfg | ConvertTo-Json -Compress | Set-Content $configPath
    } else {
      Write-Host "No claude.exe on PATH - skipping pin; the daemon discovers standalone, WinGet, and desktop-app installs on its own"
    }
@@ -148,8 +156,8 @@ Before you begin, read these rules. They apply to every step below.
 - **Install says my Node version is too old:** Gaffer requires Node 18+. Check with `node --version`. If you manage Node with nvm or fnm, switch to a supported version before re-running the install. Otherwise install from [nodejs.org](https://nodejs.org).
 - **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` or `node` aren't on your shell's PATH, the check fails even if they're installed. Open a fresh terminal, run `which node` and `which claude` (macOS) or `where.exe node` and `where.exe claude` (Windows) to confirm. Fix PATH before re-running.
 - **`claude` errors or asks me to log in:** Gaffer doesn't install authentication. Run `claude` once manually, complete the login flow, confirm it works, then re-run the Gaffer install.
-- **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh.
-- **Chat fails with `Error: claude cli not found` despite Claude being installed:** The daemon couldn't locate the `claude` binary. Override discovery by writing `<extension-dir>/.gaffer-config.json` with `{"claudeBin": "/full/path/to/claude"}`. Find your path with `which claude` from a terminal.
+- **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh. Your per-install settings and anonymous install identity live outside that directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) and survive the deletion; only remove that folder too if you want a completely clean slate.
+- **Chat fails with `Error: claude cli not found` despite Claude being installed:** The daemon couldn't locate the `claude` binary. Override discovery by adding `"claudeBin": "/full/path/to/claude"` to `~/Library/Application Support/Gaffer/config.json` (macOS) or `%APPDATA%\Gaffer\config.json` (Windows), keeping any other keys already in the file. Find your path with `which claude` from a terminal. The daemon log prints the exact config path on startup (`Gaffer: config at ...`).
 
 </details>
 

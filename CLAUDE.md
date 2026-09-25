@@ -93,10 +93,11 @@ Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-on
 
 - Bump `panel/version.json` (version + commit) and add a `CHANGELOG.md` entry — the panel's auto-update check compares raw `version.json` on GitHub `main` against the local copy.
 - Deployed installs live at `~/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel` (Mac) / `%APPDATA%\Adobe\CEP\extensions\com.gaffer.panel` (Win). Daemon logs: `/tmp/gaffer-daemon.log` / `%TEMP%\gaffer-daemon.log`.
+- Per-install config (`installId`, `claudeBin`, `shareUsageStats`) lives OUTSIDE the extension dir so no install/update path can wipe it: `~/Library/Application Support/Gaffer/config.json` (Mac) / `%APPDATA%\Gaffer\config.json` (Win). One source of truth: `panel/daemon/config-path.js` (`getConfigPath()`; `GAFFER_CONFIG_PATH` env overrides for tests; first access migrates a legacy `<extension-dir>/.gaffer-config.json` forward). Never compute this path anywhere else.
 
 ## Chat Handler (`chat-handler.js`)
 
-- Spawns `claude -p --model <opus|sonnet|haiku> --output-format stream-json --dangerously-skip-permissions`, allowlisting only `mcp__gaffer__*` tools plus per-install user-selected MCP servers (multi-select persisted in `.gaffer-config.json`, never committed).
+- Spawns `claude -p --model <opus|sonnet|haiku> --output-format stream-json --dangerously-skip-permissions`, allowlisting only `mcp__gaffer__*` tools plus per-install user-selected MCP servers (the multi-select is per-install state, never committed).
 - Augments PATH on the subprocess — CEP launches with a stripped environment, so stdio MCP servers (bare `node` commands) fail without it.
 - Context-window overflow → session reset with a user-facing message; conversation titles summarized via a separate `--model haiku --resume` call.
 

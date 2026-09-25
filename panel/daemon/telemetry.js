@@ -16,18 +16,20 @@ import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { platform as osPlatform, release as osRelease } from 'node:os';
+import { getConfigPath } from './config-path.js';
 
 var __dirname = dirname(fileURLToPath(import.meta.url));
-// Env-var overridable so tests can point these at throwaway files instead of
-// the real per-install ones (same seam as TELEMETRY_URL below) — the test
-// suite used to read/write the real .gaffer-config.json directly, which
-// meant an interrupted test run could leave the real file blanked and the
-// real installId regenerated.
-var CONFIG_PATH = process.env.GAFFER_CONFIG_PATH || join(__dirname, '..', '.gaffer-config.json');
+// The per-install config (installId, shareUsageStats, claudeBin) lives in the
+// OS app-data folder, outside the extension directory — see config-path.js
+// for the location, the GAFFER_CONFIG_PATH test override, and the one-time
+// migration from the old in-install-dir file. Resolved lazily via
+// getConfigPath() so the migration runs on first real access.
+// BUFFER_PATH is env-var overridable for the same reason (tests point it at a
+// throwaway file so an interrupted run never blanks the real one).
 var BUFFER_PATH = process.env.GAFFER_BUFFER_PATH || join(__dirname, '..', '.gaffer-usage-buffer.json');
 // Real, deployed, verified-working Apps Script Web App (temporary stand-in
-// for gaffer-billing — see assets/plans/2026-09-07-usage-telemetry-design.md).
-// Env-var overridable so swapping the destination later is a one-line change.
+// until a real backend exists). Env-var overridable so swapping the
+// destination later is a one-line change.
 var TELEMETRY_URL = process.env.GAFFER_TELEMETRY_URL
   || 'https://script.google.com/macros/s/AKfycbx4aKRz_jB1EXe0JkZz4m4SNdGvCt7nIWCoWtXQKsd0EJ8pM4iyJ8LJMZ0qmEVUiCuE/exec';
 
@@ -37,7 +39,7 @@ var TELEMETRY_URL = process.env.GAFFER_TELEMETRY_URL
 var flushInProgress = false;
 
 function readConfig() {
-  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); }
+  try { return JSON.parse(readFileSync(getConfigPath(), 'utf-8')); }
   catch (e) { return {}; }
 }
 
@@ -50,10 +52,11 @@ function writeConfig(patch) {
   // config half-written or truncated. A corrupted config previously read as
   // "{}" (see readConfig's catch) and silently wiped installId + every other
   // saved setting on the next write.
-  var tmpPath = CONFIG_PATH + '.tmp-' + process.pid + '-' + Date.now();
+  var configPath = getConfigPath();
+  var tmpPath = configPath + '.tmp-' + process.pid + '-' + Date.now();
   try {
     writeFileSync(tmpPath, JSON.stringify(next, null, 2));
-    renameSync(tmpPath, CONFIG_PATH);
+    renameSync(tmpPath, configPath);
   } catch (e) {
     console.error('Gaffer telemetry: failed to write config', e.message);
     try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch (e2) { /* ignore */ }

@@ -148,7 +148,8 @@
   // Unlike autoCheckUpdates above, this is NOT panel-local
   // chat-state — it round-trips through the daemon (get_share_usage_stats /
   // set_share_usage_stats), which is the actual source of truth
-  // (.gaffer-config.json). This local var just mirrors the last known reply
+  // (the per-install config file, see daemon/config-path.js). This local var
+  // just mirrors the last known reply
   // so the checkbox has something to show before the first reply lands.
   var shareUsageStats = true;
   var dismissedUpdateCommit = null;

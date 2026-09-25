@@ -613,7 +613,8 @@ export class ChatHandler {
     // problem the fail-closed rule guards against.
     this.cachedCatalog = null;
     // Persisted TTL cache of the model catalog: { catalog, fetchedAt, accountId }
-    // written next to .gaffer-config.json (same panel dir), so a fresh catalog
+    // written in the panel dir (a disposable cache, unlike the per-install
+    // config, which lives in the OS app-data folder), so a fresh catalog
     // survives daemon restarts (frequent since v0.9.5's restart-on-update) and
     // avoids a network round-trip on Settings open. Path is injectable for
     // tests (and via env) so tests never touch the real install's cache.

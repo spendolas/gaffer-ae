@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.7 - 2026-09-25
+
+**Reinstalling Gaffer no longer looks like a brand-new install.**
+
+- Moved the per-install settings file (which holds your anonymous install id, pinned Claude CLI path, and usage-sharing preference) out of the extension folder and into the normal per-user settings location (`~/Library/Application Support/Gaffer` on macOS, `%APPDATA%\Gaffer` on Windows). Every install, reinstall, and update path replaces the extension folder in some way, so this file kept getting wiped and silently replaced with a fresh one — making a returning user look like a new install every time. It now lives somewhere none of those paths ever touch, and existing settings are carried forward automatically the first time this version runs.
+- Removed a couple of internal doc references that named an unreleased pricing plan by its internal filename.
+
 ## v0.10.6 - 2026-09-25
 
 **The version picker is simpler, and Gaffer now defaults to the latest Opus instead of an older pinned one.**
