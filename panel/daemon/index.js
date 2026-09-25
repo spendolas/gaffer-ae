@@ -7,6 +7,7 @@ import { authStatus, authIdentityFromDisk, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
 import * as telemetry from './telemetry.js';
+import { getConfigPath } from './config-path.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -186,6 +187,10 @@ startMcpServer(MCP_PORT, queue, {
 console.log(
   `Gaffer daemon: MCP on http://127.0.0.1:${MCP_PORT}/mcp, panel bridge on ws://127.0.0.1:${WS_PORT}`
 );
+// Resolve the per-install config up front so its directory exists and the
+// one-time migration from the old in-install-dir file runs (and logs) at
+// startup, not on whichever chat/settings message happens to touch it first.
+console.log('Gaffer: config at ' + getConfigPath());
 
 // Self-restart when the on-disk code changes, so a fresh daemon boots from the
 // new code without waiting for AE to quit (a panel reload only reloads the UI).

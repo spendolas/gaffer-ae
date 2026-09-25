@@ -22,10 +22,9 @@ against each other and against the real data.
 keychain OAuth, not a metered API key — nobody is being billed $58 today.**
 But `telemetry.js` computes `costUsd` straight from Claude Code's own
 `total_cost_usd`, which is the standard published Anthropic API rate. That's
-exactly the rate a token-relay/metered-billing user (the frozen
-`token-relay-billing-design.md` plan) would actually be charged. So this is
-real, faithful COGS preview, not an inflated scare number — worth fixing
-before that plan unfreezes, not just a curiosity.
+exactly the rate a metered-billing user would actually be charged under a
+future pricing model, if one ever ships. So this is real, faithful COGS
+preview, not an inflated scare number — worth fixing regardless.
 
 ## The real data (one dev install, 2026-09-07/08)
 

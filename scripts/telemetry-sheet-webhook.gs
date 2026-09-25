@@ -1,9 +1,8 @@
 // Gaffer usage telemetry — Apps Script Web App endpoint.
 //
-// Temporary stand-in destination for daemon usage telemetry, until the real
-// gaffer-billing backend exists (see
-// assets/plans/2026-09-07-usage-telemetry-design.md). Appends one row per
-// (date, installId, model) to whichever Sheet this script is bound to.
+// Temporary stand-in destination for daemon usage telemetry, until a real
+// backend exists. Appends one row per (date, installId, model) to whichever
+// Sheet this script is bound to.
 //
 // Manual deployment (one-time, must be done by a human in Google's own UI —
 // no agent or script can do this step, it requires your Google auth):
@@ -22,8 +21,7 @@
 // by a composite "actualModel::requestedModel" string (not actual model
 // alone) — Scrooge/autoModel can downshift the same actual model from
 // different originally-requested models, and those need to stay
-// distinguishable for measuring Scrooge's effect (see
-// assets/plans/2026-09-07-usage-telemetry-design.md, Key decision 1).
+// distinguishable for measuring Scrooge's effect.
 // sentAt is a fresh ISO timestamp generated at flush time — a single
 // calendar date can legitimately produce more than one row (day-close,
 // a mid-day disconnect/crash, end-of-day), and sentAt is what lets a
