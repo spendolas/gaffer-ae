@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.10.5 - 2026-09-25
+
+**Every button now reads in the right font, and the sign-in screen is pixel-checked against the real design.**
+
+- **Buttons across the whole panel were rendering in the browser's fallback font instead of Source Sans.** All 26 of them now use the correct font.
+- **The sign-in screen's card background is gone**, matching the design, which turns it off on purpose — the panel was drawing a dark card behind the sign-in message that was never meant to be there. Two minor alignment fixes on the same screen.
+- The design-parity check tool can now actually check the sign-in screen at all — it had no way to capture it before, so it was silently skipped every time.
+
 ## v0.10.4 - 2026-09-24
 
 **The reply tray, update banner, and attachment preview now always stack in the right order above the chat input.**

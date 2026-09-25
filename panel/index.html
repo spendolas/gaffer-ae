@@ -113,6 +113,10 @@
       height: 100%;
       position: relative;
     }
+    /* Buttons don't inherit font-family by default (the UA sheet gives them its
+       own control font — every button label was rendering in Arial, not SS3).
+       Family only: each button class still sets its own size/line-height. */
+    button { font-family: inherit; }
     /* LED atom: 8x8 layout slot, 12x12 star overflowing 2px each side */
     .led {
       position: relative;
@@ -1342,13 +1346,18 @@
     .signin-pending { display: flex; align-items: center; justify-content: center; }
     .signin-pending[hidden] { display: none; }
     .signin-modal[hidden] { display: none; }
-    /* ModalContainer 524:4040 — bg/input, r16, pad4 gap4 (settings-card twin).
+    /* ModalContainer 524:4040 — r16, pad4 gap4, NO fill: its bg/input fill is
+       hidden in Figma (visible:false), so the card sits straight on the scrim.
+       The diff tool can't see a hidden fill (it only asserts fills that exist),
+       so don't re-add a background here without the Figma changing first.
        min-width 200 = the Figma spec width as a floor; hugs wider content. */
     .signin-modal { display: flex; flex-direction: column; align-items: center; gap: 4px;
       width: max-content; min-width: 200px; max-width: 100%; padding: 4px;
-      background: var(--color-bg-input); border-radius: 16px; }
-    /* SignIn 524:4041 — pad12 gap16, fills the card */
-    .signin-body { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 12px; width: 100%; }
+      border-radius: 16px; }
+    /* SignIn 524:4041 — pad12 gap16, fills the card. Figma model verbatim:
+       counter-axis MIN, every child layoutAlign STRETCH (FILL width). */
+    .signin-body { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; padding: 12px; width: 100%; }
+    .signin-body > * { align-self: stretch; }
     /* Message 524:4042 — heading + subtitle, gap4, centered text */
     .signin-message { display: flex; flex-direction: column; gap: 4px; text-align: center; }
     .signin-title { font-size: calc(16px * var(--chat-text, 1)); line-height: calc(20.8px * var(--chat-text, 1)); font-weight: 600; color: var(--color-text-light); } /* Main Label 524:4044 — #DDD SemiBold 16/130% */
@@ -1356,7 +1365,7 @@
     /* Controls 524:4049 — button column, gap4. Buttons are the token Button
        component (Figma Button instance 449:5347): primary = Text/Informed,
        console = Text/Rest. FILL width. */
-    .signin-actions { display: flex; flex-direction: column; gap: 4px; }
+    .signin-actions { display: flex; flex-direction: column; align-items: center; gap: 4px; } /* CENTER/CENTER */
     .signin-actions > .text-btn { width: 100%; }
     .signin-caption { font-size: calc(10px * var(--chat-text, 1)); line-height: calc(15px * var(--chat-text, 1)); color: var(--color-text-dim); text-align: center; } /* Message 524:5668 / Pt.1 524:5671 — #777 10/150% */
     .signin-caption-u { text-decoration: underline; cursor: pointer; } /* "Claude Code CLI" — links to install docs */
@@ -1581,7 +1590,7 @@
           <div class="signin-sub" data-fig="524:4045">Your AI crew in After Effects.</div>
         </div>
         <div class="signin-actions" data-fig="524:4049">
-          <button id="signInClaude" class="text-btn informed" data-fig="524:4050">Sign in with Claude</button>
+          <button id="signInClaude" class="text-btn informed" data-fig="524:4050"><span data-fig="I524:4050;449:5396">Sign in with Claude</span></button>
           <!-- Console sign-in: hidden per Figma (Button 2 524:4051 visible:false).
                Kept in markup so the sign_in mode:'console' wiring survives. -->
           <button id="signInConsole" class="text-btn" data-fig="524:4051" hidden>Use Anthropic Console</button>
@@ -1590,10 +1599,11 @@
           </div>
           <div id="signInError" class="signin-error" hidden></div>
         </div>
-        <!-- "Claude Code CLI" is underlined in the Figma (a text-range style,
-             not a node prop); reproduced as decoration only — the design wires
-             no link/handler, so it is not interactive. -->
-        <div class="signin-caption" data-fig="524:5668">Requires <span id="signInCliLink" class="signin-caption-u" role="link" tabindex="0">Claude Code CLI</span>.</div>
+        <!-- "Claude Code CLI" is underlined in the Figma (a text-range style on
+             Pt. 1 524:5671, not a node prop). It's a link: main.js opens the
+             install docs in the EXTERNAL browser (cs.openURLInDefaultBrowser) —
+             a span, not an <a href>, so it can never navigate the panel itself. -->
+        <div class="signin-caption" data-fig="524:5668"><span data-fig="524:5671">Requires <span id="signInCliLink" class="signin-caption-u" role="link" tabindex="0">Claude Code CLI</span>.</span></div>
       </div>
     </div>
   </div>

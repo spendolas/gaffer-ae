@@ -80,6 +80,11 @@ window.__audit = (function () {
     var sm = document.getElementById('settingsModal'); if (sm) sm.hidden = true;
     var am = document.getElementById('alertModal'); if (am) { am.hidden = true; am.classList.remove('tk-open', 'tk-closing'); }
     var pops = document.querySelectorAll('.select-popup'); for (var pi = 0; pi < pops.length; pi++) pops[pi].hidden = true;
+    // The sign-in takeover (z 3000) covers everything — if the live panel is
+    // signed out, or 'signed-out' ran before, every later state would capture
+    // under it. Hide it outright; 'signed-out' re-shows it via the real gate.
+    var sic = document.getElementById('signInCard');
+    if (sic) { sic.classList.remove('visible', 'instant'); sic.hidden = true; }
     // The 'disabled' state force-sets .disabled on every button matching this
     // selector (see below) to capture the Figma State=Disabled variant. Undo
     // it here so it doesn't bleed into every state captured afterward (e.g.
@@ -254,6 +259,15 @@ window.__audit = (function () {
       if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
       else document.getElementById('settingsModal').hidden = false;
       if (window.__gaffer && window.__gaffer.renderAuth) window.__gaffer.renderAuth({ loggedIn: true, email: 'you@example.com', orgName: 'Example', subscriptionType: 'team' });
+    },
+    // SignInScreen (524:4062) — drive the real auth gate signed-out (renderAuth
+    // dev seam, no daemon round-trip) so the card renders exactly as shipped.
+    // .instant skips the fade so the capture isn't taken mid-transition.
+    'signed-out': function () {
+      reset();
+      var card = document.getElementById('signInCard');
+      if (card) card.classList.add('instant');
+      if (window.__gaffer && window.__gaffer.renderAuth) window.__gaffer.renderAuth({ loggedIn: false, claudeAvailable: true });
     },
     // Update CTA — only appears when a check has confirmed a newer commit. Force
     // an available commit (dev seam) to capture the shown state.
