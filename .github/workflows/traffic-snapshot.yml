@@ -1,0 +1,58 @@
+name: Traffic snapshot
+
+# GitHub's repo traffic API (clones/views) only retains 14 days of history.
+# This snapshots it weekly so we don't lose data once it rolls off that
+# window. Schedule + manual dispatch only — never push/pull_request, since
+# this has nothing to do with code changes.
+on:
+  schedule:
+    # Monday 09:00 UTC — early in the work week, well clear of midnight
+    # rollover edge cases, and frequent enough that a single missed run
+    # still leaves overlap inside the 14-day retention window.
+    - cron: '0 9 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    # Belt-and-suspenders: even though no push/pull_request trigger exists
+    # above, keep this job explicitly scoped to its own triggers only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      # gh CLI and jq are both preinstalled on GitHub-hosted runners. The
+      # default GITHUB_TOKEN is read-only for traffic data on this repo,
+      # which is sufficient here — no PAT/secret needed.
+      - name: Fetch traffic data and append snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          clones=$(gh api "repos/${{ github.repository }}/traffic/clones")
+          views=$(gh api "repos/${{ github.repository }}/traffic/views")
+          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq -nc \
+            --arg ts "$timestamp" \
+            --argjson clones "$clones" \
+            --argjson views "$views" \
+            '{timestamp: $ts, clones: $clones, views: $views}' \
+            >> docs/traffic-snapshots.jsonl
+
+      # Bot identity, not the repo owner's — this is a mechanical, automated
+      # commit and must never be attributed to a real human.
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/traffic-snapshots.jsonl
+          if git diff --cached --quiet; then
+            echo "No traffic changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: weekly traffic snapshot"
+          git push

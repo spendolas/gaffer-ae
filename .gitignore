@@ -26,3 +26,9 @@ panel/.gaffer-model-cache.json
 
 # Local asset store (licensed fonts etc.) — never ship
 assets/
+
+# Claude Code local state — machine-specific, was only excluded on the repo
+# owner's own machine via their global gitignore / .git/info/exclude, which
+# doesn't travel with the repo. Any other clone had no protection at all.
+.claude/settings.local.json
+.claude/worktrees/
