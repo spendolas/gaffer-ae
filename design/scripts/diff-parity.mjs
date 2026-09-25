@@ -218,8 +218,16 @@ function expectedChecks(spec) {
 // reason}}. A deviating check is reported separately, not counted as a failure,
 // so the tool stays green while the divergence stays visible and documented.
 const DEVIATIONS = {
-  // (none — the reply tray keeps Figma's 24px padding; it lands flush with the
-  // input by living inside the shared 6px-inset .input-overlays container.)
+  // (the reply tray keeps Figma's 24px padding; it lands flush with the input by
+  // living inside the shared 6px-inset .input-overlays container — no entry.)
+  // SignInScreen is a full-panel takeover (absolute, inset:0): it must fill the
+  // live, user-resizable panel. Figma's 360×600 is the artboard it's drawn on,
+  // not a size the panel can hold — same reason position:fixed overlays skip
+  // geometry above. Everything inside it (card 200 wide, etc.) is still checked.
+  '524:4062': {
+    w: 'full-panel takeover fills the resizable panel; 360 is the Figma artboard width',
+    h: 'full-panel takeover fills the resizable panel; 600 is the Figma artboard height',
+  },
 };
 
 // ── Diff every anchored node ─────────────────────────────────────────────────
