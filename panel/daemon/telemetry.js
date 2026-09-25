@@ -9,16 +9,22 @@
 // collecting real users' data without their consent.
 var DEFAULT_ENABLED = true; // TEMP — see note above. Flip to false pre-release.
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { platform as osPlatform, release as osRelease } from 'node:os';
 
 var __dirname = dirname(fileURLToPath(import.meta.url));
-var CONFIG_PATH = join(__dirname, '..', '.gaffer-config.json');
-var BUFFER_PATH = join(__dirname, '..', '.gaffer-usage-buffer.json');
+// Env-var overridable so tests can point these at throwaway files instead of
+// the real per-install ones (same seam as TELEMETRY_URL below) — the test
+// suite used to read/write the real .gaffer-config.json directly, which
+// meant an interrupted test run could leave the real file blanked and the
+// real installId regenerated.
+var CONFIG_PATH = process.env.GAFFER_CONFIG_PATH || join(__dirname, '..', '.gaffer-config.json');
+var BUFFER_PATH = process.env.GAFFER_BUFFER_PATH || join(__dirname, '..', '.gaffer-usage-buffer.json');
 // Real, deployed, verified-working Apps Script Web App (temporary stand-in
 // for gaffer-billing — see assets/plans/2026-09-07-usage-telemetry-design.md).
 // Env-var overridable so swapping the destination later is a one-line change.
@@ -38,8 +44,20 @@ function readConfig() {
 function writeConfig(patch) {
   var current = readConfig();
   var next = Object.assign({}, current, patch);
-  try { writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2)); }
-  catch (e) { console.error('Gaffer telemetry: failed to write config', e.message); }
+  // Write to a temp file then rename over the real one — a rename is atomic
+  // on the same filesystem, so a crash/kill mid-write (or a sync tool like
+  // Dropbox touching the file at the wrong moment) can never leave the real
+  // config half-written or truncated. A corrupted config previously read as
+  // "{}" (see readConfig's catch) and silently wiped installId + every other
+  // saved setting on the next write.
+  var tmpPath = CONFIG_PATH + '.tmp-' + process.pid + '-' + Date.now();
+  try {
+    writeFileSync(tmpPath, JSON.stringify(next, null, 2));
+    renameSync(tmpPath, CONFIG_PATH);
+  } catch (e) {
+    console.error('Gaffer telemetry: failed to write config', e.message);
+    try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch (e2) { /* ignore */ }
+  }
 }
 
 export function isEnabled() {
@@ -65,6 +83,19 @@ export function getInstallId() {
 function todayKey() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
 }
+
+// Static per-process facts, read/computed once and reused on every flush.
+var cachedGafferVersion = null;
+function getGafferVersion() {
+  if (cachedGafferVersion) return cachedGafferVersion;
+  try {
+    var data = JSON.parse(readFileSync(join(__dirname, '..', 'version.json'), 'utf-8'));
+    cachedGafferVersion = data.version || 'unknown';
+  } catch (e) { cachedGafferVersion = 'unknown'; }
+  return cachedGafferVersion;
+}
+
+var OS_INFO = osPlatform() + ' ' + osRelease();
 
 function emptyBuffer() {
   return { date: todayKey(), byModel: {} };
@@ -112,6 +143,9 @@ export function recordUsage(entry) {
     bucket.cacheReadTokens += entry.cacheReadTokens || 0;
     bucket.cacheCreationTokens += entry.cacheCreationTokens || 0;
     bucket.costUsd += entry.costUsd || 0;
+    // Last-seen AE version for this model pair today — not aggregated, just
+    // enough to see which AE version a model pairing ran on.
+    bucket.aeVersion = entry.aeVersion || bucket.aeVersion || 'unknown';
     buffer.byModel[key] = bucket;
 
     writeBuffer(buffer);
@@ -141,6 +175,8 @@ export function flush(buffer) {
         date: buffer.date,
         sentAt: new Date().toISOString(),
         installId: getInstallId(),
+        gafferVersion: getGafferVersion(),
+        os: OS_INFO,
         byModel: buffer.byModel,
       });
 

@@ -332,18 +332,20 @@ function shortToolLabel(name, input) {
 }
 
 // When the running session crosses this many context tokens we summarize it and
-// start fresh on the next turn. The threshold is VARIANT-AWARE: it must sit
+// start fresh on the next turn. The threshold is WINDOW-AWARE: it must sit
 // below the session's own context window or the gate never fires. A flat 500K
-// (the 0.10.0 first cut) was wrong both ways — a standard 200K-window session
-// can never reach 500K, so compaction was silently dead for it, and a 1m session
-// got compacted at half its 1M capacity. So:
-//   - standard (200K window): 150K — fires with headroom before the 200K wall.
-//   - 1m (1M window): 850K — respects an opted-in large context, still leaves
-//     ~150K of headroom below the wall and clears the summarizer's own headroom.
+// (the 0.10.0 first cut) was wrong both ways — a 200K-window session can never
+// reach 500K, so compaction was silently dead for it, and a 1M-window session
+// got compacted at half its capacity. There's no user-facing 1M toggle anymore
+// (1M is just whatever a model's real window is), so the gate reads the
+// model's actual detected window instead of a variant flag:
+//   - 200K window: 150K — fires with headroom before the wall.
+//   - 1M window: 850K — leaves ~150K of headroom below the wall and clears
+//     the summarizer's own headroom.
 var COMPACT_THRESHOLD_STANDARD = 150000;
 var COMPACT_THRESHOLD_1M = 850000;
-export function compactThreshold(variant) {
-  return variant === '1m' ? COMPACT_THRESHOLD_1M : COMPACT_THRESHOLD_STANDARD;
+export function compactThreshold(windowSize) {
+  return windowSize >= 1000000 ? COMPACT_THRESHOLD_1M : COMPACT_THRESHOLD_STANDARD;
 }
 
 // Headroom the summarizer needs on top of the session it re-reads: its own
@@ -366,21 +368,20 @@ var COMPACT_SUMMARIZER_HEADROOM = 20000;
 // Pure + capLookup-injected for test.
 export function compactionSummarizerModel(lastModel, lastContextTokens, capLookup) {
   if (!lastModel) return null;
-  var is1m = /\[1m\]$/.test(lastModel);
   var cap = capLookup ? capLookup(lastModel) : null;
   var windows = (cap && cap.contextWindows) || [];
-  var effective = windows.length === 0 ? 0
-    : (is1m && cap.oneM ? Math.max.apply(null, windows) : Math.min.apply(null, windows));
+  // No more opt-in: a model's real window is always whichever is largest.
+  var effective = windows.length === 0 ? 0 : Math.max.apply(null, windows);
   return effective >= (lastContextTokens || 0) + COMPACT_SUMMARIZER_HEADROOM
     ? lastModel
     : null;
 }
 
-// Pure gate for the compaction decision, variant-aware — exported so a test can
-// prove the behavior (standard fires at 150K, 1m only near 800K) rather than
-// re-asserting a constant.
-export function shouldCompactSession(contextTokens, variant) {
-  return (contextTokens || 0) >= compactThreshold(variant);
+// Pure gate for the compaction decision, window-aware — exported so a test can
+// prove the behavior (200K window fires at 150K, 1M window only near 800K)
+// rather than re-asserting a constant.
+export function shouldCompactSession(contextTokens, windowSize) {
+  return (contextTokens || 0) >= compactThreshold(windowSize);
 }
 
 // Resolve which session id a turn should resume. Normally the panel-supplied id
@@ -793,40 +794,28 @@ export class ChatHandler {
       systemPrompt += '\n\n## Connected AE\n\nYou are connected to After Effects ' + msg.aeVersion + '. When calling Gaffer tools that accept an aeVersion parameter, pass "' + msg.aeVersion + '". This routes the call to the correct AE instance.\n';
     }
 
-    // Keep the trust-first default consistent for older panels and headless
-    // callers that omit advanced settings: Opus 4.8 at Medium effort.
-    var model = msg.model || 'claude-opus-4-8';
+    // Keep the default consistent for older panels and headless callers
+    // that omit advanced settings: Opus Latest at Medium effort.
+    var model = msg.model || 'opus';
     // Chat always runs on exactly the requested model/effort — no automatic
-    // switching. requestedModel mirrors the final model for telemetry; the 1m
-    // variant suffix is included so it matches the final `model` (which gets
-    // [1m] appended below) in the usage log.
-    var requestedModel = model + (msg.variant === '1m' ? '[1m]' : '');
+    // switching. requestedModel mirrors the final model for telemetry.
+    var requestedModel = model;
     var effort = msg.effort || 'medium';
     // Validate advanced controls against the same model matrix sent to
     // Settings. This is a server-side guard for stale panels or hand-crafted
     // websocket messages; the UI also hides unsupported choices. Account/plan
     // entitlement remains Claude's decision and may still reject a valid
     // capability at request time.
-    var capabilityKey = String(model || '').replace(/\[1m\]$/, '');
-    var capability = (this.liveModelCapabilities && this.liveModelCapabilities[capabilityKey])
+    var capability = (this.liveModelCapabilities && this.liveModelCapabilities[model])
       || modelCapability(model, null);
-    if (msg.variant === '1m' && !capability.oneM) {
-      if (socket.readyState === 1) socket.send(JSON.stringify({
-        type: 'chat_error',
-        error: '1M context is not supported by ' + model + '.',
-      }));
-      return;
-    }
     if (effort && capability.efforts.indexOf(effort) === -1) effort = null;
-    // Context-window variant: Claude Code encodes 1M as a [1m] model suffix.
-    if (msg.variant === '1m') model += '[1m]';
     // Retained (not just local vars) so the 'result' event handler below can
     // read them for telemetry once the turn completes.
     this._lastModel = model;
     this._lastRequestedModel = requestedModel;
-    // The compaction gate is variant-aware (a 1m session has a far larger wall);
-    // remember this turn's context variant for the gate in the close handler.
-    this._lastVariant = msg.variant;
+    // The compaction gate reads the model's real context window (no more 1M
+    // opt-in toggle — a model's window is just whatever it actually supports).
+    this._lastWindow = Math.max.apply(null, capability.contextWindows);
     var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
     if (effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1) args.push('--effort', effort);
@@ -885,7 +874,7 @@ export class ChatHandler {
     // for tracing what a panel selection maps to.
     console.log('Gaffer chat spawn: --model ' + model
       + (effort && EFFORTS.indexOf(effort) !== -1 ? ' --effort ' + effort : ' (no --effort)')
-      + ' | variant=' + (msg.variant || 'standard')
+      + ' | window=' + this._lastWindow
       + ' resume=' + (sessionId ? 'yes' : 'new'));
 
     // Cache for the background compaction call.
@@ -995,7 +984,7 @@ export class ChatHandler {
       // already-cached prefix; session-pruner.js stays as the reference impl.
       // If the session is approaching the context wall, summarize it now in
       // the background so the next user turn can start fresh with continuity.
-      if (this.sessionId && shouldCompactSession(this.lastContextTokens, this._lastVariant) && !this.compacting) {
+      if (this.sessionId && shouldCompactSession(this.lastContextTokens, this._lastWindow) && !this.compacting) {
         this._compactSession(socket);
       }
     });
@@ -1109,6 +1098,7 @@ export class ChatHandler {
         telemetry.recordUsage({
           model: this._lastModel,
           requestedModel: this._lastRequestedModel,
+          aeVersion: socket && socket._gafferKey,
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
@@ -1136,8 +1126,7 @@ export class ChatHandler {
     // silently on another model (see compactionSummarizerModel).
     var self = this;
     var summarizer = compactionSummarizerModel(this._lastModel, this.lastContextTokens, function (id) {
-      var key = String(id || '').replace(/\[1m\]$/, '');
-      return (self.liveModelCapabilities && self.liveModelCapabilities[key]) || modelCapability(id, null);
+      return (self.liveModelCapabilities && self.liveModelCapabilities[id]) || modelCapability(id, null);
     });
     if (!summarizer) {
       // The conversation outgrew what its own model can re-read in one call.

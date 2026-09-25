@@ -129,11 +129,12 @@
   var claudeAvailable = null; // null = unknown; false = daemon can't find the Claude CLI
   var authPendingTimedOut = false; // defense-in-depth: see armAuthPendingTimeout below
   var chatHistory = []; // { role: 'user'|'assistant', text: string }
-  // Trust-first default: use the less expensive Opus 4.8 tier until Settings
-  // has refreshed the account's current model availability. The full id keeps
-  // headless calls deterministic while that refresh is in flight.
+  // Default to Opus, Latest — pinning to an older version turned out not to
+  // be cheaper, so there's no cost reason to hold back from whatever's
+  // current. Settings still refreshes this against the account's real
+  // availability once that response arrives.
   var currentModel = 'opus';
-  var currentVariant = 'id:claude-opus-4-8'; // 'standard' | '1m' | pinned full id
+  var currentVariant = 'standard'; // 'standard' | pinned full id
   var currentEffort = 'medium'; // low | medium | high | xhigh | max
   // Discovery reads the Claude Code credential silently (open-ACL Keychain item
   // / creds file) — no OS prompt ever fires, so there's no first-visit "Allow"
@@ -838,8 +839,12 @@
         // (Legacy modelDiscoveryIntroduced/Consent markers are ignored now —
         // there's no first-visit gate; discovery always starts at 'loading'.)
         if (data.variant) {
-          // migrate the short-lived 'latest' naming
-          currentVariant = data.variant === 'latest' ? 'standard' : data.variant;
+          // migrate the short-lived 'latest' naming, and the removed 1M
+          // toggle — a saved '1m' collapses to 'standard', a saved pinned
+          // id loses its old '[1m]' suffix (that model's real window is
+          // used automatically now, no per-conversation opt-in).
+          currentVariant = data.variant === 'latest' || data.variant === '1m' ? 'standard'
+            : data.variant.replace(/\[1m\]$/, '');
           updateVariantSelect();
         }
         if (data.effort) {
@@ -1508,9 +1513,8 @@
       type: 'chat',
       message: fullMessage,
       sessionId: currentSessionId,
-      // pinned version = full model id (may embed [1m]); alias otherwise
+      // pinned version = full model id; alias otherwise
       model: currentVariant.indexOf('id:') === 0 ? currentVariant.slice(3) : currentModel,
-      variant: currentVariant === '1m' ? '1m' : 'standard',
       effort: discoveredEfforts.length ? currentEffort : null,
       aeVersion: aeVersion,
       enabledMcps: enabledMcps,
@@ -1565,7 +1569,7 @@
 
   function appendUserMessage(text, images, quotes) {
     chatMessagesEl.appendChild(buildUserMessageEl(text, images, quotes));
-    var entry = { role: 'user', text: text };
+    var entry = { role: 'user', text: text, timestamp: new Date().toISOString() };
     if (images && images.length) {
       entry.images = images.map(function (i) { return { dataUrl: i.dataUrl, name: i.name }; });
     }
@@ -2112,7 +2116,7 @@
       } else {
         el.removeAttribute('id');
         if (rawText) {
-          chatHistory.push({ role: 'assistant', text: rawText });
+          chatHistory.push({ role: 'assistant', text: rawText, timestamp: new Date().toISOString() });
           saveChat();
         }
       }
@@ -2869,38 +2873,25 @@
   function labelize(v) {
     if (typeof v !== 'string') return '';
     if (v === 'xhigh') return 'Extra High';
-    if (v === '1m') return '1M';
     // A restored pinned version can briefly precede the fresh model response,
     // so don't expose the internal select value while its options rebuild.
-    if (v.indexOf('id:') === 0) {
-      var pinned = v.substring(3);
-      var oneM = /\[1m\]$/.test(pinned);
-      if (oneM) pinned = pinned.replace(/\[1m\]$/, '');
-      return versionLabel(pinned) + (oneM ? ' · 1M' : '');
-    }
+    if (v.indexOf('id:') === 0) return versionLabel(v.substring(3));
     return v.charAt(0).toUpperCase() + v.slice(1);
   }
   var MODELS = ['fable', 'opus', 'sonnet', 'haiku'].map(function (v) { return { value: v, label: labelize(v) }; });
-  // Variant = version x context (ref: "Latest", "Latest · 1M", "4.6",
-  // "4.6 · 1M"...). 1M is offered only when the daemon's fresh capability
-  // response says the selected model supports it; pinned versions come from
-  // the daemon's CLI-state discovery and are full ids carried as
-  // 'id:<full-id>'.
+  // Variant = "Latest" or a pinned specific version. Pinned versions come
+  // from the daemon's CLI-state discovery and are full ids carried as
+  // 'id:<full-id>'. There's no context-window toggle here — a model's real
+  // window (200K or 1M) is used automatically, never a per-conversation choice.
   var modelVersions = {}; // family -> [full ids], daemon-pushed
   var modelCapabilities = null; // key -> { oneM, efforts, entitlement }
   function versionLabel(id) {
     return id.replace(/^claude-[a-z]+-/, '').replace(/-\d{8}$/, '').replace(/-/g, '.');
   }
-  function supportsOneM(key) {
-    var caps = modelCapabilities && modelCapabilities[key];
-    return !!(caps && caps.oneM);
-  }
   function variantOptionsFor(family) {
     var opts = [{ value: 'standard', label: 'Latest' }];
-    if (supportsOneM(family)) opts.push({ value: '1m', label: 'Latest · 1M' });
     (modelVersions[family] || []).forEach(function (id) {
       opts.push({ value: 'id:' + id, label: versionLabel(id) });
-      if (supportsOneM(id)) opts.push({ value: 'id:' + id + '[1m]', label: versionLabel(id) + ' · 1M' });
     });
     return opts;
   }

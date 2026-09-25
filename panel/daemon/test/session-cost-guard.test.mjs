@@ -10,9 +10,9 @@ import {
   ChatHandler,
 } from '../chat-handler.js';
 
-// Variant-aware compaction thresholds (mirror chat-handler.js). Standard (200K
-// window) must trip BELOW its wall or it never fires; 1m (1M window) trips high
-// so an opted-in large session isn't compacted at half capacity.
+// Window-aware compaction thresholds (mirror chat-handler.js). A 200K window
+// must trip BELOW its wall or it never fires; a 1M window trips high so a
+// large-context session isn't compacted at half capacity.
 var THRESHOLD_STD = 150000;
 var THRESHOLD_1M = 850000;
 
@@ -35,41 +35,41 @@ test('individual missing fields do not throw', () => {
 });
 
 test('THE BUG: input_tokens alone never trips the gate; the real total does', () => {
-  // A warm-cache turn past a 1m session's wall: tiny uncached slice, huge cache.
+  // A warm-cache turn past a 1M-window session's wall: tiny uncached slice, huge cache.
   var usage = { input_tokens: 12, cache_read_input_tokens: 870000, cache_creation_input_tokens: 1822 };
   // Old (buggy) gate read input_tokens only -> 12, never >= threshold -> dead code.
   assert.ok(usage.input_tokens < THRESHOLD_1M, 'uncached slice stays tiny under caching');
-  // Fixed gate reads the real total -> over the 1m threshold -> compaction fires.
-  assert.ok(shouldCompactSession(contextTokensFromUsage(usage), '1m'), 'real context size trips the gate');
+  // Fixed gate reads the real total -> over the 1M threshold -> compaction fires.
+  assert.ok(shouldCompactSession(contextTokensFromUsage(usage), 1000000), 'real context size trips the gate');
 });
 
-// ── Variant-aware thresholds ─────────────────────────────────────────
-test('compactThreshold: 1m sessions get the high wall, everyone else the low one', () => {
-  assert.equal(compactThreshold('1m'), THRESHOLD_1M);
-  assert.equal(compactThreshold(undefined), THRESHOLD_STD, 'no variant = standard');
-  assert.equal(compactThreshold('standard'), THRESHOLD_STD);
-  assert.equal(compactThreshold(''), THRESHOLD_STD);
+// ── Window-aware thresholds ─────────────────────────────────────────
+test('compactThreshold: a 1M window gets the high wall, everyone else the low one', () => {
+  assert.equal(compactThreshold(1000000), THRESHOLD_1M);
+  assert.equal(compactThreshold(undefined), THRESHOLD_STD, 'no window = standard');
+  assert.equal(compactThreshold(200000), THRESHOLD_STD);
+  assert.equal(compactThreshold(0), THRESHOLD_STD);
 });
 
-test('standard (200K window) compacts before its wall — flat 500K would NEVER fire', () => {
-  // A standard opus window is ~200K, so a 500K gate could never trip: compaction
-  // was silently dead for non-1m sessions. The 150K gate fires with headroom.
-  assert.equal(shouldCompactSession(160000, 'standard'), true, '160K standard compacts');
-  assert.equal(shouldCompactSession(THRESHOLD_STD, 'standard'), true, 'exactly 150K (inclusive)');
-  assert.equal(shouldCompactSession(140000, 'standard'), false, '140K does not');
+test('200K window compacts before its wall — flat 500K would NEVER fire', () => {
+  // A 200K window can never reach a flat 500K gate: compaction was silently
+  // dead for those sessions. The 150K gate fires with headroom.
+  assert.equal(shouldCompactSession(160000, 200000), true, '160K on a 200K window compacts');
+  assert.equal(shouldCompactSession(THRESHOLD_STD, 200000), true, 'exactly 150K (inclusive)');
+  assert.equal(shouldCompactSession(140000, 200000), false, '140K does not');
   // The regression the flat-500K release introduced:
   assert.equal(160000 < 500000, true, 'proof: 160K < a flat 500K gate -> never compacts');
 });
 
-test('1m (1M window) compacts near its wall, not at half capacity', () => {
-  assert.equal(shouldCompactSession(870000, '1m'), true, '870K 1m compacts');
-  assert.equal(shouldCompactSession(THRESHOLD_1M, '1m'), true, 'exactly 850K (inclusive)');
-  assert.equal(shouldCompactSession(500000, '1m'), false, '500K 1m is only half-full, no compact');
+test('1M window compacts near its wall, not at half capacity', () => {
+  assert.equal(shouldCompactSession(870000, 1000000), true, '870K on a 1M window compacts');
+  assert.equal(shouldCompactSession(THRESHOLD_1M, 1000000), true, 'exactly 850K (inclusive)');
+  assert.equal(shouldCompactSession(500000, 1000000), false, '500K on a 1M window is only half-full, no compact');
 });
 
 test('shouldCompactSession is 0-safe on a fresh session', () => {
-  assert.equal(shouldCompactSession(0, '1m'), false);
-  assert.equal(shouldCompactSession(undefined, 'standard'), false);
+  assert.equal(shouldCompactSession(0, 1000000), false);
+  assert.equal(shouldCompactSession(undefined, 200000), false);
 });
 
 // ── Session-reset latch (the compaction LOOP bug) ────────────────────
@@ -114,18 +114,19 @@ test('sessionIdForTurn: Clear chat (newConversation) forces a fresh session', ()
 });
 
 // ── Compaction reuses the leading (warm-cache) model when safe ───────
-// Fake capability lookup mirroring modelCapability's shape.
+// Fake capability lookup mirroring modelCapability's shape. No more [1m]
+// marker: a model's real window is always whichever is largest it supports.
 var CAP = {
   'claude-opus-4-8': { oneM: true, contextWindows: [200000, 1000000] },
   'claude-sonnet-5': { oneM: true, contextWindows: [200000, 1000000] },
   'claude-haiku-4-5': { oneM: false, contextWindows: [200000] },
 };
-function capLookup(id) { return CAP[String(id || '').replace(/\[1m\]$/, '')] || null; }
+function capLookup(id) { return CAP[id] || null; }
 
-test('compactionSummarizerModel: reuses the leading 1m model when its window clears the session', () => {
-  // opus[1m] led an 850K session -> its 1M window clears 850K+headroom -> reuse
+test('compactionSummarizerModel: reuses the leading model at its real (largest) window', () => {
+  // opus led an 850K session -> its 1M window clears 850K+headroom -> reuse
   // (warm cache = cache-read, not a cold write on a fresh model).
-  assert.equal(compactionSummarizerModel('claude-opus-4-8[1m]', 850000, capLookup), 'claude-opus-4-8[1m]');
+  assert.equal(compactionSummarizerModel('claude-opus-4-8', 850000, capLookup), 'claude-opus-4-8');
 });
 
 test('compactionSummarizerModel: returns null rather than silently summarizing on another model', () => {
@@ -133,9 +134,9 @@ test('compactionSummarizerModel: returns null rather than silently summarizing o
   // session under an empty (model-scoped) cache and cold-writes the WHOLE thing
   // at that model's write rate. Silent AND expensive, so we skip instead.
   assert.equal(compactionSummarizerModel('claude-haiku-4-5', 500000, capLookup), null, 'haiku 200K cannot read 500K');
-  // A standard (no [1m]) opus caps at 200K; a ~190K session leaves no headroom.
-  assert.equal(compactionSummarizerModel('claude-opus-4-8', 190000, capLookup), null, 'standard window too tight');
-  // But a standard model on a small session is safely reused.
+  // Even opus's largest (1M) window is too tight for a session this close to it.
+  assert.equal(compactionSummarizerModel('claude-opus-4-8', 990000, capLookup), null, '1M window too tight with no headroom left');
+  // But a model on a small session is safely reused.
   assert.equal(compactionSummarizerModel('claude-opus-4-8', 150000, capLookup), 'claude-opus-4-8', 'reuse when there is headroom');
 });
 
@@ -156,7 +157,7 @@ function fakeSocket() { return { readyState: 1, sent: [], send(m) { this.sent.pu
 
 test('compaction gate: uses last-assistant occupancy, NOT the result event cumulative usage', () => {
   var h = new ChatHandler();
-  h._lastVariant = '1m'; // 850K threshold
+  h._lastWindow = 1000000; // 850K threshold
   var sock = fakeSocket();
 
   // Assistant steps; context grows to ~80,802 by the final step (true occupancy).
@@ -168,9 +169,9 @@ test('compaction gate: uses last-assistant occupancy, NOT the result event cumul
   h._processEvent({ type: 'result', subtype: 'success', session_id: 's1', result: 'done', usage: { input_tokens: 20, cache_read_input_tokens: 890000, cache_creation_input_tokens: 5000 } }, sock);
 
   assert.equal(h.lastContextTokens, 80802, 'gate must reflect the last assistant step occupancy (~80K)');
-  assert.equal(shouldCompactSession(h.lastContextTokens, h._lastVariant), false, 'an 80K window must NOT trip the 850K 1m gate');
+  assert.equal(shouldCompactSession(h.lastContextTokens, h._lastWindow), false, 'an 80K window must NOT trip the 850K gate on a 1M-window session');
   // The cumulative figure is the wrong value that WOULD have fired the gate.
-  assert.equal(shouldCompactSession(contextTokensFromUsage({ input_tokens: 20, cache_read_input_tokens: 890000, cache_creation_input_tokens: 5000 }), '1m'), true, 'cumulative usage is the gate-tripping value the old code used');
+  assert.equal(shouldCompactSession(contextTokensFromUsage({ input_tokens: 20, cache_read_input_tokens: 890000, cache_creation_input_tokens: 5000 }), 1000000), true, 'cumulative usage is the gate-tripping value the old code used');
 });
 
 test('compaction gate: a real assistant step overwrites any stale prior value', () => {
