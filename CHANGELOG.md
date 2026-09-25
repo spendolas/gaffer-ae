@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.10.6 - 2026-09-25
+
+**The version picker is simpler, and Gaffer now defaults to the latest Opus instead of an older pinned one.**
+
+- Removed the 1M context toggle. It was mostly there already: every current model uses its full context window automatically, so the toggle was just confusing without doing anything. Picking a specific older model version still works exactly as before.
+- Changed the default model from a pinned older Opus version to the latest one. Pinning turned out not to save any money, so there was no reason to hold back. Effort stays on Medium.
+- Usage sharing now also records which Gaffer version, After Effects version, and OS sent each report, and chat messages are timestamped going forward.
+
 ## v0.10.5 - 2026-09-25
 
 **Every button now reads in the right font, and the sign-in screen is pixel-checked against the real design.**
