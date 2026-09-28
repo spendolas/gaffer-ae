@@ -25,11 +25,17 @@ jobs:
       - uses: actions/checkout@v4
 
       # gh CLI and jq are both preinstalled on GitHub-hosted runners. The
-      # default GITHUB_TOKEN is read-only for traffic data on this repo,
-      # which is sufficient here — no PAT/secret needed.
+      # traffic/insights API rejects the default GITHUB_TOKEN outright
+      # ("Resource not accessible by integration", confirmed by a real failed
+      # run on 2026-09-28) — it needs push-level access tied to a real
+      # personal token, not the ephemeral per-run Actions token. TRAFFIC_PAT
+      # must be added as a repo secret: Settings > Secrets and variables >
+      # Actions > New repository secret, containing a classic PAT with the
+      # `repo` scope (or a fine-grained PAT with "Administration: Read-only"
+      # on this repo).
       - name: Fetch traffic data and append snapshot
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRAFFIC_PAT }}
         run: |
           set -euo pipefail
           clones=$(gh api "repos/${{ github.repository }}/traffic/clones")
