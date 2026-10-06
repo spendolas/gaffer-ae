@@ -1,11 +1,22 @@
-﻿# Gaffer update script (Windows) - downloads latest tarball, replaces files,
-# preserves chat history, restarts daemon.
+﻿# Gaffer update script (Windows): downloads the latest GitHub release asset,
+# replaces panel files, preserves user data, restarts daemon.
+# Windows PowerShell 5.1 compatible. Keep this file ASCII-only with a UTF-8
+# BOM (node scripts/check-ps-encoding.mjs).
 $ErrorActionPreference = "Stop"
+# PS 5.1 redraws a progress bar per downloaded chunk, which makes
+# Invoke-WebRequest many times slower. Nothing here reads it.
+$ProgressPreference = "SilentlyContinue"
 
 $panelDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $daemonDir = "$panelDir\daemon"
 $tmpDir = Join-Path $env:TEMP "gaffer-update-$PID"
-$repo = "spendolas/gaffer-ae"
+$extractDir = Join-Path $tmpDir "extract"
+$assetName = "gaffer-update-win.zip"
+# GAFFER_UPDATE_ASSET overrides the download source with another URL or a
+# local file path. Only scripts\windows-tests\test-5-update-ps1.ps1 and
+# pre-release checks set it.
+$assetSource = "https://github.com/spendolas/gaffer-ae/releases/latest/download/$assetName"
+if ($env:GAFFER_UPDATE_ASSET) { $assetSource = $env:GAFFER_UPDATE_ASSET }
 $logPath = Join-Path $env:TEMP "gaffer-update.log"
 
 Start-Transcript -Path $logPath -Append
@@ -24,27 +35,46 @@ if ((Test-Path (Join-Path (Split-Path -Parent $panelDir) ".git")) -or (Test-Path
     exit 1
 }
 
-# Get latest version info from raw version.json
-$remoteVersion = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/main/panel/version.json"
-$latestCommit = $remoteVersion.commit
-if (-not $latestCommit) {
-    Write-Error "Could not fetch latest version.json"
+# Every failure after this point goes through here: log, clean up, exit 1.
+# The panel dir is untouched until the robocopy step, and version.json is
+# only replaced at the very end.
+function Exit-Update([string] $message) {
+    Write-Host "ERROR: $message"
+    if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
+    Stop-Transcript
     exit 1
 }
-Write-Host "Latest commit: $latestCommit"
 
-# Download zip
-New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-$zipPath = Join-Path $tmpDir "gaffer.zip"
-Write-Host "Downloading..."
-Invoke-WebRequest -Uri "https://github.com/$repo/archive/refs/heads/main.zip" -OutFile $zipPath
-Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
-$extracted = Join-Path $tmpDir "gaffer-ae-main"
-
-if (-not (Test-Path "$extracted\panel")) {
-    Write-Error "Extracted archive missing panel/"
-    exit 1
+# Download the release asset and extract it into a SUBFOLDER of tmpDir, so
+# the downloaded zip itself is never copied into the panel dir.
+New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+$zipPath = Join-Path $tmpDir $assetName
+Write-Host "Downloading $assetSource"
+try {
+    if (Test-Path -LiteralPath $assetSource -PathType Leaf) {
+        Copy-Item -LiteralPath $assetSource -Destination $zipPath
+    } else {
+        Invoke-WebRequest -Uri $assetSource -OutFile $zipPath -UseBasicParsing
+    }
+    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+} catch {
+    Exit-Update "download or extract failed: $($_.Exception.Message)"
 }
+if (-not (Test-Path "$extractDir\version.json") -or -not (Test-Path "$extractDir\daemon\index.js")) {
+    Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\index.js)"
+}
+
+# Version and commit come from the archive's own version.json, which the
+# release workflow stamps. Nothing is read from raw.githubusercontent.com.
+try {
+    $release = Get-Content "$extractDir\version.json" -Raw | ConvertFrom-Json
+} catch {
+    Exit-Update "release version.json is not valid JSON"
+}
+$latestVersion = $release.version
+$latestCommit = $release.commit
+if (-not $latestVersion) { Exit-Update "release version.json has no version" }
+Write-Host "Release: v$latestVersion ($latestCommit)"
 
 # Backup chat history - legacy single file plus per-AE-version files
 # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
@@ -70,11 +100,16 @@ if (Test-Path "$panelDir\.gaffer-config.json") {
 Write-Host "Stopping daemon..."
 Stop-Daemon
 
-# Replace files (preserve user data)
+# Replace files (preserve user data). version.json is excluded here and
+# written LAST (below): the panel reloads and the daemon self-restarts the
+# moment it changes. The usage-stats buffer and the icon cache are not in the
+# archive; excluding them also protects them from /PURGE.
 Write-Host "Replacing files..."
-robocopy "$extracted\panel" $panelDir /E /PURGE `
-    /XF chat-history.json chat-history-*.json .gaffer-config.json `
-    /XD node_modules dist | Out-Null
+robocopy $extractDir $panelDir /E /PURGE `
+    /XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json `
+    /XD node_modules dist .gaffer-icons | Out-Null
+# robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
+if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" }
 
 # Restore chat history
 if ($backup -and (Test-Path $backup)) {
@@ -103,9 +138,7 @@ foreach ($d in $nodeDirs) { $env:Path = "$d;$env:Path" }
 $npmCmd = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
 if (-not $npmCmd) { $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue).Source }
 if (-not $npmCmd) {
-    Write-Error "npm not found in known Node.js locations or PATH - run this script from a terminal once"
-    Stop-Transcript
-    exit 1
+    Exit-Update "npm not found in known Node.js locations or PATH - run this script from a terminal once"
 }
 Write-Host "  npm: $npmCmd"
 Push-Location $daemonDir
@@ -113,26 +146,24 @@ try { & $npmCmd install --production } catch {}
 $npmExit = $LASTEXITCODE
 Pop-Location
 if ($npmExit -ne 0) {
-    Write-Error "npm install failed (exit $npmExit)"
-    Stop-Transcript
-    exit 1
+    Exit-Update "npm install failed (exit $npmExit)"
 }
 
 # Stop any daemon that respawned mid-update (panel reloads on version.json
 # change and boots a clean one)
 Stop-Daemon
 
-# Write new version.json - version comes from the downloaded tarball
-$latestVersion = (Get-Content "$extracted\panel\version.json" | ConvertFrom-Json).version
-if (-not $latestVersion) { $latestVersion = "0.0.0" }
-@{
-    version = $latestVersion
-    commit = $latestCommit
-} | ConvertTo-Json | Set-Content "$panelDir\version.json"
+# LAST step: put the release's version.json in place with a rename, so the
+# panel and daemon only ever see the old file or the complete new one.
+# Copy-Item keeps the archive's timestamp, so stamp it as written now.
+$versionTmp = "$panelDir\version.json.tmp"
+Copy-Item "$extractDir\version.json" $versionTmp -Force
+(Get-Item -LiteralPath $versionTmp).LastWriteTime = Get-Date
+Move-Item -LiteralPath $versionTmp -Destination "$panelDir\version.json" -Force
 
 # Cleanup
 Remove-Item -Recurse -Force $tmpDir
 
 Write-Host "=== Update complete: $(Get-Date) ==="
-Write-Output "ok:$latestCommit"
+Write-Output "ok:$latestVersion"
 Stop-Transcript
