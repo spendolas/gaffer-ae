@@ -40,12 +40,16 @@ jobs:
           set -euo pipefail
           clones=$(gh api "repos/${{ github.repository }}/traffic/clones")
           views=$(gh api "repos/${{ github.repository }}/traffic/views")
+          # Release download counts (installs vs updates). This endpoint is
+          # public; it only runs under TRAFFIC_PAT because this step sets it.
+          releases=$(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" | jq -s 'add // []')
           timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           jq -nc \
             --arg ts "$timestamp" \
             --argjson clones "$clones" \
             --argjson views "$views" \
-            '{timestamp: $ts, clones: $clones, views: $views}' \
+            --argjson releases "$releases" \
+            -f scripts/traffic-snapshot.jq \
             >> docs/traffic-snapshots.jsonl
 
       # Bot identity, not the repo owner's — this is a mechanical, automated
