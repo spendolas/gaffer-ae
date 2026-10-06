@@ -66,12 +66,20 @@ if [ ! -d "$EXTRACTED/panel" ]; then
   exit 1
 fi
 
-# Backup chat-history.json
+# Backup chat history — legacy single file plus per-AE-version files
+# (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
 BACKUP=""
 if [ -f "$PANEL_DIR/chat-history.json" ]; then
   BACKUP="$TMP_DIR/chat-history.backup.json"
   cp "$PANEL_DIR/chat-history.json" "$BACKUP"
 fi
+HISTORY_BACKUP_DIR="$TMP_DIR/chat-history-backups"
+mkdir -p "$HISTORY_BACKUP_DIR"
+shopt -s nullglob
+for f in "$PANEL_DIR"/chat-history-*.json; do
+  cp "$f" "$HISTORY_BACKUP_DIR/"
+done
+shopt -u nullglob
 
 # Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) —
 # without this it's silently wiped by rsync --delete on every update.
@@ -89,6 +97,7 @@ stop_daemon
 echo "Replacing files..."
 rsync -a --delete \
   --exclude 'chat-history.json' \
+  --exclude 'chat-history-*.json' \
   --exclude '.gaffer-config.json' \
   --exclude 'daemon/node_modules' \
   --exclude 'daemon/dist' \
@@ -98,6 +107,11 @@ rsync -a --delete \
 if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
   cp "$BACKUP" "$PANEL_DIR/chat-history.json"
 fi
+shopt -s nullglob
+for f in "$HISTORY_BACKUP_DIR"/chat-history-*.json; do
+  cp "$f" "$PANEL_DIR/"
+done
+shopt -u nullglob
 
 # Restore .gaffer-config.json
 if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then

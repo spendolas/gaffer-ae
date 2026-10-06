@@ -46,12 +46,17 @@ if (-not (Test-Path "$extracted\panel")) {
     exit 1
 }
 
-# Backup chat-history.json
+# Backup chat history - legacy single file plus per-AE-version files
+# (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
 $backup = $null
 if (Test-Path "$panelDir\chat-history.json") {
     $backup = Join-Path $tmpDir "chat-history.backup.json"
     Copy-Item "$panelDir\chat-history.json" $backup
 }
+$historyBackupDir = Join-Path $tmpDir "chat-history-backups"
+New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
+Get-ChildItem -Path $panelDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+    ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
 
 # Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) -
 # without this it is silently wiped by robocopy /PURGE on every update.
@@ -68,13 +73,15 @@ Stop-Daemon
 # Replace files (preserve user data)
 Write-Host "Replacing files..."
 robocopy "$extracted\panel" $panelDir /E /PURGE `
-    /XF chat-history.json .gaffer-config.json `
+    /XF chat-history.json chat-history-*.json .gaffer-config.json `
     /XD node_modules dist | Out-Null
 
 # Restore chat history
 if ($backup -and (Test-Path $backup)) {
     Copy-Item $backup "$panelDir\chat-history.json" -Force
 }
+Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+    ForEach-Object { Copy-Item $_.FullName "$panelDir\" -Force }
 
 # Restore .gaffer-config.json
 if ($configBackup -and (Test-Path $configBackup)) {
