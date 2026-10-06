@@ -1,5 +1,7 @@
 (function () {
   var cs = new CSInterface();
+  // Pure update-check logic (panel/update-state.js, loaded before this file).
+  var UpdateState = window.GafferUpdateState;
 
   // Single source of truth for the Claude Code install docs — referenced by both
   // the sign-in caption link and the no-CLI modal's "Learn how" button, so the
@@ -152,8 +154,8 @@
   // just mirrors the last known reply
   // so the checkbox has something to show before the first reply lands.
   var shareUsageStats = true;
-  var dismissedUpdateCommit = null;
-  var availableUpdateCommit = null; // independent of whether its banner was dismissed
+  var dismissedUpdateVersion = null;
+  var availableUpdateVersion = null; // independent of whether its banner was dismissed
   var enabledMcps = []; // server IDs (from `claude mcp list`) user enabled for chat
   var availableMcps = []; // [{id, displayName, status}]
   var mcpUsage = {}; // { id: { count, last } } — sends count, enables stamp recency
@@ -791,7 +793,7 @@
       soundEnabled: soundEnabled,
       soundVariant: soundVariant,
       textScale: textScale,
-      dismissedUpdateCommit: dismissedUpdateCommit,
+      dismissedUpdateVersion: dismissedUpdateVersion,
       enabledMcps: enabledMcps,
       mcpUsage: mcpUsage,
     });
@@ -873,15 +875,16 @@
           textScale = data.textScale;
           applyTextScale();
         }
-        if (data.dismissedUpdateCommit) {
+        if (typeof data.dismissedUpdateVersion === 'string' && data.dismissedUpdateVersion) {
           // Remember only WHICH banner the user dismissed, so a completed check
           // can keep that banner suppressed. Do NOT resurrect availability from
           // it: the Update CTA must appear only after a fresh check confirms a
-          // newer remote commit (unknown != update-available, same rule as the
-          // account card / model discovery). Seeding availableUpdateCommit here
+          // newer release (unknown != update-available, same rule as the
+          // account card / model discovery). Seeding availableUpdateVersion here
           // flashed the Settings Update CTA on every reload until the async
-          // check (or dev-detect) resolved.
-          dismissedUpdateCommit = data.dismissedUpdateCommit;
+          // check (or dev-detect) resolved. The commit-keyed field that
+          // pre-0.11 panels saved is ignored on purpose.
+          dismissedUpdateVersion = data.dismissedUpdateVersion;
         }
         if (Array.isArray(data.enabledMcps)) {
           enabledMcps = data.enabledMcps.slice();
@@ -1971,10 +1974,10 @@
       // renderAuth({}) = unknown (spinner), {loggedIn:true,...} = signed-in,
       // {loggedIn:false} = signed-out. No daemon round-trip.
       window.__gaffer.renderAuth = renderAuth;
-      // Update-CTA review hook — set the confirmed-available commit so the
-      // update-available state can be captured without hitting the network.
-      window.__gaffer.setUpdateAvailable = function (commit) {
-        availableUpdateCommit = commit || null;
+      // Update-CTA review hook: set the confirmed-available release version so
+      // the update-available state can be captured without hitting the network.
+      window.__gaffer.setUpdateAvailable = function (version) {
+        availableUpdateVersion = version || null;
         syncSettingsUpdateButton();
       };
     }
@@ -2474,6 +2477,8 @@
   // ── Version + update check ──
 
   var versionData = { version: 'dev', commit: null };
+  var RELEASES_LATEST_URL = 'https://api.github.com/repos/spendolas/gaffer-ae/releases/latest';
+  var RELEASE_CACHE_KEY = 'gafferReleaseCache';
   var isDevInstall = false; // panel dir lives inside a git checkout
   var lastUpdateCheckAt = 0;
   try { lastUpdateCheckAt = Number(localStorage.getItem('gafferLastUpdateCheckAt')) || 0; } catch (e) { /* ignore */ }
@@ -2514,7 +2519,7 @@
       var s = String(result);
       isDevInstall = s.indexOf('dev') === 0;
       if (!isDevInstall) return;
-      availableUpdateCommit = null;
+      availableUpdateVersion = null;
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
       // Show the REAL git HEAD, not the frozen version.json commit.
@@ -2544,8 +2549,10 @@
           if (versionData.commit) label += ' (' + versionData.commit.substring(0, 7) + ')';
           versionTextEl.textContent = label;
           // An update remembered from a dismissed banner may since have been
-          // installed outside this panel. Reconcile it against the local stamp.
-          if (availableUpdateCommit === versionData.commit) availableUpdateCommit = null;
+          // installed outside this panel. Reconcile it against the local version.
+          if (availableUpdateVersion && !UpdateState.isNewerVersion(availableUpdateVersion, versionData.version)) {
+            availableUpdateVersion = null;
+          }
           syncSettingsUpdateButton();
         } catch (e) { /* ignore */ }
       } else {
@@ -2553,78 +2560,81 @@
       }
       detectDevInstall(); // after label is set — it appends to it
       // Post-update verdict: if we attempted an update just before this
-      // reload and the commit didn't move, the script failed — say so.
+      // reload and the local version did not reach the target, the script
+      // failed, so say so. A commit-keyed attempt from a pre-0.11 panel is
+      // cleared without a message (updateVerdict returns 'stale').
       try {
         var attempt = JSON.parse(localStorage.getItem('gafferUpdateAttempt') || 'null');
-        if (attempt && attempt.target && Date.now() - attempt.at < 10 * 60 * 1000) {
-          localStorage.removeItem('gafferUpdateAttempt');
-          if (versionData.commit !== attempt.target) {
-            showChatNotice('Update did not complete — the updater log has details: '
-              + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS). '
-              + 'You can also run the update script manually from the daemon folder.');
-          }
-        } else if (attempt) {
-          localStorage.removeItem('gafferUpdateAttempt');
+        var verdict = UpdateState.updateVerdict(attempt, versionData.version, Date.now());
+        if (verdict !== 'none') localStorage.removeItem('gafferUpdateAttempt');
+        if (verdict === 'failed') {
+          showChatNotice('Update did not complete. The updater log has details: '
+            + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS). '
+            + 'You can also run the update script manually from the daemon folder.');
         }
       } catch (e) { /* ignore */ }
     });
   }
 
-  // True only when remoteVer is a STRICTLY newer semver than localVer. The update
-  // banner must gate on this, not on a bare commit mismatch: a differing commit
-  // can be an equal or OLDER release, and offering that as an "update" prompts a
-  // downgrade (seen: a 0.10.0 install told to "update" to 0.9.9). Missing/garbled
-  // versions compare as not-newer, so a bad remote never nags.
-  function isNewerVersion(remoteVer, localVer) {
-    function parts(v) { return String(v == null ? '' : v).split('.').map(function (n) { return parseInt(n, 10) || 0; }); }
-    var r = parts(remoteVer), l = parts(localVer);
-    for (var i = 0; i < Math.max(r.length, l.length); i++) {
-      var a = r[i] || 0, b = l[i] || 0;
-      if (a !== b) return a > b;
-    }
-    return false;
-  }
-
   function checkForUpdate(silent) {
     if (isDevInstall) {
-      availableUpdateCommit = null;
+      availableUpdateVersion = null;
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
       markUpdateChecked();
       if (!silent) showModal('Dev install (git checkout), the panel updater is disabled. Pull changes with git instead.');
       return;
     }
-    // Fetch remote version.json directly — content match means same release.
-    // Avoids commit-hash chicken-and-egg from amend hooks.
-    fetch('https://raw.githubusercontent.com/spendolas/gaffer-ae/main/panel/version.json?t=' + Date.now(), { cache: 'no-store' })
+    // Ask GitHub for the latest published release. Revalidate with the ETag
+    // from the last answer: a 304 does not count against the 60 per hour
+    // unauthenticated limit. 403 / 429 (rate limit) and 404 (no release yet)
+    // mean "no update info": leave the banner and CTA alone, and do not
+    // record a check.
+    var cache = null;
+    try { cache = UpdateState.parseReleaseCache(localStorage.getItem(RELEASE_CACHE_KEY)); } catch (e) { cache = null; }
+    var headers = { 'Accept': 'application/vnd.github+json' };
+    if (cache) headers['If-None-Match'] = cache.etag;
+    fetch(RELEASES_LATEST_URL, { cache: 'no-store', headers: headers })
       .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
+        if (r.status !== 200) return { status: r.status, json: null, etag: null };
+        return r.json().then(
+          function (json) { return { status: 200, json: json, etag: r.headers.get('ETag') }; },
+          function () { return { status: 200, json: null, etag: null }; }
+        );
       })
-      .then(function (remote) {
-        if (!remote || !remote.commit) throw new Error('Invalid version response');
+      .then(function (res) {
+        var out = UpdateState.readReleaseResponse(res.status, res.json, res.etag, cache, isMacOS() ? 'mac' : 'win');
+        if (out.kind === 'no-info') {
+          if (!silent) showModal('Could not check for updates right now, try again later.');
+          return;
+        }
+        if (out.kind === 'error') throw new Error(out.message);
+        if (out.cache) {
+          try { localStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify(out.cache)); } catch (e) { /* ignore */ }
+        }
         markUpdateChecked();
-        if (!versionData.commit) {
+        var decision = UpdateState.decideUpdate(out.release, versionData.version, dismissedUpdateVersion);
+        if (decision.state === 'local-unknown') {
           if (!silent) showModal('Local version unknown. Reinstall to enable updates.');
           return;
         }
-        // Up to date unless the remote is a genuinely NEWER version. A bare
-        // commit mismatch is not enough — an equal or older release must never
-        // surface as an available update (that offered a downgrade).
-        if (remote.commit === versionData.commit || !isNewerVersion(remote.version, versionData.version)) {
-          availableUpdateCommit = null;
+        // Up to date unless the release is a genuinely NEWER version with this
+        // platform's update asset attached. An equal or older release must
+        // never surface as an available update (that offered a downgrade).
+        if (decision.state === 'up-to-date') {
+          availableUpdateVersion = null;
           updateBannerEl.classList.remove('visible');
           syncSettingsUpdateButton();
-          if (!silent) showModal('Gaffer is up to date (' + remote.commit.substring(0, 7) + ')');
+          if (!silent) showModal('Gaffer is up to date (v' + versionData.version + ')');
           return;
         }
         // Availability is durable for the session; banner dismissal is only a
         // presentation preference and must never remove the Settings safeguard.
-        availableUpdateCommit = remote.commit;
+        availableUpdateVersion = out.release.version;
         syncSettingsUpdateButton();
-        if (remote.commit === dismissedUpdateCommit) return;
+        if (!decision.showBanner) return;
         resetUpdateBannerButtons();
-        updateTextEl.textContent = 'Update available, v' + remote.version;
+        updateTextEl.textContent = 'Update available, v' + out.release.version;
         updateBannerEl.classList.add('visible');
         syncSettingsUpdateButton();
       }).catch(function (e) {
@@ -2685,7 +2695,7 @@
   function runUpdate() {
     resetUpdateBannerButtons();
     if (isDevInstall) {
-      availableUpdateCommit = null;
+      availableUpdateVersion = null;
       showModal('Dev install (git checkout), the panel updater is disabled. Pull changes with git instead.');
       updateBannerEl.classList.remove('visible');
       syncSettingsUpdateButton();
@@ -2700,11 +2710,12 @@
 
     function reloadAfterUpdate() {
       // The updater needs ~30-60s (download + npm). Poll the on-disk
-      // version.json and reload ONLY once the commit moves — reloading
-      // early would load half-copied files and flag a false failure.
+      // version.json and reload ONLY once its version moves. The updater
+      // writes that file last, so reloading earlier would load half-copied
+      // files and flag a false failure.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
-          target: availableUpdateCommit || null,
+          target: availableUpdateVersion || null,
           at: Date.now(),
         }));
       } catch (e) { /* ignore */ }
@@ -2713,16 +2724,14 @@
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
       window.__gafferUpdating = true; // pauses daemon auto-respawn
       syncSettingsUpdateButton(); // prevent a second update launch from Settings
-      var startCommit = versionData.commit;
+      var startVersion = versionData.version;
       var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
       var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
       var waited = 0;
       var timer = setInterval(function () {
         waited += 5000;
         cs.evalScript(jsx, function (result) {
-          var commit = null;
-          try { commit = JSON.parse(result).commit; } catch (e) { /* mid-write */ }
-          if (commit && commit !== startCommit) {
+          if (UpdateState.shouldReloadAfterUpdate(startVersion, result)) {
             clearInterval(timer);
             try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
             location.reload(); // fresh panel + fresh daemon
@@ -2739,7 +2748,7 @@
             updateBtnEl.style.display = 'none';
             forceStopUpdateBtnEl.style.display = '';
             updateBannerEl.classList.add('visible');
-            showChatNotice('Update did not complete — the updater log has details: '
+            showChatNotice('Update did not complete. The updater log has details: '
               + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
           }
         });
@@ -2813,8 +2822,8 @@
   }
 
   function dismissUpdate() {
-    if (availableUpdateCommit) {
-      dismissedUpdateCommit = availableUpdateCommit;
+    if (availableUpdateVersion) {
+      dismissedUpdateVersion = availableUpdateVersion;
       saveChat();
     }
     updateBannerEl.classList.remove('visible');
@@ -3653,12 +3662,11 @@
   function syncSettingsUpdateButton() {
     var button = document.getElementById('setUpdateBtn');
     if (!button) return;
-    // Show ONLY when a completed check has confirmed an available update whose
-    // commit differs from the local build. Pre-check / in-flight / up-to-date
-    // all leave availableUpdateCommit null (or equal to local) -> no CTA.
-    var localCommit = versionData && versionData.commit;
-    var available = !!availableUpdateCommit
-      && availableUpdateCommit !== localCommit
+    // Show ONLY when a completed check has confirmed an available release
+    // newer than the local version. Pre-check / in-flight / up-to-date all
+    // leave availableUpdateVersion null (or not newer than local) -> no CTA.
+    var available = !!availableUpdateVersion
+      && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version)
       && !window.__gafferUpdating;
     button.hidden = !available;
   }

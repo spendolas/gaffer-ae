@@ -269,13 +269,13 @@ window.__audit = (function () {
       if (card) card.classList.add('instant');
       if (window.__gaffer && window.__gaffer.renderAuth) window.__gaffer.renderAuth({ loggedIn: false, claudeAvailable: true });
     },
-    // Update CTA — only appears when a check has confirmed a newer commit. Force
-    // an available commit (dev seam) to capture the shown state.
+    // Update CTA: only appears when a check has confirmed a newer release.
+    // Force an available version (dev seam) to capture the shown state.
     'update-available': function () {
       reset();
       if (window.__gaffer && window.__gaffer.openSettings) window.__gaffer.openSettings();
       else document.getElementById('settingsModal').hidden = false;
-      if (window.__gaffer && window.__gaffer.setUpdateAvailable) window.__gaffer.setUpdateAvailable('feedface');
+      if (window.__gaffer && window.__gaffer.setUpdateAvailable) window.__gaffer.setUpdateAvailable('99.0.0');
     },
     // Account / API — 3 Figma states (516:42191 / 480:20902 / 516:43487) driven
     // via the window.__gaffer.setApiState() review hook (scaffold — no real key).
