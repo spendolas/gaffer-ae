@@ -1,0 +1,165 @@
+name: Release
+
+# Publishes a GitHub Release with four uploaded assets when
+# panel/version.json changes on main. scripts/release-gate.mjs decides
+# create / recover / skip, so a push that does not bump the version (or
+# only touches the legacy commit field) is a no-op. Manual runs default to a
+# dry run that only uploads a workflow artifact named gaffer-release.
+on:
+  push:
+    branches: [main]
+    paths: [panel/version.json]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: build and upload the artifact only, never publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      action: ${{ steps.gate.outputs.action }}
+      version: ${{ steps.version.outputs.version }}
+    env:
+      # 'true' only for a manual run with dry_run checked; 'false' on push.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0   # tags are needed by the gate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Read version
+        id: version
+        run: |
+          set -euo pipefail
+          V="$(jq -r '.version // empty' panel/version.json)"
+          if [ -z "$V" ]; then echo "panel/version.json has no version"; exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "V=$V" >> "$GITHUB_ENV"
+
+      # A read-only token cannot see drafts; the publish job re-checks with a
+      # write token before it touches anything.
+      - name: Collect release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git tag -l 'v*' > tags.txt
+          if gh release view "v$V" --json isDraft,assets > release.json 2> gh-err.txt; then
+            echo "Release v$V exists."
+          elif grep -qi 'release not found' gh-err.txt; then
+            echo 'null' > release.json
+          else
+            cat gh-err.txt
+            exit 1
+          fi
+
+      - name: Release gate
+        id: gate
+        run: node scripts/release-gate.mjs --version "$V" --tags-file tags.txt --release-file release.json --changelog CHANGELOG.md --notes-out notes.md
+
+      - name: Tests
+        if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
+        run: |
+          set -euo pipefail
+          (cd panel/daemon && npm ci && npm test)
+          node scripts/check-ps-encoding.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs
+
+      - name: Build assets
+        if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
+        run: bash scripts/package-release.sh "$V" "$GITHUB_SHA" dist
+
+      - name: Upload artifact
+        if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaffer-release
+          path: |
+            dist/
+            notes.md
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || inputs.dry_run == false)
+      && (needs.build.outputs.action == 'create' || needs.build.outputs.action == 'recover')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gaffer-release
+          path: artifact
+
+      # The write token sees drafts, so a draft left by an earlier failed run
+      # is recovered here instead of duplicated.
+      - name: Re-check release state with the write token
+        run: |
+          set -euo pipefail
+          git tag -l 'v*' > tags.txt
+          if gh release view "v$V" --json isDraft,assets > release.json 2> gh-err.txt; then
+            echo "Release v$V exists."
+          elif grep -qi 'release not found' gh-err.txt; then
+            echo 'null' > release.json
+          else
+            cat gh-err.txt
+            exit 1
+          fi
+
+      - name: Release gate
+        id: gate
+        run: node scripts/release-gate.mjs --version "$V" --tags-file tags.txt --release-file release.json --changelog CHANGELOG.md --notes-out notes.md
+
+      - name: Publish
+        env:
+          ACTION: ${{ steps.gate.outputs.action }}
+        run: |
+          set -euo pipefail
+          ls -l artifact/dist
+          PRE=""
+          case "$V" in *-*) PRE="--prerelease" ;; esac
+          if [ "$ACTION" = "create" ]; then
+            # A draft is invisible to releases/latest and creates no tag, so
+            # users never see a release with assets still uploading.
+            gh release create "v$V" --draft --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md $PRE artifact/dist/*
+            gh release edit "v$V" --draft=false
+          elif [ "$ACTION" = "recover" ]; then
+            gh release upload "v$V" artifact/dist/* --clobber
+            if [ "$(jq -r '.isDraft' release.json)" = "true" ]; then
+              gh release edit "v$V" --draft=false
+            fi
+          else
+            echo "Nothing to publish (action=$ACTION)."
+          fi
