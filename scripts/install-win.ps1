@@ -47,12 +47,18 @@ Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyC
 Start-Sleep -Seconds 1
 
 # 3. Symlink extension (or copy on systems without symlink support),
-# preserving chat history across reinstalls (the 0.1.0 -> latest path)
+# preserving chat history across reinstalls (the 0.1.0 -> latest path) -
+# both the legacy single file and per-AE-version files
+# (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
 $historyBackup = $null
 if (Test-Path "$installDir\chat-history.json") {
     $historyBackup = Join-Path $env:TEMP "gaffer-chat-history-$PID.json"
     Copy-Item "$installDir\chat-history.json" $historyBackup
 }
+$historyBackupDir = Join-Path $env:TEMP "gaffer-chat-history-versions-$PID"
+New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
+Get-ChildItem -Path $installDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+    ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
 Write-Host "Installing extension to $installDir..."
 if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
 try {
@@ -68,6 +74,12 @@ if ($historyBackup -and (Test-Path $historyBackup)) {
     Remove-Item $historyBackup -Force
     Write-Host "  (chat history preserved)"
 }
+$restoredVersioned = Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue
+if ($restoredVersioned) {
+    $restoredVersioned | ForEach-Object { Copy-Item $_.FullName "$installDir\" -Force }
+    Write-Host "  (per-version chat history preserved)"
+}
+Remove-Item -Recurse -Force $historyBackupDir -ErrorAction SilentlyContinue
 
 # 4. Install daemon dependencies INTO THE DEPLOYED install - installing into
 # the source checkout leaves a copied install without node_modules and the

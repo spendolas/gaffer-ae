@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.8 - 2026-10-06
+
+**Updating or reinstalling Gaffer no longer deletes your chat history.**
+
+- Since v0.10.3 each After Effects window keeps its own chat history file, but the update and install scripts only protected the old single-file name. Every update since then wiped your real history and quietly fell back to a stale older one. Updates and reinstalls now back up and restore all of them.
+- One catch: an update runs the update script from the version you already have, so the update that installs this release can still lose history once. Updates after that are safe.
+
 ## v0.10.7 - 2026-09-25
 
 **Reinstalling Gaffer no longer looks like a brand-new install.**
