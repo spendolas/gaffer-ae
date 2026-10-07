@@ -39,6 +39,19 @@ trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH/tmp"
 mkdir -p "$TMPDIR"
 
+# Run update.sh with the PATH an end user's CEP-spawned update gets, not the
+# developer's: system dirs only, plus the directory of this machine's node so
+# npm still resolves. On a Mac that puts /usr/bin/rsync (openrsync) first,
+# which is the rsync real installs use; a Homebrew rsync on the developer PATH
+# would hide openrsync-only problems.
+NODE_BIN_DIR="$(dirname "$(command -v node)")"
+UPDATE_PATH="/usr/bin:/bin:/usr/sbin:/sbin:$NODE_BIN_DIR"
+RSYNC_IN_USE="$(PATH="$UPDATE_PATH" command -v rsync || true)"
+echo "update.sh will run with PATH=$UPDATE_PATH (rsync: ${RSYNC_IN_USE:-none})"
+if [ "$RSYNC_IN_USE" != "/usr/bin/rsync" ]; then
+  echo "WARN: rsync does not resolve to /usr/bin/rsync under the pinned PATH"
+fi
+
 # Fake release asset from the committed tree
 (cd "$REPO_ROOT" && bash scripts/package-release.sh 9.9.9 feedfacecafe "$SCRATCH/dist" >/dev/null)
 ASSET="$SCRATCH/dist/gaffer-update-mac.tar.gz"
@@ -65,7 +78,7 @@ INSTALL="$SCRATCH/Application Support/com.gaffer.panel"
 new_install "$INSTALL"
 (cd "$INSTALL" && shasum chat-history.json chat-history-26.0.json .gaffer-config.json .gaffer-usage-buffer.json .gaffer-icons/notion.svg) > "$SCRATCH/user-data.sha"
 
-if GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$INSTALL/daemon/update.sh"; then
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$INSTALL/daemon/update.sh"; then
   pass "update.sh exited 0"
 else
   fail "update.sh exited non-zero (log: $TMPDIR/gaffer-update.log)"
@@ -101,7 +114,7 @@ else
   fail "files written after version.json: $NEWER"
 fi
 
-if grep -q 'ok:9.9.9' "$TMPDIR/gaffer-update.log"; then pass "log ends with ok:9.9.9"; else fail "no ok:9.9.9 in the log"; fi
+if [ "$(tail -n1 "$TMPDIR/gaffer-update.log")" = "ok:9.9.9" ]; then pass "log ends with ok:9.9.9"; else fail "last log line is not ok:9.9.9: $(tail -n1 "$TMPDIR/gaffer-update.log")"; fi
 if ls "$TMPDIR" | grep -q '^gaffer-update-[0-9]'; then fail "temp dir not cleaned up"; else pass "temp dir cleaned up"; fi
 
 # ---------- Case 2: a broken download changes nothing ----------
@@ -109,7 +122,7 @@ BROKEN_INSTALL="$SCRATCH/Application Support/broken/com.gaffer.panel"
 new_install "$BROKEN_INSTALL"
 echo '<html>Not Found</html>' > "$SCRATCH/not-a-release.tar.gz"
 BEFORE="$(cd "$BROKEN_INSTALL" && find . -path ./daemon/node_modules -prune -o -type f -print0 | sort -z | xargs -0 shasum)"
-if GAFFER_UPDATE_ASSET="$SCRATCH/not-a-release.tar.gz" bash "$BROKEN_INSTALL/daemon/update.sh"; then
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$SCRATCH/not-a-release.tar.gz" bash "$BROKEN_INSTALL/daemon/update.sh"; then
   fail "update.sh exited 0 on a broken download"
 else
   pass "update.sh exited non-zero on a broken download"
