@@ -32,10 +32,21 @@ bridge.start().catch((err) => {
 // idle) fan out with registry.each()/anyBusy(). Routing keys on socket._gafferKey,
 // which the bridge sets in _registerSocket before any chat message dispatches.
 // onAuthError: a chat turn that failed because Claude is signed out re-pushes
-// the account card's status (same path as the on-connect auth_status), so the
-// panel's sign-in state catches up with what the CLI just reported.
+// the account card's status. The CLI just reported the failure, so ask the
+// CLI itself (`claude auth status --json`, the same call the sign-in and
+// sign-out result paths trust) rather than the disk/keychain read the
+// on-connect path uses: a token the CLI considers dead can still sit on disk
+// and would read as "signed in". Falls back to the disk-based push if the CLI
+// call cannot run.
 var chatRegistry = createChatRegistry(() => new ChatHandler({
-  onAuthError: (socket) => { bridge.onAuthStatus(socket); },
+  onAuthError: async (socket) => {
+    try {
+      const bin = await findClaudeBinary();
+      sendAuthStatus(socket, await authStatus(bin, { env: augmentedEnv() }));
+    } catch (e) {
+      bridge.onAuthStatus(socket);
+    }
+  },
 }));
 var handlerFor = (socket) => chatRegistry.for(socket && socket._gafferKey);
 // Cancellation flag for the runJSXLoop chunk driver. The chat-cancel gesture

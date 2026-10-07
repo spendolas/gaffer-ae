@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveOrder, resolveClaude, checkCandidate, INSTALL_LINKS, formatNotFoundMessage } from '../claude-binary.js';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import {
+  resolveOrder, resolveClaude, checkCandidate, healthCheckEnv, findClaudeBinary,
+  resetClaudeLookupForTests, INSTALL_LINKS, formatNotFoundMessage,
+} from '../claude-binary.js';
 
 // The lookup order and the health check, driven by fake fs/exec so no real
 // Claude binary is needed. The order itself was decided by the owner: pin,
@@ -9,10 +15,12 @@ import { resolveOrder, resolveClaude, checkCandidate, INSTALL_LINKS, formatNotFo
 var APP = ['/app/2.1.289/h1/claude.app/Contents/MacOS/claude', '/app/2.1.288/h0/claude.app/Contents/MacOS/claude'];
 var ENV = { HOME: '/Users/me', PATH: '/usr/bin', SHELL: '/bin/zsh' };
 
-// files: { path: { file: true|false, version: 'x.y.z' | null } }
+// files: { path: { file: true|false, version: 'x.y.z' | null, stdout?: raw
+//          --version output, timeouts?: how many --version attempts time out } }
 // pathHits / shellLine: what `which claude` and the login shell print.
 function fakeDeps(files, extra) {
   extra = extra || {};
+  var attempts = {};
   var d = {
     log: [], warned: [], spawned: [], execOpts: [],
     statSync: function (p) {
@@ -24,10 +32,14 @@ function fakeDeps(files, extra) {
     },
     execFile: function (p, args, opts, cb) {
       d.spawned.push(p); d.execOpts.push(opts);
-      var v = files[p] && files[p].version;
+      var f = files[p] || {};
+      var v = f.version;
+      attempts[p] = (attempts[p] || 0) + 1;
+      var timesOut = f.timeouts && attempts[p] <= f.timeouts;
       setTimeout(function () {
+        if (timesOut) { var te = new Error('killed'); te.killed = true; te.signal = 'SIGTERM'; te.code = null; return cb(te, '', ''); }
         if (v === null) return cb(new Error('spawn failed'));
-        cb(null, v + ' (Claude Code)\n', '');
+        cb(null, f.stdout !== undefined ? f.stdout : v + ' (Claude Code)\n', '');
       }, 0);
     },
     execSync: function (cmd) {
@@ -185,6 +197,147 @@ test('checkCandidate: missing file is "missing", regular file + version passes',
   assert.equal(ok.ok, true); assert.equal(ok.version, '2.1.289 (Claude Code)');
   var missing = await checkCandidate('/x/nope', deps);
   assert.deepEqual(missing, { ok: false, reason: 'missing' });
+});
+
+// Health check environment: the same shape as the chat spawn's PATH, with the
+// candidate's own folder first, so a binary that needs its siblings (or node)
+// on PATH is not rejected by a check that the real chat would pass.
+test('health check runs with the candidate folder first on PATH, then the chat-spawn extras, then the inherited PATH', async () => {
+  var files = {}; files[APP[0]] = { version: '2.1.289' };
+  var deps = fakeDeps(files);
+  var hit = await resolveClaude(opts({}, deps));
+  assert.equal(hit.path, APP[0]);
+  var env = deps.execOpts[0].env;
+  assert.ok(env, 'an env is passed to execFile');
+  var parts = env.PATH.split(':');
+  assert.equal(parts[0], dirname(APP[0]), 'candidate folder first');
+  assert.deepEqual(parts.slice(1, 4), ['/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin']);
+  assert.equal(parts[parts.length - 1], '/usr/bin', 'inherited PATH last');
+  assert.equal(env.HOME, '/Users/me', 'other env vars carried over');
+});
+
+test('healthCheckEnv on win32 uses ; and adds only the candidate folder before the inherited PATH', () => {
+  var env = healthCheckEnv('C:\\Users\\x\\.local\\bin\\claude.exe', 'win32', { PATH: 'C:\\Windows' });
+  assert.equal(env.PATH, 'C:\\Users\\x\\.local\\bin;C:\\Windows');
+  var noPath = healthCheckEnv('/x/claude', 'linux', { HOME: '/home/u' });
+  assert.equal(noPath.PATH, '/x:/opt/homebrew/bin:/usr/local/bin:/home/u/.local/bin');
+});
+
+test('a warning line printed before the version does not reject a working binary', async () => {
+  var files = { '/x/claude': { version: '2.1.289', stdout: '(node:4242) Warning: something deprecated\n2.1.289 (Claude Code)\n' } };
+  var r = await checkCandidate('/x/claude', fakeDeps(files));
+  assert.equal(r.ok, true);
+  assert.equal(r.version, '2.1.289 (Claude Code)', 'the version line, not the warning');
+  var none = await checkCandidate('/x/claude', fakeDeps({ '/x/claude': { version: 'x', stdout: 'Warning only\nno version here\n' } }));
+  assert.equal(none.ok, false); assert.match(none.reason, /no version number/);
+});
+
+// Health-check timeouts: a slow-starting real binary is retried once with a
+// longer budget, then accepted unseen rather than silently skipped. Other
+// failures still skip.
+test('a --version timeout is retried once with 20 s, and the retry result is used', async () => {
+  var files = { '/x/claude': { version: '2.1.289', timeouts: 1 } };
+  var deps = fakeDeps(files);
+  var r = await checkCandidate('/x/claude', deps);
+  assert.equal(r.ok, true); assert.equal(r.version, '2.1.289 (Claude Code)');
+  assert.deepEqual(deps.execOpts.map(function (o) { return o.timeout; }), [5000, 20000]);
+  assert.ok(deps.warned.some(function (l) { return /timed out after 5000 ms, retrying once with 20000 ms: \/x\/claude/.test(l); }));
+});
+
+test('two --version timeouts accept the candidate with version unknown and log it', async () => {
+  var files = { '/x/claude': { version: '2.1.289', timeouts: 2 } };
+  var deps = fakeDeps(files);
+  var r = await checkCandidate('/x/claude', deps);
+  assert.equal(r.ok, true); assert.equal(r.version, 'unknown'); assert.equal(r.timedOut, true);
+  assert.equal(deps.spawned.length, 2, 'exactly two attempts, never a third');
+  assert.ok(deps.warned.some(function (l) { return /timed out twice, accepting the binary with version unknown: \/x\/claude/.test(l); }));
+});
+
+test('a timing-out desktop app copy wins the lookup instead of falling through to the CLI', async () => {
+  var files = {}; files[APP[0]] = { version: '2.1.289', timeouts: 2 }; files['/usr/local/bin/claude'] = { version: '2.1.236' };
+  var deps = fakeDeps(files);
+  var hit = await resolveClaude(opts({}, deps));
+  assert.equal(hit.path, APP[0]); assert.equal(hit.version, 'unknown');
+  assert.equal(deps.spawned.indexOf('/usr/local/bin/claude'), -1);
+});
+
+test('a non-timeout --version failure is not retried and still skips the candidate', async () => {
+  var files = { '/x/claude': { version: null } };
+  var deps = fakeDeps(files);
+  var r = await checkCandidate('/x/claude', deps);
+  assert.equal(r.ok, false);
+  assert.equal(deps.spawned.length, 1, 'no retry for a plain failure');
+});
+
+// findClaudeBinary: concurrent callers share one lookup; the cache is
+// re-checked without a spawn, except that a newer desktop app version folder
+// drops it.
+function findOpts(deps, extra) {
+  return Object.assign({ platform: 'darwin', env: ENV, config: {}, desktopCandidates: APP, deps: deps }, extra || {});
+}
+
+test('two concurrent findClaudeBinary calls run the health check once and get the same path', async () => {
+  resetClaudeLookupForTests();
+  var files = {}; files[APP[0]] = { version: '2.1.289' };
+  var deps = fakeDeps(files);
+  var both = await Promise.all([findClaudeBinary(findOpts(deps)), findClaudeBinary(findOpts(deps))]);
+  assert.deepEqual(both, [APP[0], APP[0]]);
+  assert.deepEqual(deps.spawned, [APP[0]], 'one --version for two callers');
+  // A third call afterwards is served from the cache, still without a spawn.
+  assert.equal(await findClaudeBinary(findOpts(deps)), APP[0]);
+  assert.equal(deps.spawned.length, 1);
+  resetClaudeLookupForTests();
+});
+
+test('a failed lookup clears the in-flight slot so the next call tries again', async () => {
+  resetClaudeLookupForTests();
+  var deps = fakeDeps({});
+  var results = await Promise.allSettled([findClaudeBinary(findOpts(deps)), findClaudeBinary(findOpts(deps))]);
+  assert.ok(results.every(function (r) { return r.status === 'rejected' && /Claude CLI not found/.test(r.reason.message); }));
+  var files = { '/usr/local/bin/claude': { version: '2.1.236' } };
+  var deps2 = fakeDeps(files);
+  assert.equal(await findClaudeBinary(findOpts(deps2)), '/usr/local/bin/claude', 'retried, not stuck on the failed promise');
+  resetClaudeLookupForTests();
+});
+
+test('a cached desktop-app hit is dropped when a newer version folder appears (readdir only, no spawn until then)', async () => {
+  resetClaudeLookupForTests();
+  var home = mkdtempSync(join(tmpdir(), 'gaffer-home-'));
+  var base = join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
+  var LEAF = ['claude.app', 'Contents', 'MacOS', 'claude'];
+  var old = join.apply(null, [base, '2.1.288', 'h0'].concat(LEAF));
+  var newer = join.apply(null, [base, '2.1.289', 'h1'].concat(LEAF));
+  try {
+    mkdirSync(join(base, '2.1.288', 'h0'), { recursive: true });
+    var files = {}; files[old] = { version: '2.1.288' }; files[newer] = { version: '2.1.289' };
+    var deps = fakeDeps(files);
+    var env = { HOME: home, PATH: '/usr/bin', SHELL: '/bin/zsh' };
+    // desktopCandidates NOT injected: the real scan of <home> runs.
+    var o = { platform: 'darwin', env: env, config: {}, deps: deps };
+    assert.equal(await findClaudeBinary(o), old);
+    assert.equal(await findClaudeBinary(o), old, 'cache hit');
+    assert.deepEqual(deps.spawned, [old], 'cache check spawns nothing');
+
+    mkdirSync(join(base, '2.1.289', 'h1'), { recursive: true });
+    assert.equal(await findClaudeBinary(o), newer, 're-resolved onto the newer version');
+    assert.deepEqual(deps.spawned, [old, newer]);
+    assert.ok(deps.warned.some(function (l) { return /newer Claude desktop app version folder appeared \(2\.1\.289 > 2\.1\.288\)/.test(l); }));
+    assert.equal(await findClaudeBinary(o), newer, 'and cached again');
+    assert.equal(deps.spawned.length, 2);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    resetClaudeLookupForTests();
+  }
+});
+
+test('a cached standalone CLI hit is not disturbed by desktop app folders', async () => {
+  resetClaudeLookupForTests();
+  var files = { '/usr/local/bin/claude': { version: '2.1.236' } };
+  var deps = fakeDeps(files);
+  assert.equal(await findClaudeBinary(findOpts(deps, { desktopCandidates: [] })), '/usr/local/bin/claude');
+  assert.equal(await findClaudeBinary(findOpts(deps, { desktopCandidates: [] })), '/usr/local/bin/claude');
+  assert.equal(deps.spawned.length, 1);
+  resetClaudeLookupForTests();
 });
 
 test('install links and the not-found message tail', () => {

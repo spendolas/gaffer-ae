@@ -256,6 +256,37 @@ test('a normal reply mentioning context length keeps the session and is a reply'
   assert.equal(h.handler.sessionId, 's-1', 'session kept');
 });
 
+// The CLI can exit non-zero (or die to a signal) after it already streamed a
+// successful result. The panel must see the reply and chat_done, never an
+// error, and the session must be kept.
+[1, null].forEach(function (code) {
+  test('success result then exit ' + code + ': chat_result and chat_done, no chat_error, session kept', async () => {
+    var h = harness();
+    var sock = fakeSocket();
+    var text = 'All set. The prompt is too long for one line so I wrapped it.';
+    var stdout = [
+      JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [], session_id: 's-2' }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage: { input_tokens: 5 },
+        content: [{ type: 'text', text: text }] } }),
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: 's-2',
+        result: text, usage: { input_tokens: 5, output_tokens: 20 }, total_cost_usd: 0.001 }),
+    ].join('\n') + '\n';
+    var r = await captureLogs(async function () {
+      await h.handler.handleChat({ message: 'go', model: 'haiku', sessionId: 's-2' }, sock);
+      finish(h.spawns[0].child, stdout, 'exit noise\n', code);
+      await nextTick();
+    });
+    var out = outcomes(sock);
+    assert.deepEqual(out.map(function (m) { return m.type; }), ['chat_result', 'chat_done']);
+    assert.equal(sock.ofType('chat_error').length, 0);
+    assert.equal(h.handler.sessionId, 's-2', 'session kept');
+    assert.equal(h.spawns.length, 1, 'no retry');
+    var turnLines = r.lines.filter(function (l) { return /^Gaffer chat: turn=/.test(l); });
+    assert.equal(turnLines.length, 1);
+    assert.match(turnLines[0], new RegExp('^Gaffer chat: turn=ok via=structure cli=2\\.1\\.289 exit=' + code + ' okDespiteExit=' + code + '$'));
+  });
+});
+
 test('init then exit 1 with no result: an error with text, never an empty bubble', async () => {
   var h = harness();
   var sock = fakeSocket();

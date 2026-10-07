@@ -5,7 +5,8 @@
 
   // Single source of truth for the install links. The daemon can run Claude
   // Code from the Claude desktop app or from a standalone CLI, so the
-  // no-Claude modal offers both; the sign-in caption links to the install docs.
+  // no-Claude modal offers both; the sign-in caption's "Claude Code" link opens
+  // that modal. The docs URL is kept for a direct "how to install" link.
   // Mirrors INSTALL_LINKS in panel/daemon/claude-binary.js.
   var CLAUDE_CODE_DOCS_URL = 'https://code.claude.com/docs/en/quickstart#step-1-install-claude-code';
   var CLAUDE_APP_URL = 'https://claude.com/download';
@@ -3491,10 +3492,12 @@
   if ((b = document.getElementById('signInClaude'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'claudeai' }); });
   if ((b = document.getElementById('signInConsole'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'console' }); });
   if ((b = document.getElementById('signInCancel'))) b.addEventListener('click', function () { sendWs({ type: 'cancel_sign_in' }); });
-  // "Claude Code" in the sign-in caption opens the install docs.
+  // "Claude Code" in the sign-in caption opens the no-Claude modal, which
+  // offers both installs (desktop app and Claude Code). This is the only way a
+  // user without Claude reaches that modal from the panel.
   if ((b = document.getElementById('signInCliLink'))) {
-    b.addEventListener('click', openClaudeCodeDocs);
-    b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openClaudeCodeDocs(); } });
+    b.addEventListener('click', showNoCliModal);
+    b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showNoCliModal(); } });
   }
   // (Sign-out is handled by the Settings modal's setSignOutBtn handler.)
   window.__gafferAuth = function (s) { renderAuth(s || {}); }; // dev/test hook (mirrors __gafferSound)

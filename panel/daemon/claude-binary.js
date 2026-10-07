@@ -1,10 +1,16 @@
 import { accessSync, statSync, readFileSync, readdirSync, constants } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, win32 as pathWin32, posix as pathPosix } from 'node:path';
 import { execSync, execFile } from 'node:child_process';
 import { getConfigPath } from './config-path.js';
 
-// { path, version } of the binary the last lookup settled on.
+// { path, version, step, desktopRoot?, desktopVersion? } of the binary the
+// last lookup settled on. desktopRoot/desktopVersion are set only for a
+// desktop-app hit, so the cache check can notice a newer app version folder.
 var cached = null;
+// The lookup in progress, if any, so concurrent callers (index.js startup,
+// listMcps, a chat turn and sign-in all call findClaudeBinary around the same
+// moment) share one health check instead of spawning `--version` four times.
+var inflight = null;
 
 export var INSTALL_LINKS = {
   desktop: 'https://claude.com/download',
@@ -23,8 +29,14 @@ var STEP_KNOWN = 'known location';
 var STEP_PATH = 'PATH';
 var STEP_SHELL = 'login shell';
 
-var VERSION_RE = /^\d+\.\d+\.\d+/;
+// Multiline: a binary may print a warning line (a Node deprecation notice,
+// an update hint) before the version, and that must not reject it.
+var VERSION_RE = /^\d+\.\d+\.\d+/m;
 var HEALTH_TIMEOUT_MS = 5000;
+// A cold start of the desktop app's copy (first run after an update, a slow
+// disk, antivirus scanning a fresh exe) can take longer than 5 s. A timed-out
+// candidate gets one more try with this budget before being accepted unseen.
+var HEALTH_RETRY_TIMEOUT_MS = 20000;
 var PATH_LOOKUP_TIMEOUT_MS = 5000;
 
 // Claude Code installed via the desktop app lives under
@@ -49,26 +61,41 @@ function macDesktopAppRoot(home) {
   return join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
 }
 
-// Version folders newest first. Numeric compare, because plain text puts
-// 2.1.9 above 2.1.121.
+// Numeric version-folder compare (plain text puts 2.1.9 above 2.1.121).
+// Positive when a is newer than b.
+function compareVersions(a, b) {
+  var x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (var i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  }
+  return 0;
+}
+
+// Version folders newest first.
 function versionsBelow(root) {
   if (!root) return [];
   try {
     return readdirSync(root, { withFileTypes: true })
       .filter(function (e) { return e.isDirectory(); })
       .map(function (e) { return e.name; })
-      .sort(function (a, b) {
-        var x = a.split('.').map(Number), y = b.split('.').map(Number);
-        for (var i = 0; i < Math.max(x.length, y.length); i++) {
-          if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
-        }
-        return 0;
-      });
+      .sort(function (a, b) { return compareVersions(b, a); });
   } catch (e) { return []; }
 }
 
-function desktopAppVersions(appData) {
-  return appData ? versionsBelow(desktopAppRoot(appData)) : [];
+// The desktop app install root for this platform, or null where there is none.
+function desktopRootFor(platform, env) {
+  if (platform === 'win32' && env.APPDATA) return desktopAppRoot(env.APPDATA);
+  if (platform === 'darwin' && env.HOME) return macDesktopAppRoot(env.HOME);
+  return null;
+}
+
+// The version folder a desktop-app candidate path sits under, or null.
+function desktopVersionOf(root, path) {
+  if (!root || !path) return null;
+  var rel = relative(root, path);
+  if (!rel || rel.indexOf('..') === 0) return null;
+  var first = rel.split(/[\\/]/)[0];
+  return first || null;
 }
 
 // Sub-folders one level below every folder in `dirs` (files ignored, never
@@ -207,12 +234,58 @@ function realDeps() {
   };
 }
 
+// The environment the health check runs in: the same shape chat-handler's
+// augmentedEnv() gives the real chat spawn, plus the candidate's own folder
+// first. CEP hands the daemon a stripped PATH, and the desktop app's binary
+// needs its own folder (and node for some installs) on PATH to even print a
+// version, so checking it with the bare env would reject a binary the chat
+// spawn runs fine. Built here, not imported from chat-handler.js, because that
+// module imports this one (an import cycle).
+export function healthCheckEnv(candidate, platform, env) {
+  platform = platform || process.platform;
+  env = env || process.env;
+  // Split with the target platform's rules so a Windows path is handled
+  // correctly even when this runs (in a test) on a POSIX host.
+  var parts = [(platform === 'win32' ? pathWin32 : pathPosix).dirname(candidate)];
+  if (platform !== 'win32') {
+    parts.push('/opt/homebrew/bin', '/usr/local/bin', join(env.HOME || '', '.local', 'bin'));
+  }
+  if (env.PATH) parts.push(env.PATH);
+  return Object.assign({}, env, { PATH: parts.join(platform === 'win32' ? ';' : ':') });
+}
+
+// The first line of stdout that starts with a version number, trimmed.
+function versionLine(stdout) {
+  var lines = String(stdout || '').split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i].trim();
+    if (/^\d+\.\d+\.\d+/.test(l)) return l;
+  }
+  return null;
+}
+
+// execFile's timeout kills the child with SIGTERM and reports killed: true;
+// an ETIMEDOUT code is how some wrappers surface the same thing.
+function isTimeout(err) {
+  return !!(err && (err.killed === true || err.code === 'ETIMEDOUT' || err.signal === 'SIGTERM'));
+}
+
 // A candidate counts only if it is a regular file, executable, and answers
-// `--version` with something like 2.1.289 within 5 s. `claude.app` on Mac is a
-// directory (passes X_OK), a half-written exe is zero bytes, a wrong PATH hit
-// may be a shell script: all of those fail here and are skipped, never returned.
-export function checkCandidate(path, deps) {
+// `--version` with something like 2.1.289. `claude.app` on Mac is a directory
+// (passes X_OK), a half-written exe is zero bytes, a wrong PATH hit may be a
+// shell script: all of those fail here and are skipped, never returned.
+//
+// A health-check TIMEOUT on a regular executable is different: the binary is
+// real, it is just slow to start (cold cache, antivirus, first run after an
+// update). Skipping it silently would make the whole lookup fail on a machine
+// where Claude works. So a timeout gets one retry with a longer budget, and if
+// that also times out the candidate is accepted with version "unknown" and a
+// log line says so. Any other failure still skips the candidate.
+//   ctx (optional): { platform, env } for the health-check environment.
+export function checkCandidate(path, deps, ctx) {
   deps = deps || realDeps();
+  ctx = ctx || {};
+  var env = healthCheckEnv(path, ctx.platform, ctx.env);
   return new Promise(function (resolve) {
     try {
       if (!deps.statSync(path).isFile()) return resolve({ ok: false, reason: 'not a regular file' });
@@ -220,16 +293,27 @@ export function checkCandidate(path, deps) {
     } catch (e) {
       return resolve({ ok: false, reason: e && e.code === 'ENOENT' ? 'missing' : 'not executable' });
     }
-    try {
-      deps.execFile(path, ['--version'], { timeout: HEALTH_TIMEOUT_MS, windowsHide: true, encoding: 'utf-8' }, function (err, stdout) {
-        if (err) return resolve({ ok: false, reason: '--version failed: ' + (err.code || err.message) });
-        var m = VERSION_RE.exec(String(stdout || '').trim());
-        if (!m) return resolve({ ok: false, reason: '--version gave no version number' });
-        resolve({ ok: true, version: String(stdout).trim().split('\n')[0] });
-      });
-    } catch (e) {
-      resolve({ ok: false, reason: '--version failed: ' + e.message });
+    function attempt(timeoutMs, isRetry) {
+      try {
+        deps.execFile(path, ['--version'], { timeout: timeoutMs, windowsHide: true, encoding: 'utf-8', env: env }, function (err, stdout) {
+          if (err && isTimeout(err)) {
+            if (!isRetry) {
+              deps.warn('Gaffer: claude --version timed out after ' + timeoutMs + ' ms, retrying once with ' + HEALTH_RETRY_TIMEOUT_MS + ' ms: ' + path);
+              return attempt(HEALTH_RETRY_TIMEOUT_MS, true);
+            }
+            deps.warn('Gaffer: claude --version timed out twice, accepting the binary with version unknown: ' + path);
+            return resolve({ ok: true, version: 'unknown', timedOut: true });
+          }
+          if (err) return resolve({ ok: false, reason: '--version failed: ' + (err.code || err.message) });
+          var v = VERSION_RE.test(String(stdout || '')) ? versionLine(stdout) : null;
+          if (!v) return resolve({ ok: false, reason: '--version gave no version number' });
+          resolve({ ok: true, version: v });
+        });
+      } catch (e) {
+        resolve({ ok: false, reason: '--version failed: ' + e.message });
+      }
     }
+    attempt(HEALTH_TIMEOUT_MS, false);
   });
 }
 
@@ -285,7 +369,7 @@ export async function resolveClaude(opts) {
   async function tryPath(step, p) {
     if (tried[p]) return null;
     tried[p] = true;
-    var r = await checkCandidate(p, deps);
+    var r = await checkCandidate(p, deps, { platform: platform, env: env });
     if (r.ok) return { step: step, path: p, version: r.version };
     // Missing fixed-location candidates are the normal case; only say
     // something when a file was there but did not work.
@@ -321,37 +405,76 @@ function readConfig() {
   catch (e) { return {}; }
 }
 
-function stillUsable(path) {
-  try { return statSync(path).isFile() && (accessSync(path, constants.X_OK), true); }
+function stillUsable(path, deps) {
+  try { return deps.statSync(path).isFile() && (deps.accessSync(path, constants.X_OK), true); }
   catch (e) { return false; }
 }
 
-export async function findClaudeBinary() {
-  // The desktop-app copy moves on every auto-update; re-resolve if the cached
-  // binary vanished mid-daemon-life. An access check, not a `--version`
-  // spawn: this runs on every chat turn and auth refresh.
-  if (cached) {
-    if (stillUsable(cached.path)) return cached.path;
-    cached = null;
+// Cheap cache validity check, no spawn (this runs on every chat turn and auth
+// refresh): the binary must still be there, and for a desktop-app hit no
+// NEWER version folder may have appeared since (the app auto-updates while
+// the daemon lives, and the old folder can linger for a while, so "still
+// usable" alone would keep us on the stale copy). One readdir of the version
+// folders is all the newer-version check costs.
+function cacheStillValid(deps) {
+  if (!cached) return false;
+  if (!stillUsable(cached.path, deps)) return false;
+  if (cached.step === STEP_APP && cached.desktopRoot && cached.desktopVersion) {
+    var newest = versionsBelow(cached.desktopRoot)[0];
+    if (newest && compareVersions(newest, cached.desktopVersion) > 0) {
+      deps.log('Gaffer: a newer Claude desktop app version folder appeared (' + newest + ' > ' + cached.desktopVersion + '), looking up claude again');
+      return false;
+    }
   }
+  return true;
+}
 
-  var env = process.env;
-  var diag = { desktopBase: null, desktopVersions: [], pathLines: [] };
-  if (process.platform === 'win32' && env.APPDATA) {
-    diag.desktopBase = desktopAppRoot(env.APPDATA);
-    diag.desktopVersions = desktopAppVersions(env.APPDATA);
-  } else if (process.platform === 'darwin' && env.HOME) {
-    diag.desktopBase = macDesktopAppRoot(env.HOME);
-    diag.desktopVersions = versionsBelow(diag.desktopBase);
-  }
+// Test-only: forget the cached hit and any in-flight lookup.
+export function resetClaudeLookupForTests() {
+  cached = null;
+  inflight = null;
+}
 
-  var hit = await resolveClaude({ platform: process.platform, env: env, config: readConfig(), diag: diag });
+// Resolves the path of a working claude binary, or throws a not-found error
+// that lists what was checked. Cached after the first hit; concurrent calls
+// share one lookup. `opts` exists for tests only: { platform, env, config,
+// deps, desktopCandidates } override the real process, config and fs/exec.
+export async function findClaudeBinary(opts) {
+  opts = opts || {};
+  var deps = opts.deps || realDeps();
+  if (cacheStillValid(deps)) return cached.path;
+  cached = null;
+  if (inflight) return inflight;
+
+  inflight = lookup(opts, deps);
+  // Clear the in-flight slot however the lookup ends, so a failed lookup is
+  // retried next call and a success is served from the cache.
+  var clear = function () { inflight = null; };
+  inflight.then(clear, clear);
+  return inflight;
+}
+
+async function lookup(opts, deps) {
+  var platform = opts.platform || process.platform;
+  var env = opts.env || process.env;
+  var config = opts.config || readConfig();
+  var desktopRoot = desktopRootFor(platform, env);
+  var diag = { desktopBase: desktopRoot, desktopVersions: desktopRoot ? versionsBelow(desktopRoot) : [], pathLines: [] };
+
+  var hit = await resolveClaude({
+    platform: platform, env: env, config: config, diag: diag, deps: deps,
+    desktopCandidates: opts.desktopCandidates,
+  });
   if (hit) {
-    cached = { path: hit.path, version: hit.version };
-    console.log('Gaffer: claude found (' + hit.step + '): ' + hit.path + ' (' + hit.version + ')');
+    cached = { path: hit.path, version: hit.version, step: hit.step };
+    if (hit.step === STEP_APP) {
+      cached.desktopRoot = desktopRoot;
+      cached.desktopVersion = desktopVersionOf(desktopRoot, hit.path);
+    }
+    deps.log('Gaffer: claude found (' + hit.step + '): ' + hit.path + ' (' + hit.version + ')');
     return hit.path;
   }
 
-  console.error('Gaffer: claude lookup failed: ' + JSON.stringify(diag));
+  deps.warn('Gaffer: claude lookup failed: ' + JSON.stringify(diag));
   throw new Error(formatNotFoundMessage(diag, getConfigPath()));
 }
