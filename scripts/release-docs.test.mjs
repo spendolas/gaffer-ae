@@ -1,0 +1,62 @@
+// Run from the repo root: node --test scripts/release-docs.test.mjs
+// Pins the user-facing install/update docs and the v0.11.0 changelog entry
+// to the GitHub Releases flow.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { extractNotes, decide } from './release-gate.mjs';
+
+const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+const readme = read('../README.md');
+const changelog = read('../CHANGELOG.md');
+const claudeMd = read('../CLAUDE.md');
+const DASHES = /[–—]/;
+
+function section(text, startRe, endRe) {
+  const start = text.search(startRe);
+  assert.ok(start !== -1, 'section not found: ' + startRe);
+  const rest = text.slice(start);
+  const end = rest.slice(1).search(endRe);
+  return end === -1 ? rest : rest.slice(0, end + 1);
+}
+
+test('README install step 3 downloads the latest release assets', () => {
+  const step3 = section(readme, /^3\. \*\*Download and extract\*\*/m, /^4\. /m);
+  assert.ok(step3.includes('https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz'));
+  assert.ok(step3.includes('https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-win.zip'));
+  assert.ok(!step3.includes('archive/refs/heads/main'));
+  assert.ok(!step3.includes('gaffer-ae-main'));
+  assert.ok(!step3.includes('--strip-components'));
+  assert.ok(!DASHES.test(step3), 'no em or en dashes in install step 3');
+});
+
+test('README Updating section describes releases and the proxy hosts', () => {
+  const updating = section(readme, /^## Updating/m, /^---$/m);
+  assert.ok(updating.includes('api.github.com'));
+  assert.ok(updating.includes('release-assets.githubusercontent.com'));
+  assert.ok(updating.includes('gaffer-update-mac.tar.gz'));
+  assert.ok(updating.includes('gaffer-update-win.zip'));
+  assert.ok(!DASHES.test(updating), 'no em or en dashes in the Updating section');
+});
+
+test('CHANGELOG has a v0.11.0 entry the release gate accepts', () => {
+  const notes = extractNotes(changelog, '0.11.0');
+  assert.ok(notes, 'no "## v0.11.0" heading');
+  assert.match(notes, /^\*\*.+\*\*\n/, 'entry starts with a bold one-line summary');
+  assert.ok(notes.includes('older than v0.10.8'), 'entry carries the one-time old-script caveat');
+  assert.ok(!DASHES.test(notes), 'no em or en dashes in the v0.11.0 entry');
+  const r = decide({ version: '0.11.0', tags: [], release: null, changelog });
+  assert.equal(r.action, 'create');
+});
+
+test('CLAUDE.md Releasing describes the workflow, not hand-stamped commits', () => {
+  const releasing = section(claudeMd, /^## Releasing/m, /^## /m);
+  assert.ok(releasing.includes('.github/workflows/release.yml'));
+  assert.ok(releasing.includes('scripts/release-gate.mjs'));
+  assert.ok(!releasing.includes('(version + commit)'));
+  const layout = section(claudeMd, /^## Repo Layout/m, /^## /m);
+  assert.ok(layout.includes('release-gate.mjs'), 'repo layout lists the gate');
+  assert.ok(layout.includes('release.yml'), 'repo layout lists the release workflow');
+  assert.ok(layout.includes('update-state.js'), 'repo layout lists update-state.js');
+});

@@ -42,23 +42,27 @@ After Effects
 
 ```
 gaffer/
+├── .github/workflows/        # release.yml (gate, build, publish releases), traffic-snapshot.yml, windows-tests.yml
 ├── panel/                    # CEP extension (single deployable folder)
 │   ├── CSXS/manifest.xml
 │   ├── index.html, main.js   # Chat UI + WebSocket client + auto-start + settings/update UI
+│   ├── update-state.js        # Pure update-check logic (GitHub Releases), tested from daemon/test
 │   ├── host.jsx, .debug
-│   ├── version.json           # {version, commit} — drives panel auto-update check
+│   ├── version.json           # {version, commit}: release version; packaged copies carry the full release SHA
 │   ├── lib/CSInterface.js
 │   ├── daemon/               # Node.js MCP server (lives inside panel)
 │   │   ├── index.js, mcp-server.js, panel-bridge.js
 │   │   ├── queue.js, safety.js
 │   │   ├── chat-handler.js, claude-binary.js
 │   │   ├── start.sh, start.ps1    # OS launchers (prefer node over SEA binary)
-│   │   ├── update.sh, update.ps1  # One-click update from GitHub tarball
+│   │   ├── update.sh, update.ps1  # One-click update from the latest GitHub release asset
 │   │   ├── tools/                 # One file per typed MCP tool (24) + figma-translator.js helper
 │   │   └── gaffer-daemon          # Compiled SEA binary (built, not checked in)
 │   └── prompts/gaffer.md      # System prompt for the panel chat agent
 ├── scripts/
 │   ├── build.sh               # esbuild bundle → Node.js SEA compilation
+│   ├── release-gate.mjs       # Release gate for .github/workflows/release.yml (skip/create/recover + notes)
+│   ├── package-release.sh     # Builds the four release assets from panel/
 │   ├── install-mac.sh, install-win.ps1
 │   └── gaffer-cli.sh          # CLI wrapper
 ├── docs/                      # Spec, Claude Hub integration, bug reports
@@ -87,11 +91,14 @@ cd panel/daemon && node index.js
 claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
 ```
 
-Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-only + UTF-8 BOM — run before any release touching PowerShell). `scripts/windows-tests/` holds a field-contributed Windows repro harness (encoding, console-flash, detached-spawn) — runs on a Windows machine only.
+Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-only + UTF-8 BOM; run before any release touching PowerShell). Release tooling: `node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs`. Updater end-to-end: `bash scripts/test-update-sh.sh` (close the Gaffer panel first). `scripts/windows-tests/` holds a field-contributed Windows repro harness (encoding, console-flash, detached-spawn) plus `test-5-update-ps1.ps1` (updater end-to-end); runs on a Windows machine only.
 
 ## Releasing
 
-- Bump `panel/version.json` (version + commit) and add a `CHANGELOG.md` entry — the panel's auto-update check compares raw `version.json` on GitHub `main` against the local copy.
+- A release is: bump `version` in `panel/version.json`, add a `CHANGELOG.md` section headed `## v<version> - <date>` (bold one-line summary, then plain-language bullets), push to `main`. `.github/workflows/release.yml` runs `scripts/release-gate.mjs` (skip, create or recover), the tests and `scripts/package-release.sh`, then publishes release `v<version>` with four assets: `gaffer-install-mac.tar.gz`, `gaffer-install-win.zip`, `gaffer-update-mac.tar.gz`, `gaffer-update-win.zip`. A push that does not change `version` publishes nothing. A version with a `-` suffix (`0.12.0-beta.1`) becomes a prerelease, which the panel never offers.
+- Dry run: `gh workflow run release.yml -f dry_run=true`, then `gh run download <run-id> -n gaffer-release`. Retry a failed publish with `gh workflow run release.yml -f dry_run=false` on `main`.
+- The panel checks `releases/latest` on api.github.com and `update.sh` / `update.ps1` download the matching `gaffer-update-*` asset. The `commit` field in `main`'s `panel/version.json` is legacy, kept only for pre-0.11 clients that still read `main`, and is not maintained by hand any more. Until those clients are gone, keep `panel/version.json` at that path with exactly the keys `version` and `commit`, and keep the `main` archive layout `gaffer-ae-main/panel/` unchanged.
+- Download counts: the weekly traffic snapshot adds `releases`, `installs` and `updates` to `docs/traffic-snapshots.jsonl`. Only week-over-week changes mean anything.
 - Deployed installs live at `~/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel` (Mac) / `%APPDATA%\Adobe\CEP\extensions\com.gaffer.panel` (Win). Daemon logs: `/tmp/gaffer-daemon.log` / `%TEMP%\gaffer-daemon.log`.
 - Per-install config (`installId`, `claudeBin`, `shareUsageStats`) lives OUTSIDE the extension dir so no install/update path can wipe it: `~/Library/Application Support/Gaffer/config.json` (Mac) / `%APPDATA%\Gaffer\config.json` (Win). One source of truth: `panel/daemon/config-path.js` (`getConfigPath()`; `GAFFER_CONFIG_PATH` env overrides for tests; first access migrates a legacy `<extension-dir>/.gaffer-config.json` forward). Never compute this path anywhere else.
 
