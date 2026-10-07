@@ -7,8 +7,9 @@
 # Lays down a v0.10.8 install (from -OldInstallZip) under a path WITH A
 # SPACE, seeds user data, runs the update.ps1 from -UpdateScriptDir inside
 # that install with GAFFER_UPDATE_ASSET pointing at -ReleaseZip, and checks
-# the result. A second case feeds it a broken download and checks that
-# nothing in the install changed.
+# the result. A second case feeds it a broken download and a third a 404
+# URL (the branch real users take); both check that nothing in the install
+# changed.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
 # while a Gaffer daemon is up (close After Effects first).
@@ -125,6 +126,19 @@ try {
     $code = Invoke-Update $broken $notZip
     if ($code -ne 0) { Pass "update.ps1 exited non-zero on a broken download" } else { Fail "update.ps1 exited 0 on a broken download" }
     if ((Get-TreeHash $broken) -eq $beforeTree) { Pass "broken download left the install untouched" } else { Fail "broken download modified the install" }
+
+    # ---------- Case 3: a 404 URL changes nothing (exercises the URL branch) ----------
+    # Cases 1 and 2 hand update.ps1 a local file. Real users always hit the
+    # URL branch: Test-Path must treat "https://..." as not-a-file without
+    # raising, and Invoke-WebRequest's 404 must land in the catch. Needs
+    # internet access, like the npm install in Case 1.
+    $missing = Join-Path $scratch "Application Data\missing\com.gaffer.panel"
+    New-TestInstall $missing
+    $notFoundUrl = "https://github.com/spendolas/gaffer-ae/releases/download/v0.0.0/nope.zip"
+    $beforeTree = Get-TreeHash $missing
+    $code = Invoke-Update $missing $notFoundUrl
+    if ($code -ne 0) { Pass "update.ps1 exited non-zero on a 404 URL" } else { Fail "update.ps1 exited 0 on a 404 URL" }
+    if ((Get-TreeHash $missing) -eq $beforeTree) { Pass "404 URL left the install untouched" } else { Fail "404 URL modified the install" }
 } finally {
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
