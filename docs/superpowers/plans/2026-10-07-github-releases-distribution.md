@@ -945,23 +945,27 @@ git commit -m "feat(release): release workflow (gate, build, publish)" -m "Co-Au
 ### Task 5: Push 0, land the inert release tooling and dry-run it
 
 **Files:**
-- No file changes. Pushes the commits of Tasks 1 to 4 (and the plan commit).
+- No file changes. Pushes the commits of Tasks 1 to 4 (and the plan commit) and nothing after them.
 
 **Interfaces:**
 - Consumes: everything from Tasks 1 to 4.
 - Produces: `release.yml` on `main`, dispatchable; a verified dry-run artifact.
 
-- [ ] **Step 1: Verify what will be pushed (the "failing test" is any unexpected path)**
+The work lives on the branch `feat/github-releases`, and that branch also carries the later tasks: the README of Task 10 points at `releases/latest/download/...`, a URL that 404s until Push A publishes a release, and the new `update.sh` / `update.ps1` would have no release behind them. So Push 0 must NOT push the branch head. It pushes only the commits up to and including Task 4's commit, as a fast-forward of `main`.
+
+- [ ] **Step 1: Find Task 4's commit and verify what will be pushed (the "failing test" is any unexpected path)**
 
 ```bash
 git fetch origin
-git status -sb | head -1                 # expect: ## main...origin/main [ahead 5]
-git log origin/main..HEAD --oneline      # expect exactly 5 commits: the plan, Tasks 1, 2, 3, 4
-git diff origin/main --name-only
-git diff origin/main --name-only | grep -c '^panel/' || true
+git branch --show-current                # expect: feat/github-releases
+PUSH0_SHA="$(git log --format=%h --grep='^feat(release): release workflow (gate, build, publish)$' feat/github-releases)"
+echo "$PUSH0_SHA"                        # expect exactly one short SHA (a1dbb28 at the time of writing)
+git log origin/main..$PUSH0_SHA --oneline   # expect exactly 5 commits: the plan, Tasks 1, 2, 3, 4
+git diff --stat origin/main..$PUSH0_SHA
+git diff --name-only origin/main..$PUSH0_SHA | grep -vE '^(scripts/|\.github/|docs/)' && echo STOP || echo OK
 ```
 
-Expected `git diff --name-only`, exactly:
+Expected `git diff --name-only origin/main..$PUSH0_SHA`, exactly:
 
 ```
 .github/workflows/release.yml
@@ -975,16 +979,16 @@ scripts/traffic-snapshot.jq
 scripts/traffic-snapshot.test.mjs
 ```
 
-and `0` for the `panel/` count. If `git status` says `behind` (the weekly traffic bot pushed), run `git pull --rebase origin main` and repeat this step. If `panel/version.json` appears, STOP: pushing it would fire the release trigger.
+and the last command prints `OK`: every path is under `scripts/`, `.github/` or `docs/`, and no `README.md`, `CLAUDE.md`, `CHANGELOG.md` or `panel/` path appears. If it prints `STOP`, do not push; the grep above lists the offending paths. If `panel/version.json` appears, STOP: pushing it would fire the release trigger. If `origin/main` has moved (the weekly traffic bot pushed), rebase the branch (`git rebase origin/main`), recompute `PUSH0_SHA` and repeat this step.
 
 - [ ] **Step 2: MANUAL, push (owner's go-ahead required)**
 
 ```bash
-git push origin main
+git push origin "$PUSH0_SHA:main"        # fast-forwards main to Task 4's commit only
 gh run list --workflow release.yml --limit 5
 ```
 
-Expected: the push succeeds and `gh run list` shows no runs (the push did not touch `panel/version.json`).
+Expected: the push succeeds and `gh run list` shows no runs (the push did not touch `panel/version.json`). `feat/github-releases` itself is NOT pushed here; Push A (Task 11) lands the rest.
 
 - [ ] **Step 3: MANUAL, dry run on main**
 
@@ -2466,7 +2470,13 @@ Copy and run:
 ```bash
 S="${TMPDIR:-/tmp}/gaffer-rel"; source "$S/gc.sh"
 gc mkdir --parents 'C:\Users\gaffer\gaffer-rel'
-gc copyto --target-directory 'C:\Users\gaffer\gaffer-rel' "$S/vm/update.ps1" "$S/vm/stop-daemon.ps1" "$S/vm/test-5-update-ps1.ps1" "$S/vm/gaffer-update-win.zip" "$S/vm/old-install.zip"
+# VirtualBox 7.2 rejects the multi-file --target-directory form ("destination
+# already exists and is a directory"), so copy one file per call.
+gc copyto "$S/vm/update.ps1" 'C:\Users\gaffer\gaffer-rel\update.ps1'
+gc copyto "$S/vm/stop-daemon.ps1" 'C:\Users\gaffer\gaffer-rel\stop-daemon.ps1'
+gc copyto "$S/vm/test-5-update-ps1.ps1" 'C:\Users\gaffer\gaffer-rel\test-5-update-ps1.ps1'
+gc copyto "$S/vm/gaffer-update-win.zip" 'C:\Users\gaffer\gaffer-rel\gaffer-update-win.zip'
+gc copyto "$S/vm/old-install.zip" 'C:\Users\gaffer\gaffer-rel\old-install.zip'
 gc run --timeout 900000 --exe 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -- powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\gaffer\gaffer-rel\test-5-update-ps1.ps1' -UpdateScriptDir 'C:\Users\gaffer\gaffer-rel' -OldInstallZip 'C:\Users\gaffer\gaffer-rel\old-install.zip' -ReleaseZip 'C:\Users\gaffer\gaffer-rel\gaffer-update-win.zip' -NodeDir 'C:\Users\gaffer\node-v24.19.0-win-x64'
 echo "exit=$?"
 ```
@@ -3006,7 +3016,11 @@ S="${TMPDIR:-/tmp}/gaffer-rel"; source "$S/gc.sh"; mkdir -p "$S/vm"
 git archive --format=zip -o "$S/vm/old-install.zip" ce16c2f:panel
 cp panel/daemon/update.ps1 panel/daemon/stop-daemon.ps1 scripts/windows-tests/test-5-update-ps1.ps1 "$S/vm/"
 cp "$S/real/gaffer-update-win.zip" "$S/vm/gaffer-update-win.zip"
-gc copyto --target-directory 'C:\Users\gaffer\gaffer-rel' "$S/vm/update.ps1" "$S/vm/stop-daemon.ps1" "$S/vm/test-5-update-ps1.ps1" "$S/vm/gaffer-update-win.zip" "$S/vm/old-install.zip"
+gc copyto "$S/vm/update.ps1" 'C:\Users\gaffer\gaffer-rel\update.ps1'
+gc copyto "$S/vm/stop-daemon.ps1" 'C:\Users\gaffer\gaffer-rel\stop-daemon.ps1'
+gc copyto "$S/vm/test-5-update-ps1.ps1" 'C:\Users\gaffer\gaffer-rel\test-5-update-ps1.ps1'
+gc copyto "$S/vm/gaffer-update-win.zip" 'C:\Users\gaffer\gaffer-rel\gaffer-update-win.zip'
+gc copyto "$S/vm/old-install.zip" 'C:\Users\gaffer\gaffer-rel\old-install.zip'
 gc run --timeout 900000 --exe 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -- powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\gaffer\gaffer-rel\test-5-update-ps1.ps1' -UpdateScriptDir 'C:\Users\gaffer\gaffer-rel' -OldInstallZip 'C:\Users\gaffer\gaffer-rel\old-install.zip' -ReleaseZip 'C:\Users\gaffer\gaffer-rel\gaffer-update-win.zip' -NodeDir 'C:\Users\gaffer\node-v24.19.0-win-x64'
 ```
 
@@ -3037,7 +3051,7 @@ Test-Path "$installDir\daemon\index.js"
 
 ```bash
 S="${TMPDIR:-/tmp}/gaffer-rel"; source "$S/gc.sh"
-gc copyto --target-directory 'C:\Users\gaffer\gaffer-rel' "$S/vm/readme-install.ps1"
+gc copyto "$S/vm/readme-install.ps1" 'C:\Users\gaffer\gaffer-rel\readme-install.ps1'
 gc run --profile --timeout 900000 --exe 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -- powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\gaffer\gaffer-rel\readme-install.ps1'
 ```
 
