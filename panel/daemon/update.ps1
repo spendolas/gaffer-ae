@@ -54,7 +54,7 @@ try {
     if (Test-Path -LiteralPath $assetSource -PathType Leaf) {
         Copy-Item -LiteralPath $assetSource -Destination $zipPath
     } else {
-        Invoke-WebRequest -Uri $assetSource -OutFile $zipPath -UseBasicParsing
+        Invoke-WebRequest -Uri $assetSource -OutFile $zipPath -UseBasicParsing -TimeoutSec 600
     }
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 } catch {
@@ -153,8 +153,11 @@ if ($npmExit -ne 0) {
 # change and boots a clean one)
 Stop-Daemon
 
-# LAST step: put the release's version.json in place with a rename, so the
-# panel and daemon only ever see the old file or the complete new one.
+# LAST step: put the release's version.json in place by copying it to a temp
+# name first and then moving it over the old file. The content is complete
+# before the move, so the panel and daemon only ever see the old file or the
+# complete new one, never a half-written one. (Move-Item -Force is a delete
+# then a move on Windows, not an atomic rename.)
 # Copy-Item keeps the archive's timestamp, so stamp it as written now.
 $versionTmp = "$panelDir\version.json.tmp"
 Copy-Item "$extractDir\version.json" $versionTmp -Force

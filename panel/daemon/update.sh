@@ -56,7 +56,7 @@ trap 'cd /; rm -rf "$TMP_DIR"' EXIT
 mkdir -p "$EXTRACT_DIR"
 echo "Downloading $ASSET_SOURCE"
 case "$ASSET_SOURCE" in
-  http://*|https://*) curl -fsSL "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" ;;
+  http://*|https://*) curl -fsSL --connect-timeout 20 --max-time 600 --retry 2 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" ;;
   *) cp "$ASSET_SOURCE" "$TMP_DIR/$ASSET_NAME" ;;
 esac
 tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR"
