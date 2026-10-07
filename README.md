@@ -60,20 +60,21 @@ Before you begin, read these rules. They apply to every step below.
    - If they confirm: remove the directory, then proceed to step 3.
    - If they decline: stop and exit cleanly.
 
-3. **Download and extract** directly into the CEP extensions directory (no repo clone needed):
+3. **Download and extract** the latest release directly into the CEP extensions directory (no repo clone needed):
    ```bash
    # macOS
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
    mkdir -p "$INSTALL_DIR"
-   curl -sL https://github.com/spendolas/gaffer-ae/archive/refs/heads/main.tar.gz | tar -xz --strip-components=2 -C "$INSTALL_DIR" gaffer-ae-main/panel
-   
+   curl -fsSL https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz | tar -xz -C "$INSTALL_DIR"
+
    # Windows (PowerShell)
    $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-   Invoke-WebRequest -Uri "https://github.com/spendolas/gaffer-ae/archive/refs/heads/main.zip" -OutFile "$env:TEMP\gaffer.zip"
-   Expand-Archive -Path "$env:TEMP\gaffer.zip" -DestinationPath "$env:TEMP\gaffer-extract" -Force
-   Copy-Item -Recurse -Force "$env:TEMP\gaffer-extract\gaffer-ae-main\panel\*" $installDir
-   Remove-Item -Recurse -Force "$env:TEMP\gaffer.zip", "$env:TEMP\gaffer-extract"
+   Remove-Item -Recurse -Force "$env:TEMP\gaffer-extract" -ErrorAction SilentlyContinue
+   Invoke-WebRequest -Uri "https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-win.zip" -OutFile "$env:TEMP\gaffer-install.zip" -UseBasicParsing
+   Expand-Archive -Path "$env:TEMP\gaffer-install.zip" -DestinationPath "$env:TEMP\gaffer-extract" -Force
+   Copy-Item -Recurse -Force "$env:TEMP\gaffer-extract\*" $installDir
+   Remove-Item -Recurse -Force "$env:TEMP\gaffer-install.zip", "$env:TEMP\gaffer-extract"
    ```
 
 4. **Install daemon dependencies:**
@@ -165,10 +166,12 @@ Before you begin, read these rules. They apply to every step below.
 
 ## Updating (instructions for Claude)
 
-- **v0.2.0 or newer:** the panel checks `panel/version.json` on `main` and shows an update banner — the user clicks Update and the bundled `panel/daemon/update.sh` (macOS) / `update.ps1` (Windows) handles everything: stops the daemon, replaces files, preserves `chat-history.json`, reinstalls deps.
-- **v0.1.0 (no banner, no updater):** re-run the installer from a fresh checkout — download/clone this repo, then run `scripts/install-mac.sh` or `scripts/install-win.ps1`. The installer stops any running daemon, preserves the user's `chat-history.json`, and installs daemon dependencies into the deployed extension. Ask the user to restart After Effects afterwards.
+- **v0.11.0 or newer:** the panel checks the latest GitHub release (`https://api.github.com/repos/spendolas/gaffer-ae/releases/latest`) and shows an update banner when it is newer than the installed version. The user clicks Update and the bundled `panel/daemon/update.sh` (macOS) / `update.ps1` (Windows) downloads the release asset (`gaffer-update-mac.tar.gz` / `gaffer-update-win.zip`), stops the daemon, replaces files, keeps chat history, settings, unsent usage statistics and the icon cache, reinstalls deps, and writes `version.json` last so the panel reloads only once everything is in place.
+- **v0.2.0 to v0.10.8:** the panel checks `panel/version.json` on `main` and shows the same banner. That one update to v0.11.0 still runs the older update script; every update after it comes from releases as described above.
+- **v0.1.0 (no banner, no updater):** re-run the installer from a fresh checkout: download or clone this repo, then run `scripts/install-mac.sh` or `scripts/install-win.ps1`. The installer stops any running daemon, preserves the user's chat history, and installs daemon dependencies into the deployed extension. Ask the user to restart After Effects afterwards.
 - If an update fails, the panel says so and the updater log has details: `/tmp/gaffer-update.log` (macOS) / `%TEMP%\gaffer-update.log` (Windows). The update script can also be run manually from the extension's `daemon/` folder.
-- Never update a dev install (extension dir symlinked to a git checkout) with these scripts — use `git pull`.
+- Never update a dev install (extension dir symlinked to a git checkout) with these scripts. Use `git pull`.
+- **Networks behind a proxy or firewall:** besides `github.com`, allow `api.github.com` (update check) and `release-assets.githubusercontent.com` (downloads), or the update check and the install and update downloads fail.
 
 ---
 
