@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
+import { newTurnState, observe, classify, userMessage as turnUserMessage } from './cli-contract.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -625,6 +626,13 @@ export class ChatHandler {
     this._fetchCatalog = opts.fetchCatalog || null; // else module fetchModelCatalog
     this._accountIdFn = opts.accountIdFn || null;    // else resolve from disk config
     this._now = opts.now || Date.now;                // clock for TTL/fetchedAt
+    // Process seams (tests drive a fake child instead of a real `claude`).
+    // Production: node's spawn and the real binary lookup, unchanged.
+    this._spawn = opts.spawn || spawn;
+    this._findClaudeBinary = opts.findClaudeBinary || findClaudeBinary;
+    // Called with the socket when a turn fails because Claude is not signed in,
+    // so the owner (index.js) can re-push the account card's auth status.
+    this._onAuthError = opts.onAuthError || null;
   }
 
   // Resolve a stable identity for the currently signed-in account from disk
@@ -775,7 +783,7 @@ export class ChatHandler {
     this.lastContextTokens = 0;
 
     try {
-      var claudeBin = await findClaudeBinary();
+      var claudeBin = await this._findClaudeBinary();
     } catch (e) {
       socket.send(JSON.stringify({ type: 'chat_error', error: e.message }));
       return;
@@ -889,7 +897,7 @@ export class ChatHandler {
       this.compactedSummary = null;
     }
 
-    var child = spawn(claudeBin, args, {
+    var child = this._spawn(claudeBin, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env,
       windowsHide: true, // console-subsystem children flash a cmd window otherwise
@@ -900,23 +908,44 @@ export class ChatHandler {
     child.stdin.end();
 
     var buffer = '';
-    var lastText = '';
     var stderrBuf = '';
-    var sawOutput = false;
     var self = this;
+    // Per-turn classifier state (cli-contract.js). Every parsed event is
+    // observed before Gaffer's own handling; at close, classify() decides what
+    // the turn was from structured fields first, CLI text second.
+    var st = newTurnState(!!sessionId);
+    var loggedBadLine = false;
+
+    // One stdout line. A JSON parse failure is not an event and is ignored
+    // (logged once per turn); an exception inside event handling is a Gaffer
+    // bug or a shape change and is logged with the event type, never allowed
+    // to kill the turn. The two failures used to share one silent catch.
+    var handleLine = (line) => {
+      var event;
+      try {
+        event = JSON.parse(line);
+      } catch (e) {
+        if (!loggedBadLine) {
+          loggedBadLine = true;
+          console.log('Gaffer chat: ignoring non-JSON stdout line: ' + line.slice(0, 200));
+        }
+        return;
+      }
+      observe(st, event);
+      try {
+        this._processEvent(event, socket);
+      } catch (e) {
+        console.error('Gaffer chat: event handling failed for type=' + (event && event.type)
+          + ': ' + (e && e.message ? e.message : e));
+      }
+    };
 
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString();
       var lines = buffer.split('\n');
       buffer = lines.pop();
-
       for (var line of lines) {
-        if (!line.trim()) continue;
-        try {
-          var event = JSON.parse(line);
-          sawOutput = true;
-          this._processEvent(event, socket);
-        } catch (e) { /* not JSON, skip */ }
+        if (line.trim()) handleLine(line);
       }
     });
 
@@ -928,23 +957,25 @@ export class ChatHandler {
     child.on('close', (code) => {
       this.activeProcess = null;
       // Process remaining buffer
-      if (buffer.trim()) {
-        try {
-          var event = JSON.parse(buffer);
-          sawOutput = true;
-          this._processEvent(event, socket);
-        } catch (e) { /* ignore */ }
+      if (buffer.trim()) handleLine(buffer);
+      // A spawn failure already reported itself from the 'error' handler.
+      if (child._spawnErrored) return;
+
+      // Exactly one outcome per turn. A user cancel (SIGTERM) is not a failure
+      // and is never classified; it ends with chat_done as before.
+      var verdict = child._userCancelled ? { kind: 'ok', via: 'none' } : classify(st, code, stderrBuf);
+      if (!child._userCancelled) {
+        console.log('Gaffer chat: turn=' + verdict.kind + ' via=' + verdict.via
+          + ' cli=' + (st.cliVersion || 'unknown') + ' exit=' + code);
       }
+
       // Self-heal a dead --resume: the CLI's session storage can be wiped
       // by CLI updates or re-auth, leaving our persisted sessionId pointing
-      // nowhere. On a failed resume the CLI emits a stream-json `result`
-      // event with is_error (so sawOutput flips true) AND prints
-      // "No conversation found" on stderr, then exits non-zero — it looked
-      // like a silent empty turn that also KEPT the stale id, looping
-      // forever. Key on the stderr signal (a failed resume can never carry a
-      // real reply) and retry once fresh (history text is preserved panel-side).
-      if (sessionId && !msg.__retriedFreshSession
-          && /no conversation found/i.test(stderrBuf)) {
+      // nowhere. The classifier reads the structured shape of a failed resume
+      // (text only as fallback), and _processEvent never adopts a session id
+      // from an error result, so the dead id cannot be persisted. Retry once
+      // fresh (history text is preserved panel-side).
+      if (verdict.kind === 'stale_session' && sessionId && !msg.__retriedFreshSession) {
         console.log('Gaffer: stale session ' + sessionId + ' — retrying fresh');
         self.sessionId = null;
         if (socket.readyState === 1) {
@@ -954,13 +985,27 @@ export class ChatHandler {
         self.handleChat(retryMsg, socket);
         return; // the retry emits its own chat_done/chat_error
       }
-      // Never end a turn silently: no output + non-zero exit = surfaced error
-      if (!sawOutput && code !== 0 && !child._userCancelled) {
+      if (verdict.kind === 'too_long') {
+        // Context overflow: drop the session so the next resume does not hit
+        // the same wall. The user keeps chatting in a fresh context.
+        this.sessionId = null;
         if (socket.readyState === 1) {
           socket.send(JSON.stringify({
             type: 'chat_error',
-            error: (stderrBuf.trim() || ('claude exited with code ' + code)).slice(0, 300),
+            error: 'Conversation too long for the model. Session reset, your next message starts a fresh context.',
           }));
+        }
+        return;
+      }
+      if (verdict.kind !== 'ok') {
+        // auth, model, api_error, unknown_error, or a stale_session we cannot
+        // retry: the CLI's failure reaches the panel as an error, never as a
+        // reply and never as an empty bubble.
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ type: 'chat_error', error: turnUserMessage(verdict) }));
+        }
+        if (verdict.kind === 'auth' && typeof this._onAuthError === 'function') {
+          try { this._onAuthError(socket); } catch (e) { /* status re-push is best-effort */ }
         }
         return;
       }
@@ -992,6 +1037,7 @@ export class ChatHandler {
 
     child.on('error', (err) => {
       this.activeProcess = null;
+      child._spawnErrored = true; // a following 'close' must not report a second outcome
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_error', error: err.message }));
       }
@@ -1014,20 +1060,14 @@ export class ChatHandler {
       this.lastContextTokens = contextTokensFromUsage(event.message.usage);
     }
 
+    // An API failure (bad model, signed out, prompt too long) arrives as an
+    // assistant event flagged is_api_error_message whose text is the CLI's raw
+    // error. That text must not stream into the bubble; the close handler
+    // reports the turn as an error with friendly copy (cli-contract.js).
+    var apiErrorText = event.type === 'assistant' && event.is_api_error_message === true;
     if (event.type === 'assistant' && event.message && event.message.content) {
       for (var block of event.message.content) {
-        if (block.type === 'text' && block.text) {
-          // Some Claude CLI builds surface context-overflow as a plain
-          // assistant text "Prompt is too long" instead of an error event.
-          // Catch it here too and treat it as a session-reset signal.
-          if (/^prompt is too long\.?$/i.test(block.text.trim())) {
-            this.sessionId = null;
-            socket.send(JSON.stringify({
-              type: 'chat_error',
-              error: 'Conversation too long for the model. Session reset, your next message starts a fresh context.',
-            }));
-            return;
-          }
+        if (block.type === 'text' && block.text && !apiErrorText) {
           var prefix = (this._lastEmit === 'text' || this._lastEmit === 'tool')
             ? '\n\n'
             : '';
@@ -1068,22 +1108,12 @@ export class ChatHandler {
     }
 
     if (event.type === 'result') {
-      // Detect context-overflow before adopting the session id — the next
-      // resume would just hit the same wall. Drop the session so the user
-      // can keep chatting; their next message starts a fresh context.
-      var resultText = (event.result || '').toString();
-      var isTooLong = event.subtype === 'error_max_tokens'
-        || /prompt is too long/i.test(resultText)
-        || /context.*length/i.test(resultText);
-      if (isTooLong) {
-        this.sessionId = null;
-        socket.send(JSON.stringify({
-          type: 'chat_error',
-          error: 'Conversation too long for the model. Session reset, your next message starts a fresh context.',
-        }));
-        return;
-      }
-      this.sessionId = event.session_id || this.sessionId;
+      // Error results (failed resume, overflow, signed out, bad model) echo a
+      // session id that must never be adopted or persisted: a failed resume
+      // echoes the dead id, and an overflowed session would hit the same wall.
+      // What the failure was is decided once, at process close, by classify().
+      var isErrorResult = event.is_error === true;
+      if (!isErrorResult) this.sessionId = event.session_id || this.sessionId;
       // NOTE: lastContextTokens is intentionally NOT set here. The `result`
       // event's usage is CUMULATIVE across the whole turn (every tool
       // round-trip's cache reads summed), which over-counts the real window on a
@@ -1109,8 +1139,10 @@ export class ChatHandler {
       } catch (e) {
         console.error('Gaffer telemetry: recordUsage call failed (ignored)', e.message);
       }
-      // Final result text — send if we haven't streamed it yet
-      if (event.result && event.subtype === 'success') {
+      // Final result text — send if we haven't streamed it yet. Never for an
+      // error result: its `result` is the CLI's error text, not a reply (the
+      // close handler sends the one chat_error for the turn instead).
+      if (!isErrorResult && event.result && event.subtype === 'success') {
         socket.send(JSON.stringify({ type: 'chat_result', text: event.result }));
       }
     }
