@@ -31,7 +31,12 @@ bridge.start().catch((err) => {
 // state. See chat-registry.js. Account-level effects (model-cache, cancel-all,
 // idle) fan out with registry.each()/anyBusy(). Routing keys on socket._gafferKey,
 // which the bridge sets in _registerSocket before any chat message dispatches.
-var chatRegistry = createChatRegistry(() => new ChatHandler());
+// onAuthError: a chat turn that failed because Claude is signed out re-pushes
+// the account card's status (same path as the on-connect auth_status), so the
+// panel's sign-in state catches up with what the CLI just reported.
+var chatRegistry = createChatRegistry(() => new ChatHandler({
+  onAuthError: (socket) => { bridge.onAuthStatus(socket); },
+}));
 var handlerFor = (socket) => chatRegistry.for(socket && socket._gafferKey);
 // Cancellation flag for the runJSXLoop chunk driver. The chat-cancel gesture
 // kills the claude subprocess, but a runJSXLoop the agent already started keeps
