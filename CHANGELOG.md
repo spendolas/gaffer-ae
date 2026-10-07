@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.11.1 - 2026-10-07
+
+**Gaffer finds Claude Code again on Windows after its latest update.**
+
+- Newer versions of Claude Code (2.1.286 and up) put their program in an extra folder inside the Claude desktop app's folder, and Gaffer only looked one folder deep. It reported "Claude CLI not found" even though Claude worked fine in a terminal. Gaffer now searches a few folders deeper, so it also keeps working if that layout shifts again.
+- If Gaffer still cannot find Claude Code, the message now says where it looked and what it found on your PATH, instead of a generic error. The daemon log also records which Claude it ended up using.
+
 ## v0.11.0 - 2026-10-07
 
 **Auto-update works again, and installs and updates now come from tagged GitHub Releases.**
