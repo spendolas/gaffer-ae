@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.11.2 - 2026-10-07
+
+**Gaffer now works with the Claude desktop app alone, and chat errors show up as errors instead of odd replies.**
+
+- You no longer need a separate Claude Code install. If you have the Claude desktop app on Mac or Windows, Gaffer uses the Claude Code that comes bundled with it. If you also have the standalone Claude Code, Gaffer prefers the desktop app's copy (it updates itself with the app) and falls back to the standalone one. You can still pin either one in Gaffer's settings file with `"claudeBin": "app"`, `"claudeBin": "cli"`, or a full path.
+- If neither is installed, the panel and the install instructions now say so plainly and link to both downloads: the Claude desktop app and Claude Code.
+- Chat problems such as being signed out, a model that is not available on your plan, or a conversation that has grown too long now show as proper error messages. Before, some of them could appear as a strange reply in the chat.
+- Fixed a bug where a normal answer that happened to mention "context" and "length" could reset your conversation.
+- The chat no longer ends with an empty bubble when Claude stops unexpectedly. You see what went wrong instead.
+
 ## v0.11.1 - 2026-10-07
 
 **Gaffer finds Claude Code again on Windows after its latest update.**

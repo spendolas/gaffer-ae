@@ -3,13 +3,19 @@
   // Pure update-check logic (panel/update-state.js, loaded before this file).
   var UpdateState = window.GafferUpdateState;
 
-  // Single source of truth for the Claude Code install docs — referenced by both
-  // the sign-in caption link and the no-CLI modal's "Learn how" button, so the
-  // URL lives in exactly one place.
+  // Single source of truth for the install links. The daemon can run Claude
+  // Code from the Claude desktop app or from a standalone CLI, so the
+  // no-Claude modal offers both; the sign-in caption links to the install docs.
+  // Mirrors INSTALL_LINKS in panel/daemon/claude-binary.js.
   var CLAUDE_CODE_DOCS_URL = 'https://code.claude.com/docs/en/quickstart#step-1-install-claude-code';
-  function openClaudeCodeDocs() {
-    try { cs.openURLInDefaultBrowser(CLAUDE_CODE_DOCS_URL); } catch (e) { /* no host bridge */ }
+  var CLAUDE_APP_URL = 'https://claude.com/download';
+  var CLAUDE_CODE_URL = 'https://claude.ai/code';
+  function openExternal(url) {
+    try { cs.openURLInDefaultBrowser(url); } catch (e) { /* no host bridge */ }
   }
+  function openClaudeCodeDocs() { openExternal(CLAUDE_CODE_DOCS_URL); }
+  function openClaudeAppDownload() { openExternal(CLAUDE_APP_URL); }
+  function openClaudeCodeDownload() { openExternal(CLAUDE_CODE_URL); }
 
   // SVG icon helper — GafferIcons comes from icons.js (generated from Figma)
   function icon(name, cls) {
@@ -1301,6 +1307,7 @@
   var alertModalOnClose = null;
   var alertModalOnConfirm = null;
   var alertModalOnOk = null; // single-button action: runs on the OK button only, not on backdrop/Esc
+  var alertModalOnCancel = null; // secondary-button action: runs on the Cancel button only, not on backdrop/Esc
   var alertModalDontShowKey = null; // active "don't show again" key; suppressed only when the user proceeds
 
   // Per-modal "don't show again" — suppressed keys persist in localStorage so a
@@ -1377,6 +1384,7 @@
     alertModalOnClose = typeof opts.onClose === 'function' ? opts.onClose : null;
     alertModalOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
     alertModalOnOk = typeof opts.onOk === 'function' ? opts.onOk : null;
+    alertModalOnCancel = typeof opts.onCancel === 'function' ? opts.onCancel : null;
     if (alertModalOnConfirm) {
       // Confirm mode: Cancel (neutral) + a confirm action (danger-styled for destructive ops like Clear chat).
       alertModalOkEl.textContent = opts.confirmLabel || 'Confirm';
@@ -1400,12 +1408,18 @@
     if (cb) cb();
   }
 
-  // Edge case: Claude Code CLI isn't installed. Reuses the ModalFullScreen
-  // (Figma no-CLI modal 524:7807) — single "Learn how" button -> install docs.
+  // Edge case: no Claude on this machine (neither the desktop app's Claude Code
+  // nor a standalone CLI). Reuses the ModalFullScreen (Figma no-CLI modal
+  // 524:7807) in its two-button layout: primary -> desktop app download,
+  // secondary (the Cancel slot) -> Claude Code download.
   function showNoCliModal() {
     showModal(
-      'Gaffer brings AI into After Effects, not on your computer. Please install Claude Code CLI to be able to use it.',
-      { title: 'Missing pieces', okLabel: 'Learn how', onOk: openClaudeCodeDocs }
+      'Gaffer needs Claude to work. Install the Claude desktop app or Claude Code, then reopen this panel.',
+      {
+        title: 'Missing pieces',
+        confirmLabel: 'Get Claude app', onConfirm: openClaudeAppDownload,
+        cancelLabel: 'Get Claude Code', onCancel: openClaudeCodeDownload
+      }
     );
   }
 
@@ -1415,16 +1429,20 @@
     var alertCbIconEl = alertModalDontShowEl && alertModalDontShowEl.querySelector('.alert-checkbox .gicon');
     if (alertCbIconEl && typeof GafferIcons !== 'undefined') alertCbIconEl.innerHTML = GafferIcons.check || '';
     // Dismiss = drop pending actions; only proceeding (OK/confirm) can suppress.
-    function dismissAlert() { alertModalOnConfirm = null; alertModalOnOk = null; alertModalDontShowKey = null; hideModal(); }
+    function dismissAlert() { alertModalOnConfirm = null; alertModalOnOk = null; alertModalOnCancel = null; alertModalDontShowKey = null; hideModal(); }
     alertModalOkEl.addEventListener('click', function () {
       var f = alertModalOnConfirm || alertModalOnOk; // capture before hideModal clears state
       // Persist the opt-out only when the user actually proceeds with the box ticked.
       if (alertModalDontShowKey && alertModalDontShowInputEl && alertModalDontShowInputEl.checked) suppressModal(alertModalDontShowKey);
-      alertModalOnConfirm = null; alertModalOnOk = null; alertModalDontShowKey = null;
+      alertModalOnConfirm = null; alertModalOnOk = null; alertModalOnCancel = null; alertModalDontShowKey = null;
       hideModal();
       if (f) f(); // confirm/onOk action runs after the modal is dismissed
     });
-    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', dismissAlert);
+    if (alertModalCancelEl) alertModalCancelEl.addEventListener('click', function () {
+      var f = alertModalOnCancel; // optional secondary action (e.g. a second install link); plain dismiss otherwise
+      dismissAlert();
+      if (f) f();
+    });
     if (alertModalDismissEl) alertModalDismissEl.addEventListener('click', dismissAlert); // header X = cancel/dismiss
     dismissOnBackdrop(alertModalEl, dismissAlert); // void click = cancel/dismiss only
     document.addEventListener('keydown', function (e) {
@@ -3473,7 +3491,7 @@
   if ((b = document.getElementById('signInClaude'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'claudeai' }); });
   if ((b = document.getElementById('signInConsole'))) b.addEventListener('click', function () { sendWs({ type: 'sign_in', mode: 'console' }); });
   if ((b = document.getElementById('signInCancel'))) b.addEventListener('click', function () { sendWs({ type: 'cancel_sign_in' }); });
-  // "Claude Code CLI" in the sign-in caption opens the install docs.
+  // "Claude Code" in the sign-in caption opens the install docs.
   if ((b = document.getElementById('signInCliLink'))) {
     b.addEventListener('click', openClaudeCodeDocs);
     b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openClaudeCodeDocs(); } });

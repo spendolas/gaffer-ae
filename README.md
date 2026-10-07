@@ -13,7 +13,7 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
 ## Prerequisites
 
 - After Effects 2022+
-- Claude Code CLI ([install](https://claude.ai/code)) — on Windows use the native installer or desktop app, not `npm install -g` (the daemon can't launch npm's script shims)
+- Claude: either the [Claude desktop app](https://claude.com/download) (it bundles Claude Code, no separate install needed) or the standalone [Claude Code](https://claude.ai/code) CLI. On Windows use the desktop app or the native installer, not `npm install -g` (the daemon can't launch npm's script shims)
 - Node.js 18+ ([install](https://nodejs.org))
 - No git required
 
@@ -40,7 +40,7 @@ Before you begin, read these rules. They apply to every step below.
 1. **Check prerequisites.** Run these checks and report the results to the user before proceeding:
 
    - `node --version` — must be 18 or higher
-   - `claude --version` — must be present and authenticated (if the command errors or prompts for login, it is not ready)
+   - Claude: either the Claude desktop app is installed (step 6 shows where its bundled Claude Code lives) or `claude --version` works in a terminal. At least one must be present; the user must be signed in to it (if it errors or prompts for login, it is not ready). Gaffer itself does not need the standalone CLI.
    - Confirm with the user that After Effects 2022 or later is installed
 
    If any prerequisite is missing or not ready, STOP. Tell the user what's missing and link them to the install page. Do not proceed until the user confirms all prerequisites are ready.
@@ -102,37 +102,51 @@ Before you begin, read these rules. They apply to every step below.
    }
    ```
 
-6. **Pin the claude binary path** so the daemon doesn't have to guess at runtime (AE-spawned subprocesses inherit a stripped PATH). The pin goes into Gaffer's per-user config file, which lives OUTSIDE the extension directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) so reinstalls and updates never touch it. That file also holds the install's anonymous `installId` and settings, so MERGE into it, never overwrite it:
+6. **Find Claude and decide whether to pin it.** The daemon looks for Claude on its own at runtime, in this order: a pin in Gaffer's per-user config, then the Claude desktop app's bundled Claude Code (newest version), then a standalone `claude` CLI. The pin, if any, goes into Gaffer's per-user config file, which lives OUTSIDE the extension directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) so reinstalls and updates never touch it. That file also holds the install's anonymous `installId` and settings, so MERGE into it, never overwrite it.
+
+   a. Detect both copies and report what you found, with versions:
    ```bash
    # macOS
-   CLAUDE_PATH="$(command -v claude)"
-   CONFIG_DIR="$HOME/Library/Application Support/Gaffer"
-   if [ -n "$CLAUDE_PATH" ] && [ -x "$CLAUDE_PATH" ]; then
-     mkdir -p "$CONFIG_DIR"
-     node -e 'const fs=require("fs");const p=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};c.claudeBin=process.argv[2];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")' "$CONFIG_DIR/config.json" "$CLAUDE_PATH"
-   else
-     echo "WARNING: claude not found on PATH, skipping config pin"
-   fi
+   APP_CLAUDE="$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)"
+   CLI_CLAUDE="$(command -v claude 2>/dev/null || true)"
+   [ -n "$APP_CLAUDE" ] && echo "Desktop app Claude Code: $APP_CLAUDE ($("$APP_CLAUDE" --version 2>/dev/null))"
+   [ -n "$CLI_CLAUDE" ] && echo "Standalone CLI: $CLI_CLAUDE ($("$CLI_CLAUDE" --version 2>/dev/null))"
 
-   # Windows (PowerShell) — pin ONLY a real .exe; npm shims (.ps1/.cmd)
-   # cannot be spawned by the daemon and must not be pinned
+   # Windows (PowerShell). Only a real .exe counts as the CLI; npm shims (.ps1/.cmd)
+   # cannot be spawned by the daemon.
+   $appClaude = Get-ChildItem "$env:APPDATA\Claude\claude-code" -Recurse -Filter claude.exe -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
    $cmd = Get-Command claude -ErrorAction SilentlyContinue
-   $configDir = "$env:APPDATA\Gaffer"
-   if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') {
-     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-     $configPath = "$configDir\config.json"
-     $cfg = @{}
-     if (Test-Path $configPath) {
-       (Get-Content $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
-     }
-     $cfg.claudeBin = $cmd.Source
-     $cfg | ConvertTo-Json -Compress | Set-Content $configPath
-   } else {
-     Write-Host "No claude.exe on PATH - skipping pin; the daemon discovers standalone, WinGet, and desktop-app installs on its own"
-   }
+   $cliClaude = if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') { $cmd.Source } else { $null }
+   if ($appClaude) { Write-Host "Desktop app Claude Code: $appClaude ($(& $appClaude --version))" }
+   if ($cliClaude) { Write-Host "Standalone CLI: $cliClaude ($(& $cliClaude --version))" }
    ```
 
-7. **Register the MCP server with Claude Code:**
+   b. Decide:
+   - **Neither found:** STOP. Tell the user to install the Claude desktop app from https://claude.com/download (recommended, it keeps its Claude Code up to date by itself) or Claude Code from https://claude.ai/code, then come back. Do not continue until one is installed.
+   - **Only one found:** do NOT pin anything. The daemon finds it on its own.
+   - **Both found:** show the user both paths and versions. Explain that the desktop app's copy updates itself along with the app, while the CLI is whatever they installed and update themselves. Ask which one Gaffer should use, then pin the MODE (not a path) by merging `"claudeBin": "app"` or `"claudeBin": "cli"` into the config file:
+   ```bash
+   # macOS: replace MODE with app or cli
+   MODE="app"
+   CONFIG_DIR="$HOME/Library/Application Support/Gaffer"
+   mkdir -p "$CONFIG_DIR"
+   node -e 'const fs=require("fs");const p=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};c.claudeBin=process.argv[2];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")' "$CONFIG_DIR/config.json" "$MODE"
+
+   # Windows (PowerShell): replace MODE with app or cli
+   $mode = "app"
+   $configDir = "$env:APPDATA\Gaffer"
+   New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+   $configPath = "$configDir\config.json"
+   $cfg = @{}
+   if (Test-Path $configPath) {
+     (Get-Content $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
+   }
+   $cfg.claudeBin = $mode
+   $cfg | ConvertTo-Json -Compress | Set-Content $configPath
+   ```
+   Never pin the desktop app's full path: it contains a version folder and breaks on the app's next update. A full path is only for a standalone binary in an unusual location, and then only if the user asks for it.
+
+7. **Register the MCP server with Claude Code.** Use the standalone `claude` if it is on PATH; otherwise run the desktop app's copy found in step 6 (`"$APP_CLAUDE"` on macOS, `& $appClaude` on Windows) with the same arguments. Both read the same user config, so registering once is enough:
    ```bash
    claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp
    ```
@@ -143,7 +157,7 @@ Before you begin, read these rules. They apply to every step below.
 
 9. **Verify the install.** After the user has restarted After Effects and confirmed the panel is visible under Window > Extensions > Gaffer, run these checks:
 
-   a. `claude mcp list` — confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open.
+   a. `claude mcp list` (same binary as step 7) — confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open.
 
    b. Ask Claude to call `getProjectSummary` via the Gaffer MCP. If it returns a valid JSON response describing the project, the install is working end-to-end. If it errors, check the troubleshooting section.
 
@@ -159,7 +173,7 @@ Before you begin, read these rules. They apply to every step below.
 - **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` or `node` aren't on your shell's PATH, the check fails even if they're installed. Open a fresh terminal, run `which node` and `which claude` (macOS) or `where.exe node` and `where.exe claude` (Windows) to confirm. Fix PATH before re-running.
 - **`claude` errors or asks me to log in:** Gaffer doesn't install authentication. Run `claude` once manually, complete the login flow, confirm it works, then re-run the Gaffer install.
 - **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh. Your per-install settings and anonymous install identity live outside that directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) and survive the deletion; only remove that folder too if you want a completely clean slate.
-- **Chat fails with `Error: claude cli not found` despite Claude being installed:** The daemon couldn't locate the `claude` binary. Override discovery by adding `"claudeBin": "/full/path/to/claude"` to `~/Library/Application Support/Gaffer/config.json` (macOS) or `%APPDATA%\Gaffer\config.json` (Windows), keeping any other keys already in the file. Find your path with `which claude` from a terminal. The daemon log prints the exact config path on startup (`Gaffer: config at ...`).
+- **Chat fails with `Error: claude cli not found` despite Claude being installed:** The daemon looks for the Claude desktop app's bundled Claude Code first, then a standalone `claude` CLI. If neither is installed, install the desktop app from https://claude.com/download or Claude Code from https://claude.ai/code. If one is installed but not found, the error message lists where the daemon looked. You can steer it by adding `"claudeBin"` to `~/Library/Application Support/Gaffer/config.json` (macOS) or `%APPDATA%\Gaffer\config.json` (Windows), keeping any other keys already in the file: `"app"` uses only the desktop app's copy, `"cli"` uses only a standalone CLI, and a full path (for example from `which claude`) uses exactly that binary. Do not pin the desktop app's own path, it changes with every app update. The daemon log prints the exact config path on startup (`Gaffer: config at ...`) and which Claude it picked (`Gaffer: claude found ...`).
 
 </details>
 
