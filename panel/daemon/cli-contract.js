@@ -73,12 +73,24 @@ function errText(r) {
 
 // kind: ok | stale_session | too_long | auth | model | api_error | unknown_error
 // via:  structure | text | none
+// An `ok` verdict carries `exitCode` only when the process did not exit 0 (a
+// non-zero code, or null when a signal ended it), so the caller can log the
+// oddity without treating the turn as a failure.
 export function classify(st, exitCode, stderr) {
   st = st || newTurnState(false);
   stderr = typeof stderr === 'string' ? stderr : '';
   var r = st.result && typeof st.result === 'object' ? st.result : null;
 
-  if (r && r.is_error !== true && exitCode === 0) return { kind: 'ok', via: 'structure' };
+  // A result the CLI did not flag as an error is a successful turn whatever
+  // the exit code was. The reply already reached the panel, so a stray exit 1
+  // or a signal after the fact must never turn it into an error (and must
+  // never reach the text fallback below, where the reply's own words could
+  // match a failure pattern).
+  if (r && r.is_error !== true) {
+    var ok = { kind: 'ok', via: 'structure' };
+    if (exitCode !== 0) ok.exitCode = exitCode === undefined ? null : exitCode;
+    return ok;
+  }
 
   // 1. Structured fields.
   if (r && r.terminal_reason === 'prompt_too_long') return { kind: 'too_long', via: 'structure' };
@@ -107,12 +119,15 @@ export function classify(st, exitCode, stderr) {
     };
   }
 
-  // 4. No result event, or a result that was not an error on a non-zero exit.
+  // 4. No result event at all. A null exit code means a signal ended the
+  // process (not a user cancel, chat-handler never classifies those).
   var tail = stderr.trim() || (r ? errText(r) : '');
   return {
     kind: 'unknown_error',
     via: 'none',
-    text: tail || ('claude exited with code ' + exitCode)
+    text: tail || (exitCode === null || exitCode === undefined
+      ? 'claude was stopped unexpectedly'
+      : 'claude exited with code ' + exitCode)
   };
 }
 

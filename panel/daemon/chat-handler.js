@@ -966,7 +966,10 @@ export class ChatHandler {
       var verdict = child._userCancelled ? { kind: 'ok', via: 'none' } : classify(st, code, stderrBuf);
       if (!child._userCancelled) {
         console.log('Gaffer chat: turn=' + verdict.kind + ' via=' + verdict.via
-          + ' cli=' + (st.cliVersion || 'unknown') + ' exit=' + code);
+          + ' cli=' + (st.cliVersion || 'unknown') + ' exit=' + code
+          // A successful result followed by a non-zero or null exit: the
+          // turn is still ok, but the odd exit is worth a trace.
+          + (verdict.kind === 'ok' && verdict.exitCode !== undefined ? ' okDespiteExit=' + verdict.exitCode : ''));
       }
 
       // Self-heal a dead --resume: the CLI's session storage can be wiped

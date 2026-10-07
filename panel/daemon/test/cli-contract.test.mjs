@@ -88,6 +88,48 @@ test('a successful reply that mentions context length or prompt too long stays o
   assert.equal(v.kind, 'ok');
 });
 
+// A success result followed by an odd exit (the CLI tripping on its way out,
+// or a signal) is still a success: the reply already reached the panel.
+[1, null].forEach(function (code) {
+  test('success result with exit ' + code + ' stays ok via structure and exposes the exit code', () => {
+    var st = newTurnState(true);
+    observe(st, { type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [] });
+    observe(st, { type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: 's-1', result: 'Done.' });
+    var v = classify(st, code, 'some stderr noise\n');
+    assert.equal(v.kind, 'ok');
+    assert.equal(v.via, 'structure');
+    assert.equal(v.exitCode, code);
+  });
+});
+
+test('success result with exit 0 carries no exitCode field', () => {
+  var st = newTurnState(false);
+  observe(st, { type: 'result', subtype: 'success', is_error: false, result: 'Done.' });
+  var v = classify(st, 0, '');
+  assert.equal(v.kind, 'ok');
+  assert.equal('exitCode' in v, false);
+});
+
+test('a success reply saying "prompt is too long" with exit 1 stays ok and never hits the text fallback', () => {
+  var st = newTurnState(true);
+  observe(st, { type: 'system', subtype: 'init', claude_code_version: '2.1.289' });
+  observe(st, { type: 'result', subtype: 'success', is_error: false, num_turns: 1,
+    result: 'Your prompt is too long for one title, so I split it. No conversation found with that name.' });
+  var v = classify(st, 1, 'No conversation found\n');
+  assert.equal(v.kind, 'ok');
+  assert.equal(v.via, 'structure');
+  assert.equal(v.exitCode, 1);
+});
+
+test('no result and a null exit code says claude was stopped unexpectedly, not "code null"', () => {
+  var st = newTurnState(false);
+  observe(st, { type: 'system', subtype: 'init', claude_code_version: '2.1.289' });
+  var v = classify(st, null, '');
+  assert.equal(v.kind, 'unknown_error');
+  assert.equal(v.text, 'claude was stopped unexpectedly');
+  assert.equal(userMessage(v).indexOf('null'), -1);
+});
+
 test('init then exit 1 with no result is unknown_error carrying stderr', () => {
   var st = newTurnState(false);
   observe(st, { type: 'system', subtype: 'init', claude_code_version: '2.1.289' });
