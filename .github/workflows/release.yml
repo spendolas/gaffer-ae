@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           (cd panel/daemon && npm ci && npm test)
           node scripts/check-ps-encoding.mjs
-          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs
 
       - name: Build assets
         if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
@@ -95,6 +95,7 @@ jobs:
             dist/
             notes.md
           if-no-files-found: error
+          overwrite: true   # "Re-run all jobs" must not 409 on the existing artifact
 
   publish:
     needs: build
@@ -148,6 +149,14 @@ jobs:
         run: |
           set -euo pipefail
           ls -l artifact/dist
+          # Every installer and updater downloads one of these by exact name;
+          # a release missing any of them would break installs or updates.
+          for asset in gaffer-install-mac.tar.gz gaffer-install-win.zip gaffer-update-mac.tar.gz gaffer-update-win.zip; do
+            if [ ! -f "artifact/dist/$asset" ]; then
+              echo "Required release asset missing from the build artifact: $asset"
+              exit 1
+            fi
+          done
           PRE=""
           case "$V" in *-*) PRE="--prerelease" ;; esac
           if [ "$ACTION" = "create" ]; then
