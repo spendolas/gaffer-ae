@@ -1,0 +1,149 @@
+// Pure classifier for one `claude -p --output-format stream-json` chat turn.
+//
+// chat-handler feeds every parsed stdout event to observe(), then at process
+// close asks classify() what the turn was. Structured fields (terminal_reason,
+// assistant.error, result subtype) are read first; the CLI's human text is
+// only consulted on turns that already failed, so a normal reply that happens
+// to say "context length" can never be mistaken for an overflow. Nothing here
+// spawns, logs or throws: a malformed event is simply not informative.
+
+// CLI versions whose stream shapes the fixtures in test/fixtures/cli were
+// captured from. Exported for a future "newer than tested" notice; unused now.
+export var LAST_VERIFIED = { min: '2.1.236', max: '2.1.289' };
+
+var KNOWN_TYPES = ['system', 'assistant', 'user', 'result', 'rate_limit_event', 'stream_event'];
+
+var MAX_CLI_TEXT = 400;
+
+export function newTurnState(resuming) {
+  return {
+    resuming: !!resuming,
+    sawInit: false,
+    sawResult: false,
+    cliVersion: null,
+    result: null,
+    assistantError: null,
+    assistantApiError: false,
+    gafferMcp: null,
+    unknownTypes: {}
+  };
+}
+
+export function observe(st, e) {
+  if (!st || !e || typeof e !== 'object') return;
+  try {
+    if (e.type === 'system' && e.subtype === 'init') {
+      st.sawInit = true;
+      st.cliVersion = e.claude_code_version ? String(e.claude_code_version) : null;
+      var servers = Array.isArray(e.mcp_servers) ? e.mcp_servers : [];
+      var g = null;
+      for (var i = 0; i < servers.length; i++) {
+        if (servers[i] && servers[i].name === 'gaffer') { g = servers[i]; break; }
+      }
+      st.gafferMcp = g ? (g.status || null) : null;
+    } else if (e.type === 'assistant') {
+      if (e.error) st.assistantError = String(e.error);
+      if (e.is_api_error_message === true) st.assistantApiError = true;
+    } else if (e.type === 'result') {
+      st.sawResult = true;
+      st.result = e;
+    } else if (KNOWN_TYPES.indexOf(e.type) === -1) {
+      var key = String(e.type);
+      st.unknownTypes[key] = (st.unknownTypes[key] || 0) + 1;
+    }
+  } catch (err) { /* a malformed event is not informative; never kill the turn */ }
+}
+
+// The CLI's own error text from a result event. `errors` is an array of
+// strings in every observed binary but the SDK docs describe {code, message}
+// objects, so both shapes are read.
+function errText(r) {
+  if (!r || typeof r !== 'object') return '';
+  var parts = [r.result];
+  var errs = Array.isArray(r.errors) ? r.errors : [];
+  for (var i = 0; i < errs.length; i++) parts.push(errs[i]);
+  var out = [];
+  for (var j = 0; j < parts.length; j++) {
+    var x = parts[j];
+    var s = typeof x === 'string' ? x : (x && typeof x === 'object' && (x.message || x.code)) || '';
+    if (s) out.push(String(s));
+  }
+  return out.join(' ').trim();
+}
+
+// kind: ok | stale_session | too_long | auth | model | api_error | unknown_error
+// via:  structure | text | none
+export function classify(st, exitCode, stderr) {
+  st = st || newTurnState(false);
+  stderr = typeof stderr === 'string' ? stderr : '';
+  var r = st.result && typeof st.result === 'object' ? st.result : null;
+
+  if (r && r.is_error !== true && exitCode === 0) return { kind: 'ok', via: 'structure' };
+
+  // 1. Structured fields.
+  if (r && r.terminal_reason === 'prompt_too_long') return { kind: 'too_long', via: 'structure' };
+  if (st.resuming && r && r.subtype === 'error_during_execution' && r.num_turns === 0 && !st.sawInit) {
+    return { kind: 'stale_session', via: 'structure' };
+  }
+  if (st.assistantError === 'authentication_failed' || st.assistantError === 'oauth_org_not_allowed') {
+    return { kind: 'auth', via: 'structure' };
+  }
+  if (st.assistantError === 'model_not_found') return { kind: 'model', via: 'structure' };
+
+  // 2. Text fallback, only reached on a failed turn. A hit here means the
+  // structured shapes above have drifted; chat-handler logs via=text.
+  var txt = errText(r) + ' ' + stderr;
+  if (st.resuming && /no conversation found/i.test(txt)) return { kind: 'stale_session', via: 'text' };
+  if (/prompt is too long/i.test(txt)) return { kind: 'too_long', via: 'text' };
+
+  // 3. A failure the CLI reported but we do not recognize.
+  if (r && r.is_error === true) {
+    return {
+      kind: 'api_error',
+      via: 'structure',
+      status: r.api_error_status === undefined ? null : r.api_error_status,
+      reason: r.terminal_reason === undefined ? null : r.terminal_reason,
+      text: errText(r)
+    };
+  }
+
+  // 4. No result event, or a result that was not an error on a non-zero exit.
+  var tail = stderr.trim() || (r ? errText(r) : '');
+  return {
+    kind: 'unknown_error',
+    via: 'none',
+    text: tail || ('claude exited with code ' + exitCode)
+  };
+}
+
+function trimCli(text) {
+  var s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length > MAX_CLI_TEXT) s = s.slice(0, MAX_CLI_TEXT) + '...';
+  return s;
+}
+
+// Friendly panel copy per kind. User-facing: no em or en dashes.
+export function userMessage(verdict) {
+  var kind = verdict && verdict.kind;
+  var cli;
+  switch (kind) {
+    case 'ok':
+      return 'Done.';
+    case 'stale_session':
+      return 'The previous conversation could not be resumed, so a new one was started. Please send your message again.';
+    case 'too_long':
+      return 'This conversation got too long for Claude to continue, so it was reset. Please send your message again.';
+    case 'auth':
+      return 'Claude is not signed in. Open Gaffer settings and use Sign in, then try again.';
+    case 'model':
+      return 'The selected model is not available to your account. Pick another model in Gaffer settings and try again.';
+    case 'api_error':
+      cli = trimCli(verdict.text);
+      return cli ? ('Claude could not finish this turn: ' + cli) : 'Claude could not finish this turn. Please try again.';
+    case 'unknown_error':
+      cli = trimCli(verdict.text);
+      return cli ? ('Claude stopped unexpectedly: ' + cli) : 'Claude stopped unexpectedly. Please try again.';
+    default:
+      return 'Claude stopped unexpectedly. Please try again.';
+  }
+}
