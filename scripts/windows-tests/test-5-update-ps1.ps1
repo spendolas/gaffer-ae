@@ -136,9 +136,19 @@ try {
     New-TestInstall $missing
     $notFoundUrl = "https://github.com/spendolas/gaffer-ae/releases/download/v0.0.0/nope.zip"
     $beforeTree = Get-TreeHash $missing
+    # Start-Transcript appends, so drop the log from cases 1 and 2 first: the
+    # 404 check below must only see this run's output.
+    $logPath = "$scratch\tmp\gaffer-update.log"
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $code = Invoke-Update $missing $notFoundUrl
     if ($code -ne 0) { Pass "update.ps1 exited non-zero on a 404 URL" } else { Fail "update.ps1 exited 0 on a 404 URL" }
     if ((Get-TreeHash $missing) -eq $beforeTree) { Pass "404 URL left the install untouched" } else { Fail "404 URL modified the install" }
+    # A non-zero exit alone would also pass if Test-Path threw on the URL or
+    # the network was down. Only the server's 404 proves the download ran:
+    # PS 5.1 reports "The remote server returned an error: (404) Not Found."
+    $log404 = ""
+    if (Test-Path -LiteralPath $logPath) { $log404 = Get-Content -LiteralPath $logPath -Raw }
+    if ($log404 -match "\(404\)") { Pass "update.ps1 reached the download and got the server's 404" } else { Fail "update.ps1 did not reach the download (offline or URL branch broke); log: $logPath" }
 } finally {
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
