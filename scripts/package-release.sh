@@ -15,6 +15,9 @@ COMMIT="$2"
 OUT_DIR="$3"
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-stage-XXXXXX")"
+# mktemp creates the dir 0700; the tar's "./" entry copies that mode, so give
+# it a normal directory mode before anything is staged.
+chmod 755 "$STAGE"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$OUT_DIR"

@@ -6,7 +6,7 @@
 
 - Since v0.10.2 the update check compared a build stamp that never changed, so every panel on v0.10.2 or newer said "up to date" no matter what was released. The panel now asks GitHub for the latest release and compares version numbers, so new versions show up again.
 - Installs and updates now download a finished release package instead of whatever happened to be on the main branch at that moment.
-- Updates now also keep your unsent usage statistics and the cached MCP server icons, and the panel only reloads once every file is in place.
+- Updates now also keep your unsent usage statistics and the icons it already downloaded for your connected tools, and the panel only reloads once every file is in place.
 - If your network only allows certain sites, it now also needs to reach `api.github.com` and `release-assets.githubusercontent.com`, in addition to `github.com`.
 - One catch: this one update still runs the update script from the version you already have. On versions older than v0.10.8 that can lose per-window chat history once, and the panel may reload before the update has finished. If it looks stuck, wait a minute and reopen the panel. Updates after this one are safe.
 

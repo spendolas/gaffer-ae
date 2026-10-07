@@ -111,6 +111,15 @@ test('missing ## v<V> heading -> fail', () => {
   );
 });
 
+test('## v<V> heading with no notes under it -> fail (create and recover)', () => {
+  const empty = '# Changelog\n\n## v0.11.1 - 2026-10-08\n\n\n## v0.11.0 - 2026-10-07\n\n- Older.\n';
+  const wantErr = (e) => e instanceof GateError && /heading for v0\.11\.1 but no notes under it/.test(e.message);
+  assert.throws(() => decide({ version: '0.11.1', tags: [], release: null, changelog: empty }), wantErr);
+  assert.throws(() => decide({ version: '0.11.1', tags: [], release: { isDraft: true, assets: [] }, changelog: empty }), wantErr);
+  // A heading that is the last line of the file is empty too.
+  assert.throws(() => decide({ version: '0.11.1', tags: [], release: null, changelog: '## v0.11.1' }), wantErr);
+});
+
 test('## v0.11.0 does not match V = 0.11.01', () => {
   assert.equal(extractNotes(CHANGELOG, '0.11.01'), null);
   assert.throws(() => decide({ version: '0.11.01', tags: [], release: null, changelog: CHANGELOG }), GateError);

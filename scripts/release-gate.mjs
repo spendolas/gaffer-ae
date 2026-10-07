@@ -108,6 +108,8 @@ export function decide({ version, tags, release, changelog }) {
   }
   const notes = extractNotes(changelog, version);
   if (notes === null) throw new GateError(`CHANGELOG.md has no "## v${version}" heading`);
+  // An empty section would publish a release with blank notes.
+  if (notes.trim() === '') throw new GateError(`CHANGELOG.md has a heading for v${version} but no notes under it`);
   return { action, notes };
 }
 
