@@ -65,7 +65,8 @@ Before you begin, read these rules. They apply to every step below.
    # macOS
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
    mkdir -p "$INSTALL_DIR"
-   curl -fsSL https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz | tar -xz -C "$INSTALL_DIR"
+   ARCHIVE="${TMPDIR:-/tmp}/gaffer-install.tar.gz"
+   curl -fsSL https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz -o "$ARCHIVE" && tar -xzf "$ARCHIVE" -C "$INSTALL_DIR" && rm -f "$ARCHIVE"
 
    # Windows (PowerShell)
    $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"

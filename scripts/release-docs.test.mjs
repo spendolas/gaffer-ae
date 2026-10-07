@@ -29,6 +29,12 @@ test('README install step 3 downloads the latest release assets', () => {
   assert.ok(!step3.includes('gaffer-ae-main'));
   assert.ok(!step3.includes('--strip-components'));
   assert.ok(!DASHES.test(step3), 'no em or en dashes in install step 3');
+  // A curl | tar pipeline exits 0 when the download fails (tar is last and
+  // succeeds on empty input), so the install must download to a file first.
+  assert.ok(!step3.includes('| tar'), 'macOS install must not pipe curl into tar');
+  assert.ok(step3.includes('mkdir -p "$INSTALL_DIR"'));
+  assert.ok(step3.includes('curl -fsSL'));
+  assert.ok(step3.includes('-C "$INSTALL_DIR"'));
 });
 
 test('README Updating section describes releases and the proxy hosts', () => {
@@ -59,4 +65,6 @@ test('CLAUDE.md Releasing describes the workflow, not hand-stamped commits', () 
   assert.ok(layout.includes('release-gate.mjs'), 'repo layout lists the gate');
   assert.ok(layout.includes('release.yml'), 'repo layout lists the release workflow');
   assert.ok(layout.includes('update-state.js'), 'repo layout lists update-state.js');
+  assert.ok(!claudeMd.includes('install/update from the `main` tarball'), 'CLAUDE.md no longer says users get code from the main tarball');
+  assert.ok(claudeMd.includes('install and update from GitHub Release assets'));
 });

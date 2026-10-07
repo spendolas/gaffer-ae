@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Gaffer is an After Effects automation agent. Claude controls AE by writing ExtendScript and executing it via MCP tools. The panel includes a chat UI for direct interaction from within AE.
 
-The spec lives in `docs/Gaffer_Handoff.md` — the original design document. Public repo: `github.com/spendolas/gaffer-ae` (end users install/update from the `main` tarball, no git clone).
+The spec lives in `docs/Gaffer_Handoff.md` — the original design document. Public repo: `github.com/spendolas/gaffer-ae` (end users install and update from GitHub Release assets, no git clone; pre-0.11 clients still read `main`).
 
 ## Architecture
 
