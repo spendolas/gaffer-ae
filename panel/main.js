@@ -2639,6 +2639,14 @@
         syncSettingsUpdateButton();
       }).catch(function (e) {
         markUpdateChecked();
+        // If-None-Match is not CORS-safelisted, so a check that sends the
+        // cached ETag goes through a preflight. If that request is refused (a
+        // proxy stripping CORS headers, a policy change), drop the cache so
+        // the next check goes out without the header instead of failing the
+        // same way every time.
+        if (headers['If-None-Match']) {
+          try { localStorage.removeItem(RELEASE_CACHE_KEY); } catch (e2) { /* ignore */ }
+        }
         if (!silent) showModal('Update check failed: ' + e.message);
       });
   }

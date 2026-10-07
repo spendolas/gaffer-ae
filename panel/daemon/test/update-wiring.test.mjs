@@ -45,6 +45,17 @@ test('rate limits and missing releases show the neutral message, never "Update c
   assert.ok(!noInfo[1].includes('Update check failed'));
 });
 
+test('a failed check that sent If-None-Match clears the release cache (refusal is never sticky)', () => {
+  const failed = main.indexOf("'Update check failed: '");
+  assert.ok(failed !== -1, 'no "Update check failed" message in main.js');
+  const catchStart = main.lastIndexOf('.catch(function (e) {', failed);
+  assert.ok(catchStart !== -1, 'no .catch before the failure message');
+  const block = main.slice(catchStart, failed);
+  assert.ok(block.includes("headers['If-None-Match']"), '.catch does not look at the If-None-Match header');
+  assert.ok(block.includes('localStorage.removeItem(RELEASE_CACHE_KEY)'), '.catch does not clear the release cache');
+  assert.match(block, /try \{ localStorage\.removeItem\(RELEASE_CACHE_KEY\); \} catch/, 'cache removal is not wrapped in try/catch');
+});
+
 test('update copy in main.js has no em or en dashes', () => {
   for (const line of main.split('\n')) {
     if (/Update did not complete|Could not check for updates|Gaffer is up to date|Update available, v/.test(line)) {
