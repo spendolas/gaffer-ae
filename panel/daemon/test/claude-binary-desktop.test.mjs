@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { desktopAppCandidates, formatNotFoundMessage } from '../claude-binary.js';
+import { desktopAppCandidates, macDesktopAppCandidates, formatNotFoundMessage } from '../claude-binary.js';
 
 // The Claude desktop app keeps its own copy of the CLI under
 // %APPDATA%\Claude\claude-code and rewrites that layout on its own schedule:
@@ -103,6 +103,45 @@ test('a runaway folder cannot blow up the candidate list (capped per level)', ()
   } finally { t.done(); }
 });
 
+// Mac: the desktop app keeps the same version/hash layout under
+// ~/Library/Application Support/Claude/claude-code, with the binary inside a
+// claude.app bundle.
+function makeHome(dirs) {
+  var home = mkdtempSync(join(tmpdir(), 'gaffer-home-'));
+  var base = join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
+  mkdirSync(base, { recursive: true });
+  dirs.forEach(function (d) { mkdirSync(join(base, d), { recursive: true }); });
+  return { home: home, base: base, done: function () { rmSync(home, { recursive: true, force: true }); } };
+}
+
+var MAC_LEAF = ['claude.app', 'Contents', 'MacOS', 'claude'];
+
+test('mac: <version>/<hash>/claude.app/Contents/MacOS/claude, newest version first (the 2.1.288 / 2.1.289 machine)', () => {
+  var t = makeHome(['2.1.288/0f3a', '2.1.289/1a416eb22c68']);
+  try {
+    var c = macDesktopAppCandidates(t.home);
+    assert.equal(c[0], join.apply(null, [t.base, '2.1.289', '1a416eb22c68'].concat(MAC_LEAF)), 'newest build first');
+    assert.ok(c.indexOf(join.apply(null, [t.base, '2.1.288', '0f3a'].concat(MAC_LEAF))) > 0, 'older build after it');
+    assert.ok(c.every(function (p) { return /claude\.app\/Contents\/MacOS\/claude$/.test(p); }), 'every candidate is the binary inside the bundle, never claude.app itself');
+  } finally { t.done(); }
+});
+
+test('mac: hash folders first, then the direct path, then deeper; numeric version order; missing home is empty', () => {
+  var t = makeHome(['2.1.9/aaa/inner', '2.1.121/bbb']);
+  try {
+    var c = macDesktopAppCandidates(t.home);
+    var v9 = join(t.base, '2.1.9'), v121 = join(t.base, '2.1.121');
+    assert.ok(c.indexOf(join.apply(null, [v121, 'bbb'].concat(MAC_LEAF))) < c.indexOf(join.apply(null, [v9, 'aaa'].concat(MAC_LEAF))), '2.1.121 before 2.1.9');
+    var iHash = c.indexOf(join.apply(null, [v9, 'aaa'].concat(MAC_LEAF)));
+    var iDirect = c.indexOf(join.apply(null, [v9].concat(MAC_LEAF)));
+    var iDeep = c.indexOf(join.apply(null, [v9, 'aaa', 'inner'].concat(MAC_LEAF)));
+    assert.ok(iHash >= 0 && iHash < iDirect && iDirect < iDeep, JSON.stringify(c));
+  } finally { t.done(); }
+  assert.deepEqual(macDesktopAppCandidates(join(tmpdir(), 'gaffer-no-home-' + Date.now())), []);
+  assert.deepEqual(macDesktopAppCandidates(''), []);
+  assert.deepEqual(macDesktopAppCandidates(undefined), []);
+});
+
 test('not-found message explains what was checked (desktop folder versions, what PATH returned)', () => {
   var msg = formatNotFoundMessage({
     desktopBase: 'C:\\Users\\x\\AppData\\Roaming\\Claude\\claude-code',
@@ -113,6 +152,8 @@ test('not-found message explains what was checked (desktop folder versions, what
   assert.match(msg, /2\.1\.288/, 'names the versions it saw in the desktop folder');
   assert.match(msg, /claude\.cmd/, 'shows what PATH returned');
   assert.match(msg, /config\.json/, 'still points at the pinned-path escape hatch');
+  assert.match(msg, /https:\/\/claude\.com\/download/, 'desktop app install link');
+  assert.match(msg, /https:\/\/claude\.ai\/code/, 'CLI install link');
   assert.doesNotMatch(msg, /[\u2013\u2014]/, 'no em or en dashes');
 });
 
