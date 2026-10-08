@@ -1411,8 +1411,9 @@
 
   // Edge case: no Claude on this machine (neither the desktop app's Claude Code
   // nor a standalone CLI). Reuses the ModalFullScreen (Figma no-CLI modal
-  // 524:7807) in its two-button layout: primary -> desktop app download,
-  // secondary (the Cancel slot) -> Claude Code download.
+  // 524:7807) in its two-button layout. The Cancel slot renders on the LEFT
+  // and holds the desktop app button (the design's first button); the OK
+  // slot on the right holds the Claude Code download.
   function showNoCliModal() {
     showModal(
       'Gaffer needs Claude to work. Install the Claude desktop app or Claude Code, then reopen this panel.',

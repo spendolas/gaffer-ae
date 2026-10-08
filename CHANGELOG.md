@@ -14,6 +14,7 @@
 - Updated the libraries the background service is built on to versions without known security problems.
 - The Mac and Windows installer scripts no longer stop when only the Claude desktop app is installed. They finish installing the panel and tell you where to get Claude if neither is found.
 - Only one updater can run at a time. If an update is slow and you press "Force stop & retry", Gaffer now waits for the running update instead of starting a second one over it, which could leave a broken install. A download that stalls is now noticed within about twenty seconds and retried, instead of hanging for up to ten minutes.
+- Windows: updates now work behind a corporate proxy. If the system's own download tool cannot reach GitHub (it ignores the proxy settings from Internet Options and can fail on certificate checks that such proxies block), the updater falls back to the Windows proxy settings and your signed-in credentials. An update that has been stuck for over fifteen minutes is now stopped completely, including the download or install step it was waiting on, before a new one takes over.
 
 ## v0.11.1 - 2026-10-07
 

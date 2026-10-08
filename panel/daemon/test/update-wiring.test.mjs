@@ -90,9 +90,17 @@ test('download timeouts in both updater scripts fit inside the panel give-up', (
   assert.ok(curl, 'update.sh curl line lost its --max-time / --retry / --retry-max-time');
   assert.ok(Number(curl[3]) <= 120, 'curl --retry-max-time exceeds 120s');
   assert.ok(!/--max-time 600/.test(sh));
-  const iwr = ps1.match(/Invoke-WebRequest[^\n]*-TimeoutSec (\d+)/);
-  assert.ok(iwr, 'update.ps1 lost Invoke-WebRequest -TimeoutSec');
-  assert.ok(Number(iwr[1]) * 3 <= 120, 'three Invoke-WebRequest attempts exceed 120s');
+  const winCurl = ps1.match(/& \$curl [^\n]*--max-time (\d+)[^\n]*--retry (\d+)[^\n]*--retry-max-time (\d+)/);
+  assert.ok(winCurl, 'update.ps1 curl.exe line lost its --max-time / --retry / --retry-max-time');
+  assert.ok(Number(winCurl[3]) <= 120, 'curl.exe --retry-max-time exceeds 120s');
+  // The system-proxy fallback (HttpWebRequest) only starts when curl gave up
+  // within 90s and has its own 150s budget: 90 + 150 stays under the
+  // curl-only worst case of 270s.
+  assert.ok(/\$curlSeconds -ge 90/.test(ps1), 'update.ps1 lost the 90s cut-off for starting the fallback');
+  const budget = ps1.match(/TotalSeconds -ge (\d+)\) \{ throw "download exceeded its/);
+  assert.ok(budget, 'update.ps1 fallback lost its hard total budget');
+  assert.ok(90 + Number(budget[1]) <= 270, 'fallback worst case exceeds the curl-only worst case');
+  assert.ok(/\$req\.ReadWriteTimeout = \d+/.test(ps1), 'update.ps1 fallback lost its per-read stall bound');
   assert.ok(/\$elapsed -ge 110/.test(ps1), 'update.ps1 has no total download deadline');
   assert.ok(main.includes('waited >= 180000'), 'panel give-up moved; re-check the script timeouts against it');
 });

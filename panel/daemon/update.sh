@@ -26,47 +26,107 @@ echo "=== Update started: $(date) ==="
 # retry" after its 180s give-up, or a manual run next to the panel's) would
 # rsync over each other and corrupt the install, so the whole run holds
 # $LOCK_DIR, created atomically with mkdir and holding this PID. A lock whose
-# PID is dead or is not an update.sh is abandoned and taken over; a lock older
-# than 15 minutes whose holder is still an update.sh is a stuck updater, which
-# is stopped first, then taken over. A lock younger than 30 seconds with no
-# pid yet belongs to an updater between its mkdir and its pid write, and
-# counts as busy. The takeover itself is an atomic rename, so two updaters
-# finding the same stale lock cannot each remove the other's fresh one.
+# PID is dead or is not a daemon/update.sh is abandoned and taken over; a lock
+# older than 15 minutes whose holder is still an update.sh is a stuck updater,
+# which is stopped first (the whole process tree, not just its shell), then
+# taken over. A lock younger than 30 seconds with no pid yet belongs to an
+# updater between its mkdir and its pid write, and counts as busy.
+#
+# Takeovers are serialized by a second mkdir mutex, $TAKEOVER_DIR: only its
+# holder may stop or remove a lock, and it re-reads the lock's pid inside the
+# mutex and only removes the lock if that pid is still the one it judged
+# stale. Without this, updater B (which read the stale pid a moment earlier)
+# could rename away updater A's fresh lock. The EXIT trap, in turn, only
+# deletes a lock whose pid file still holds THIS pid, so a losing updater can
+# never delete the winner's lock on its way out. A takeover mutex older than
+# 60 seconds was left by a crashed updater and is removed.
 # panel/main.js reads the same lock to decide whether an updater is still
 # running; keep the path and layout in sync.
 LOCK_DIR="${TMPDIR:-/tmp}/gaffer-update.lock"
+TAKEOVER_DIR="$LOCK_DIR.takeover"
 HAVE_LOCK=""
-# True when the pid is alive and its command line is an update.sh.
+HAVE_TAKEOVER=""
+# GAFFER_UPDATE_TEST_DELAY (seconds) widens the window between reading a
+# stale lock's pid and entering the takeover mutex. Only
+# scripts/test-update-sh.sh sets it, to make the takeover race deterministic.
+TEST_DELAY="${GAFFER_UPDATE_TEST_DELAY:-}"
+# True when the pid is alive, is not this very process, and its command line
+# is a daemon/update.sh (the panel spawns the script by that path). The pid's
+# start time is not compared with the lock's age: ps etime parsing differs
+# across macOS versions and the path match already rules out the common
+# pid-reuse cases.
 lock_holder_is_updater() {
   local pid="$1"
   [ -n "$pid" ] || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" != "$$" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  ps -o command= -p "$pid" 2>/dev/null | grep -q 'update\.sh'
+  ps -o command= -p "$pid" 2>/dev/null | grep -q 'daemon/update\.sh'
 }
 # -mmin +15 prints the dir only when it is older than 15 minutes
 lock_is_old() { [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +15 2>/dev/null)" ]; }
-lock_is_young() {
+dir_age_seconds() {
   local mtime now
-  mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)"
+  mtime="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
   now="$(date +%s)"
-  [ $((now - mtime)) -lt 30 ]
+  echo $((now - mtime))
+}
+lock_is_young() { [ "$(dir_age_seconds "$LOCK_DIR")" -lt 30 ]; }
+# Signal the holder and everything it started. The panel spawns update.sh
+# detached, so the holder normally leads its own process group and the whole
+# group gets the signal; otherwise its children are signalled one by one,
+# then the holder. Killing only the shell would leave its curl, rsync or npm
+# running, and a bash waiting on a foreground child does not even act on
+# SIGTERM until that child exits.
+signal_holder_tree() {
+  local pid="$1" sig="$2" pgid child
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [ -n "$pgid" ] && [ "$pgid" = "$pid" ]; then
+    kill "-$sig" -- "-$pid" 2>/dev/null || true
+  else
+    # Direct children by parent pid (ps, not pkill -P: pkill is what the
+    # daemon-stop path uses and what the test harness shims away).
+    for child in $(ps -axo pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }'); do
+      kill "-$sig" "$child" 2>/dev/null || true
+    done
+    kill "-$sig" "$pid" 2>/dev/null || true
+  fi
 }
 # TERM first, a short wait, then KILL. kill -0 keeps answering for a zombie
 # whose parent has not reaped it yet, so the wait is bounded, not a condition.
+# Once the holder is gone its EXIT trap has already run (a pre-fix holder's
+# trap deletes the lock unconditionally); the final pause lets the file
+# system settle before the caller re-reads the lock.
 stop_lock_holder() {
   local pid="$1" i
   echo "Stopping an update that has run for over 15 minutes (pid $pid)"
-  kill -TERM "$pid" 2>/dev/null || true
+  signal_holder_tree "$pid" TERM
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 "$pid" 2>/dev/null || return 0
+    kill -0 "$pid" 2>/dev/null || break
     sleep 0.3
   done
-  kill -KILL "$pid" 2>/dev/null || true
-  sleep 0.3
+  if kill -0 "$pid" 2>/dev/null; then
+    signal_holder_tree "$pid" KILL
+  fi
+  sleep 0.5
+}
+# Serialize takeovers. Returns 1 when another live updater is mid-takeover.
+take_takeover_mutex() {
+  local age
+  if mkdir "$TAKEOVER_DIR" 2>/dev/null; then HAVE_TAKEOVER=1; return 0; fi
+  age="$(dir_age_seconds "$TAKEOVER_DIR")"
+  if [ -d "$TAKEOVER_DIR" ] && [ "$age" -ge 60 ]; then
+    echo "Removing a takeover marker left by a crashed updater ($age s old)"
+    rm -rf "$TAKEOVER_DIR"
+    if mkdir "$TAKEOVER_DIR" 2>/dev/null; then HAVE_TAKEOVER=1; return 0; fi
+  fi
+  return 1
+}
+release_takeover_mutex() {
+  if [ -n "$HAVE_TAKEOVER" ]; then rmdir "$TAKEOVER_DIR" 2>/dev/null || true; HAVE_TAKEOVER=""; fi
 }
 acquire_lock() {
-  local tries=0 holder stale
+  local tries=0 holder now_holder stale
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     if [ ! -e "$LOCK_DIR" ]; then
       # Released between our mkdir and now (or mkdir cannot work here): retry, bounded.
@@ -95,16 +155,43 @@ acquire_lock() {
       echo "err:lock"
       exit 1
     fi
+    [ -n "$TEST_DELAY" ] && sleep "$TEST_DELAY"
+    if ! take_takeover_mutex; then
+      echo "Another update is taking over the abandoned lock, leaving it to finish."
+      echo "busy:already-running"
+      exit 3
+    fi
+    # Inside the mutex: the lock may have been taken over (and re-created)
+    # since the pid was read. Only act on the lock we judged stale.
+    now_holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ ! -d "$LOCK_DIR" ] || [ "$now_holder" != "$holder" ]; then
+      release_takeover_mutex
+      continue
+    fi
     if lock_holder_is_updater "$holder"; then
       stop_lock_holder "$holder"
+      now_holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+      if [ -d "$LOCK_DIR" ] && [ "$now_holder" != "$holder" ]; then
+        release_takeover_mutex
+        continue
+      fi
     fi
-    echo "Taking over an abandoned update lock (pid ${holder:-unknown})"
-    # Rename, then delete the copy. Only one of several takers can win the
-    # rename; the others fall through to mkdir and find the winner's lock.
-    stale="$LOCK_DIR.stale.$$"
-    if mv "$LOCK_DIR" "$stale" 2>/dev/null; then
-      rm -rf "$stale"
+    if [ -d "$LOCK_DIR" ]; then
+      echo "Taking over an abandoned update lock (pid ${holder:-unknown})"
+      stale="$LOCK_DIR.stale.$$"
+      if mv "$LOCK_DIR" "$stale" 2>/dev/null; then
+        rm -rf "$stale"
+      fi
     fi
+    # Still inside the mutex: the taker gets the lock, nobody can slip in
+    # between the removal and the re-creation.
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      echo "$$" > "$LOCK_DIR/pid"
+      HAVE_LOCK=1
+      release_takeover_mutex
+      return 0
+    fi
+    release_takeover_mutex
   done
   echo "$$" > "$LOCK_DIR/pid"
   HAVE_LOCK=1
@@ -112,7 +199,10 @@ acquire_lock() {
 cleanup() {
   cd /
   rm -rf "$TMP_DIR"
-  if [ -n "$HAVE_LOCK" ]; then rm -rf "$LOCK_DIR"; fi
+  release_takeover_mutex
+  # Only ever delete a lock that is still ours: a stuck run that was taken
+  # over must not delete its successor's lock on the way out.
+  if [ -n "$HAVE_LOCK" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK_DIR"; fi
 }
 # The lock and the temp dir go away however the script exits. Set before the
 # lock is taken so no exit path can leak it; a busy exit never held it.
@@ -153,17 +243,20 @@ fi
 
 # Download the release asset and extract it into a SUBFOLDER of TMP_DIR, so
 # the downloaded archive itself is never synced into the panel dir.
-# Download budget: the asset is a few MB, and the limits bound STALLS, not a
-# slow but moving transfer. An attempt is abandoned when the connection takes
-# over 15s or the speed stays under 2 KB/s for 20s (a hung proxy, a dropped
-# link), and --max-time caps each attempt at 150s. curl retries such
-# timeouts twice, but --retry-max-time 120 only lets a retry START while
-# less than 120s have passed since the first attempt began. Worst case: the
-# first attempt dies just under 120s, the second runs its full 150s, no
-# third starts: about 270s of download, then extract + rsync + npm. The
-# panel (main.js waitForUpdatedVersion) gives up after 180s but extends once
-# by 180s while this lock is held, so the whole run has 360s. A 4xx answer
-# (404 on a missing asset) is final: curl does not retry it.
+# Download budget: the asset is a few MB. An attempt is abandoned when the
+# connection takes over 15s or the speed stays under 2 KB/s for 20s (a hung
+# proxy, a dropped link), and --max-time caps each attempt at 150s, which
+# also fails any link slower than asset size / 150s (about 20 KB/s for a
+# 3 MB asset). curl retries such timeouts twice, but --retry-max-time 120
+# only lets a retry START while less than 120s have passed since the first
+# attempt began. Worst case: the first attempt dies just under 120s, the
+# second runs its full 150s, no third starts: about 270s of download, then
+# extract + rsync + npm. The panel (main.js waitForUpdatedVersion) gives up
+# after 180s but extends once by 180s while this lock is held, a 360s
+# window; a worst-case download plus a slow npm install can outlive it, and
+# then the panel offers "Force stop & retry", whose second updater exits busy
+# against this lock, so a slow run is never corrupted, only late. A 4xx
+# answer (404 on a missing asset) is final: curl does not retry it.
 mkdir -p "$EXTRACT_DIR"
 echo "Downloading $ASSET_SOURCE"
 case "$ASSET_SOURCE" in
