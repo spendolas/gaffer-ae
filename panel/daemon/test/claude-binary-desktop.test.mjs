@@ -122,7 +122,7 @@ test('mac: <version>/<hash>/claude.app/Contents/MacOS/claude, newest version fir
     var c = macDesktopAppCandidates(t.home);
     assert.equal(c[0], join.apply(null, [t.base, '2.1.289', '1a416eb22c68'].concat(MAC_LEAF)), 'newest build first');
     assert.ok(c.indexOf(join.apply(null, [t.base, '2.1.288', '0f3a'].concat(MAC_LEAF))) > 0, 'older build after it');
-    assert.ok(c.every(function (p) { return /claude\.app\/Contents\/MacOS\/claude$/.test(p); }), 'every candidate is the binary inside the bundle, never claude.app itself');
+    assert.ok(c.every(function (p) { return /claude\.app[\\/]Contents[\\/]MacOS[\\/]claude$/.test(p); }), 'every candidate is the binary inside the bundle, never claude.app itself');
   } finally { t.done(); }
 });
 
