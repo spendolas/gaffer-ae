@@ -1418,8 +1418,10 @@
       'Gaffer needs Claude to work. Install the Claude desktop app or Claude Code, then reopen this panel.',
       {
         title: 'Missing pieces',
-        confirmLabel: 'Get Claude app', onConfirm: openClaudeAppDownload,
-        cancelLabel: 'Get Claude Code', onCancel: openClaudeCodeDownload
+        // The Cancel slot renders on the left, the OK slot on the right; the
+        // Figma frame puts the app button first, so the slots are swapped.
+        cancelLabel: 'Get Claude app', onCancel: openClaudeAppDownload,
+        confirmLabel: 'Get Claude Code', onConfirm: openClaudeCodeDownload
       }
     );
   }
