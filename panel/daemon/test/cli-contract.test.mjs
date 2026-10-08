@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newTurnState, observe, classify, userMessage, LAST_VERIFIED } from '../cli-contract.js';
+import { newTurnState, observe, classify, userMessage, LAST_VERIFIED, versionStatus, versionNotice } from '../cli-contract.js';
 
 // Each fixture is a scrubbed stream-json capture from a real `claude -p` run
-// (standalone 2.1.236 and the desktop app's 2.1.289), replayed through the
-// classifier exactly as chat-handler feeds it: one parsed event per line,
-// then the exit code and stderr at close.
+// (standalone 2.1.236, the desktop app's 2.1.289 and 2.1.293), replayed
+// through the classifier exactly as chat-handler feeds it: one parsed event
+// per line, then the exit code and stderr at close. The 2.1.293 set holds
+// only the $0 failure probes (no paid success turn was re-captured).
 
 var FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cli');
 var KINDS = ['ok', 'stale_session', 'too_long', 'auth', 'model', 'api_error', 'unknown_error'];
@@ -40,7 +41,17 @@ function replay(name, mutate) {
     assert.equal(r.st.cliVersion, '2.1.' + v);
     assert.equal(r.st.sawResult, true);
   });
+});
 
+test('auth-293: signed-out turn is auth via structure and carries the CLI version', () => {
+  var r = replay('auth-293');
+  assert.equal(r.verdict.kind, 'auth');
+  assert.equal(r.verdict.via, 'structure');
+  assert.equal(r.st.cliVersion, '2.1.293');
+  assert.equal(r.st.assistantApiError, true);
+});
+
+['236', '289', '293'].forEach(function (v) {
   test('resume-' + v + ': failed --resume is stale_session via structure', () => {
     var r = replay('resume-' + v);
     assert.equal(r.verdict.kind, 'stale_session');
@@ -228,5 +239,35 @@ test('userMessage has no em or en dashes for any kind, and never throws', () => 
 });
 
 test('LAST_VERIFIED is the fixture range', () => {
-  assert.deepEqual(LAST_VERIFIED, { min: '2.1.236', max: '2.1.289' });
+  assert.deepEqual(LAST_VERIFIED, { min: '2.1.236', max: '2.1.293' });
+  // Every version that has fixtures sits inside the range.
+  ['2.1.236', '2.1.289', '2.1.293'].forEach(function (v) { assert.equal(versionStatus(v), 'ok', v); });
+});
+
+test('versionStatus: numeric compare table', () => {
+  var table = [
+    ['2.1.236', 'ok'], ['2.1.289', 'ok'], ['2.1.293', 'ok'], ['2.1.250', 'ok'],
+    ['2.1.294', 'newer'], ['2.1.300', 'newer'], ['2.2.0', 'newer'], ['3.0.0', 'newer'], ['10.0.0', 'newer'],
+    ['2.1.235', 'older'], ['2.1.9', 'older'], ['2.0.999', 'older'], ['1.9.9', 'older'],
+    ['2.1.293 (Claude Code)', 'ok'], ['v2.1.294', 'newer'], ['  2.1.230\n', 'older'],
+    ['unknown', 'unknown'], ['', 'unknown'], ['2.1', 'unknown'], ['abc', 'unknown'],
+    [null, 'unknown'], [undefined, 'unknown'], [2.1, 'unknown'], [{}, 'unknown'],
+  ];
+  table.forEach(function (row) {
+    assert.equal(versionStatus(row[0]), row[1], JSON.stringify(row[0]));
+  });
+});
+
+test('versionNotice: copy only for newer/older, names both ends, no dashes', () => {
+  assert.equal(versionNotice('2.1.289'), null);
+  assert.equal(versionNotice('unknown'), null);
+  assert.equal(versionNotice(null), null);
+  var newer = versionNotice('2.1.310 (Claude Code)');
+  assert.match(newer, /tested with Claude Code 2\.1\.236 to 2\.1\.293/);
+  assert.match(newer, /You are on 2\.1\.310, which is newer/);
+  assert.match(newer, /update Gaffer/);
+  assert.equal(newer.indexOf('(Claude Code)'), -1, 'only the bare version is shown');
+  var older = versionNotice('2.1.200');
+  assert.match(older, /2\.1\.200, which is older/);
+  [newer, older].forEach(function (m) { assert.equal(/[–—]/.test(m), false); });
 });
