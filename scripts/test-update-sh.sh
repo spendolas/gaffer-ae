@@ -10,9 +10,12 @@
 # that nothing in the install changed.
 #
 # Further cases cover the single-updater lock: a second updater exits busy
-# while a live one holds the lock, an abandoned lock (dead pid, or older than
-# 15 minutes) is taken over, the lock is gone after success and after a
-# failure, and the dev-install refusal still ends the log with err:dev-install.
+# while a live one holds the lock, an abandoned lock (dead pid) is taken over,
+# a live holder older than 15 minutes is stopped and taken over, a seconds-old
+# lock with no pid yet counts as busy while an older one without a pid is
+# taken over, two updaters taking over the same stale lock yield exactly one
+# winner, the lock is gone after success and after a failure, and the
+# dev-install refusal still ends the log with err:dev-install.
 #
 # update.sh stops whatever listens on port 9823, so this refuses to run while
 # a Gaffer daemon is up. Close the Gaffer panel (or get the owner's OK to stop
@@ -178,7 +181,9 @@ if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after a failed update"
 BUSY_INSTALL="$SCRATCH/Application Support/busy/com.gaffer.panel"
 new_install "$BUSY_INSTALL"
 FAKE_PID="$(start_fake_updater)"
-trap 'pkill -P "$FAKE_PID" 2>/dev/null; kill "$FAKE_PID" 2>/dev/null; rm -rf "$SCRATCH"' EXIT
+# Each command tolerates an already-gone process: under set -e a failing
+# command in the EXIT trap would turn an ALL PASS run into exit 1.
+trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
 mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
 BEFORE="$(tree_hash "$BUSY_INSTALL")"
 set +e
@@ -220,7 +225,65 @@ else
   fail "update.sh did not take over the 20 minute old lock (log: $LOG)"
 fi
 if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the old-lock run"; else pass "lock released after the old-lock run"; fi
+if grep -q "Stopping an update that has run for over 15 minutes (pid $FAKE_PID)" "$LOG"; then pass "log records stopping the stuck holder"; else fail "no stop line for the stuck holder in the log"; fi
+# Reap it (the harness is its parent) so kill -0 reports the truth.
+wait "$FAKE_PID" 2>/dev/null || true
+if kill -0 "$FAKE_PID" 2>/dev/null; then fail "stuck holder (pid $FAKE_PID) is still alive after the takeover"; else pass "stuck holder was stopped before the takeover"; fi
 stop_fake_updater "$FAKE_PID"
+
+# ---------- Case 5b: a seconds-old lock with no pid yet is busy, not abandoned ----------
+# An updater between its mkdir and its pid write looks exactly like this.
+YOUNG_INSTALL="$SCRATCH/Application Support/young-lock/com.gaffer.panel"
+new_install "$YOUNG_INSTALL"
+mkdir -p "$LOCK_DIR"
+BEFORE="$(tree_hash "$YOUNG_INSTALL")"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$YOUNG_INSTALL/daemon/update.sh"
+YOUNG_EXIT=$?
+set -e
+if [ "$YOUNG_EXIT" -eq 3 ]; then pass "updater exited 3 on a seconds-old lock without a pid"; else fail "updater exited $YOUNG_EXIT on a seconds-old lock without a pid, expected 3"; fi
+if [ "$(tail -n1 "$LOG")" = "busy:already-running" ]; then pass "young-lock run ends with busy:already-running"; else fail "young-lock run last log line: $(tail -n1 "$LOG")"; fi
+if [ -d "$LOCK_DIR" ] && [ ! -e "$LOCK_DIR/pid" ]; then pass "young lock left in place for its owner"; else fail "young lock was removed or rewritten"; fi
+if [ "$BEFORE" = "$(tree_hash "$YOUNG_INSTALL")" ]; then pass "young-lock run left the install untouched"; else fail "young-lock run modified the install"; fi
+rm -rf "$LOCK_DIR"
+
+# ---------- Case 5c: a lock without a pid that is minutes old is abandoned ----------
+NOPID_INSTALL="$SCRATCH/Application Support/nopid-lock/com.gaffer.panel"
+new_install "$NOPID_INSTALL"
+mkdir -p "$LOCK_DIR"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$NOPID_INSTALL/daemon/update.sh"; then
+  pass "update.sh took over the 2 minute old pid-less lock and exited 0"
+else
+  fail "update.sh did not take over the 2 minute old pid-less lock (log: $LOG)"
+fi
+if grep -q "Taking over an abandoned update lock (pid unknown)" "$LOG"; then pass "log records the pid-less takeover"; else fail "no pid-less takeover line in the log"; fi
+if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the pid-less takeover"; else pass "lock released after the pid-less takeover"; fi
+
+# ---------- Case 5d: two updaters taking over the same stale lock yield one winner ----------
+# Both find the dead pid at the same moment. The rename-based takeover lets
+# only one of them remove the stale lock; the other must then see the
+# winner's fresh lock and exit busy, never delete it.
+RACE_A="$SCRATCH/Application Support/race-a/com.gaffer.panel"
+RACE_B="$SCRATCH/Application Support/race-b/com.gaffer.panel"
+new_install "$RACE_A"
+new_install "$RACE_B"
+DEAD_PID="$(start_fake_updater)"
+stop_fake_updater "$DEAD_PID"
+mkdir -p "$LOCK_DIR" && echo "$DEAD_PID" > "$LOCK_DIR/pid"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+: > "$LOG"
+set +e
+( PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$RACE_A/daemon/update.sh"; echo $? > "$SCRATCH/race-a.exit" ) &
+( PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$RACE_B/daemon/update.sh"; echo $? > "$SCRATCH/race-b.exit" ) &
+wait
+set -e
+RACE_EXITS="$(printf '%s\n' "$(cat "$SCRATCH/race-a.exit")" "$(cat "$SCRATCH/race-b.exit")" | sort | tr '\n' ' ')"
+if [ "$RACE_EXITS" = "0 3 " ]; then pass "racing takeovers exited 0 and 3 (one winner, one busy)"; else fail "racing takeovers exited: $RACE_EXITS (expected one 0 and one 3)"; fi
+if [ "$(grep -c '^ok:9.9.9$' "$LOG")" = "1" ]; then pass "exactly one racing updater installed the release"; else fail "$(grep -c '^ok:9.9.9$' "$LOG") racing updaters installed the release"; fi
+if [ "$(grep -c '^busy:already-running$' "$LOG")" = "1" ]; then pass "exactly one racing updater exited busy"; else fail "$(grep -c '^busy:already-running$' "$LOG") racing updaters exited busy"; fi
+if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the racing takeovers"; else pass "lock released after the racing takeovers"; fi
+if ls "$TMPDIR" | grep -q 'gaffer-update.lock.stale'; then fail "stale lock copy left behind"; else pass "no stale lock copy left behind"; fi
 
 # ---------- Case 6: the dev-install refusal still ends the log with err:dev-install ----------
 DEV_INSTALL="$SCRATCH/dev-checkout/panel"

@@ -13,8 +13,20 @@ Write-Host "=== Gaffer Installer (Windows) ==="
 # whichever is present at runtime, see panel\daemon\claude-binary.js), so a
 # missing Claude is a warning here, not a failed install.
 Write-Host "Checking prerequisites..."
+
+# Runs a native command and returns its exit code. Under the script's
+# $ErrorActionPreference = "Stop", stderr text from a native command that
+# succeeded (claude prints notices there) would otherwise terminate the
+# install; the preference set here is local to this function.
+function Invoke-Native([string] $exe, [string[]] $arguments) {
+    $ErrorActionPreference = "Continue"
+    $null = & $exe @arguments 2>&1
+    return $LASTEXITCODE
+}
+
 $claudeBin = $null
 $claudeKind = $null
+$npmShim = $null
 $candidates = @(
     "$env:USERPROFILE\.local\bin\claude.exe",
     "$env:LOCALAPPDATA\Programs\claude-code\claude.exe",
@@ -25,8 +37,9 @@ foreach ($c in $candidates) {
 }
 if (-not $claudeBin) {
     $cmd = Get-Command claude -ErrorAction SilentlyContinue
-    # only a real .exe: the npm package's .cmd shims cannot be launched by the daemon
+    # only a real .exe: the npm package's .cmd / .ps1 shims cannot be launched by the daemon
     if ($cmd -and $cmd.Source -and ($cmd.Source -like "*.exe")) { $claudeBin = $cmd.Source }
+    elseif ($cmd -and $cmd.Source -and (($cmd.Source -like "*.cmd") -or ($cmd.Source -like "*.ps1"))) { $npmShim = $cmd.Source }
 }
 if ($claudeBin) {
     $claudeKind = "cli"
@@ -47,7 +60,11 @@ if ($claudeBin) {
         }
     }
 }
-if (-not $claudeBin) {
+if (-not $claudeBin -and $npmShim) {
+    Write-Host "Found the npm install of Claude Code, but Gaffer needs the native build or the Claude desktop app: irm https://claude.ai/install.ps1 | iex, or https://claude.com/download"
+    Write-Host "  (npm shim: $npmShim)"
+    Write-Host "  Installing the panel anyway; install one of them before opening Gaffer."
+} elseif (-not $claudeBin) {
     Write-Host "WARNING: no Claude found. Gaffer chat needs the Claude desktop app or Claude Code:"
     Write-Host "  Claude desktop app: https://claude.com/download"
     Write-Host "  Claude Code (CLI):  https://claude.ai/code  (native build: irm https://claude.ai/install.ps1 | iex)"
@@ -135,21 +152,23 @@ if (-not $claudeBin) {
     Write-Host "Skipping MCP server registration (no Claude found)."
 } elseif ($claudeKind -eq "app") {
     $answers = $false
-    try {
-        $null = & $claudeBin --version 2>&1
-        $answers = ($LASTEXITCODE -eq 0)
-    } catch { $answers = $false }
+    try { $answers = ((Invoke-Native $claudeBin @("--version")) -eq 0) } catch { $answers = $false }
     if ($answers) { $registerMcp = $true }
     else { Write-Host "Skipping MCP server registration (the desktop app's Claude Code did not answer --version)." }
 } else {
     $registerMcp = $true
 }
 if ($registerMcp) {
+    # A reinstall: registering again would only warn about the existing entry.
+    $already = $false
+    try { $already = ((Invoke-Native $claudeBin @("mcp", "get", "gaffer")) -eq 0) } catch { $already = $false }
+    if ($already) { Write-Host "  Gaffer MCP server already registered with Claude Code."; $registerMcp = $false }
+}
+if ($registerMcp) {
     Write-Host "Registering Gaffer MCP server..."
     $registered = $false
     try {
-        $null = & $claudeBin mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" 2>&1
-        $registered = ($LASTEXITCODE -eq 0)
+        $registered = ((Invoke-Native $claudeBin @("mcp", "add", "--transport", "http", "-s", "user", "gaffer", "http://127.0.0.1:9824/mcp")) -eq 0)
     } catch { $registered = $false }
     if (-not $registered) {
         Write-Host "WARNING: could not register the Gaffer MCP server with Claude Code. The panel still works;"

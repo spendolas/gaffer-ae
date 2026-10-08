@@ -83,6 +83,9 @@ if [ -z "$CLAUDE_BIN" ]; then
   echo "Skipping MCP server registration (no Claude found)."
 elif [ "$CLAUDE_KIND" = "app" ] && ! "$CLAUDE_BIN" --version >/dev/null 2>&1; then
   echo "Skipping MCP server registration (the desktop app's Claude Code did not answer --version)."
+elif "$CLAUDE_BIN" mcp get gaffer >/dev/null 2>&1; then
+  # A reinstall: registering again would only warn about the existing entry.
+  echo "  Gaffer MCP server already registered with Claude Code."
 else
   echo "Registering Gaffer MCP server..."
   if ! "$CLAUDE_BIN" mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" >/dev/null 2>&1; then

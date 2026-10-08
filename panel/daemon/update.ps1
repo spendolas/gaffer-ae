@@ -32,20 +32,32 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # retry" after its 180s give-up, or a manual run next to the panel's) would
 # robocopy over each other and corrupt the install, so the whole run holds
 # $lockPath, a file created atomically (FileMode CreateNew) holding this PID.
-# A lock whose PID is dead, is not an update.ps1, or that is older than 15
-# minutes is considered abandoned and taken over. panel\main.js reads the same
-# lock to decide whether an updater is still running; keep the path in sync.
+# A lock whose PID is dead or is not an update.ps1 is abandoned and taken
+# over; a lock older than 15 minutes whose holder is still an update.ps1 is a
+# stuck updater, which is stopped first, then taken over. panel\main.js reads
+# the same lock to decide whether an updater is still running; keep the path
+# in sync.
 $lockPath = Join-Path $env:TEMP "gaffer-update.lock"
 $script:haveLock = $false
 
-function Test-LockHolderRunning([string] $holder) {
+# The Win32_Process of a live update.ps1 holder, or $null.
+function Get-LockHolderProcess([string] $holder) {
     $holderPid = 0
-    if (-not [int]::TryParse($holder, [ref] $holderPid) -or $holderPid -le 0) { return $false }
+    if (-not [int]::TryParse($holder, [ref] $holderPid) -or $holderPid -le 0) { return $null }
     $proc = $null
     try { $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -ErrorAction SilentlyContinue } catch {}
-    if (-not $proc -or -not ($proc.CommandLine -like "*update.ps1*")) { return $false }
-    $age = (Get-Date) - (Get-Item -LiteralPath $lockPath).LastWriteTime
-    return ($age.TotalMinutes -lt 15)
+    if (-not $proc -or -not ($proc.CommandLine -like "*update.ps1*")) { return $null }
+    return $proc
+}
+
+# Stop-Process -Force, then a short wait for the process to go away.
+function Stop-LockHolder([int] $holderPid) {
+    Write-Host "Stopping an update that has run for over 15 minutes (pid $holderPid)"
+    Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 20; $i++) {
+        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
 }
 
 function Read-LockHolder {
@@ -60,33 +72,59 @@ function Read-LockHolder {
 
 $tries = 0
 while (-not $script:haveLock) {
+    $fs = $null
     try {
-        $fs = New-Object System.IO.FileStream($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-        try {
-            $bytes = [System.Text.Encoding]::ASCII.GetBytes("$PID")
-            $fs.Write($bytes, 0, $bytes.Length)
-        } finally { $fs.Dispose() }
+        # The static File.Open, not New-Object FileStream: PS 5.1 reports a
+        # failing constructor inside New-Object as a MethodInvocationException,
+        # which a typed catch may not match. The catch below is untyped for the
+        # same reason: ANY failure while the lock file exists means another
+        # updater created it first (CreateNew lost the race).
+        $fs = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("$PID")
+        $fs.Write($bytes, 0, $bytes.Length)
+        $fs.Dispose()
+        $fs = $null
         $script:haveLock = $true
-    } catch [System.IO.IOException] {
+    } catch {
+        if ($fs) { try { $fs.Dispose() } catch {} }
+        $tries++
+        $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue
+        if (-not $lockItem) {
+            # No lock file: it was released between our attempt and now, or
+            # the lock cannot be created here at all. Retry, bounded.
+            if ($tries -gt 3) {
+                Write-Host "ERROR: could not create the update lock at $lockPath ($($_.Exception.Message))"
+                Write-Output "err:lock"
+                Stop-Transcript
+                exit 1
+            }
+            continue
+        }
         $holder = Read-LockHolder
-        if (Test-LockHolderRunning $holder) {
+        $proc = Get-LockHolderProcess $holder
+        $lockIsOld = (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -ge 15)
+        if ($proc -and -not $lockIsOld) {
             Write-Host "Another update is already running (pid $holder), leaving it to finish."
             Write-Output "busy:already-running"
             Stop-Transcript
             exit 3
         }
-        $tries++
         if ($tries -gt 3) {
             Write-Host "ERROR: could not take the update lock at $lockPath"
             Write-Output "err:lock"
             Stop-Transcript
             exit 1
         }
+        if ($proc) { Stop-LockHolder ([int] $proc.ProcessId) }
         if (-not $holder) { $holder = "unknown" }
         Write-Host "Taking over an abandoned update lock (pid $holder)"
         Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
     }
 }
+
+# From here on the lock is held, so everything runs inside this try: the
+# finally releases the lock on every way out, exit calls included.
+try {
 
 # Stop-Daemon lives in its own file (dot-sourced) so it stays plain-function-only
 # and can be unit-tested in isolation - see scripts/windows-tests/test-4-stop-daemon-stray-pid.ps1
@@ -94,8 +132,7 @@ while (-not $script:haveLock) {
 
 # Every failure after this point goes through here: log, clean up, exit 1.
 # The panel dir is untouched until the robocopy step, and version.json is
-# only replaced at the very end. The lock is released by the finally below,
-# which PowerShell runs on exit as well.
+# only replaced at the very end.
 function Exit-Update([string] $message) {
     Write-Host "ERROR: $message"
     if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
@@ -103,12 +140,37 @@ function Exit-Update([string] $message) {
     exit 1
 }
 
-# Download budget: the asset is a few MB. Each attempt gets 35s, two retries,
-# and no attempt starts once 110s have passed, so a hung download dies in
-# about 110s at worst, inside the panel's 180s give-up (main.js
-# reloadAfterUpdate) rather than outliving it. A 4xx answer (404 on a missing
-# asset) is final and is not retried.
+# Download budget: the asset is a few MB, and the limits bound STALLS, not a
+# slow but moving transfer. Invoke-WebRequest -TimeoutSec only bounds the
+# response headers on PS 5.1 (a stalled body can hang for minutes), so the
+# download goes through the curl.exe Windows ships (Windows 10 1803+), with
+# the same limits as update.sh: an attempt is abandoned when the connection
+# takes over 15s or the speed stays under 2 KB/s for 20s, --max-time caps
+# each attempt at 150s, curl retries such timeouts twice, and
+# --retry-max-time 120 only lets a retry START while less than 120s have
+# passed. Worst case: the first attempt dies just under 120s, the second runs
+# its full 150s, no third starts: about 270s, then extract + robocopy + npm.
+# The panel (main.js waitForUpdatedVersion) gives up after 180s but extends
+# once by 180s while this lock is held, so the whole run has 360s. A 4xx
+# answer (404 on a missing asset) is final: curl does not retry it, and the
+# error carries the status in parentheses like Invoke-WebRequest's did.
+# Invoke-WebRequest stays as the fallback for a Windows without curl.exe.
 function Get-ReleaseAsset([string] $uri, [string] $outFile) {
+    $curl = Join-Path $env:SystemRoot "System32\curl.exe"
+    if (Test-Path -LiteralPath $curl -PathType Leaf) {
+        # Native stderr must not become a terminating error under the script's
+        # $ErrorActionPreference = "Stop"; this assignment is local to the function.
+        $ErrorActionPreference = "Continue"
+        $output = & $curl -f -L -sS --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 -o $outFile $uri 2>&1
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if ($code -eq 0) { return }
+        $text = ($output | ForEach-Object { "$_" }) -join " "
+        if ($code -eq 22 -and $text -match "returned error: (\d{3})") {
+            throw "The remote server returned an error: ($($Matches[1]))."
+        }
+        throw "curl.exe exit $code : $text"
+    }
     $started = Get-Date
     $attempt = 0
     while ($true) {
@@ -127,7 +189,6 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
     }
 }
 
-try {
     # Never overwrite a development checkout - a dev install points the panel
     # at a git repo; /PURGE would clobber uncommitted work.
     # Write-Host, not Write-Error: under $ErrorActionPreference = "Stop" the

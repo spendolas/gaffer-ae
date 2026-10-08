@@ -64,10 +64,10 @@ export function rejectBrowserOrigin(req, res, next) {
 export function startMcpServer(port, queue, ctx) {
   ctx = ctx || {};
   var app = express();
-  app.use(express.json());
 
-  // DNS-rebinding protection. The server only binds 127.0.0.1, so the only
-  // way a remote page reaches it is a browser whose DNS resolved some other
+  // DNS-rebinding protection, ahead of the body parser so a refused request
+  // is never parsed. The server only binds 127.0.0.1, so the only way a
+  // remote page reaches it is a browser whose DNS resolved some other
   // hostname to loopback: that request carries the foreign Host and an
   // http(s) Origin. The SDK middleware checks the Host hostname (port-agnostic:
   // 127.0.0.1, localhost, [::1]); the second check refuses any web-page Origin,
@@ -75,6 +75,7 @@ export function startMcpServer(port, queue, ctx) {
   // spawn) is a browser page and none sends one.
   app.use(hostHeaderValidation(['127.0.0.1', 'localhost', '[::1]']));
   app.use(rejectBrowserOrigin);
+  app.use(express.json());
 
   // Map of active transports by session ID
   var transports = {};
