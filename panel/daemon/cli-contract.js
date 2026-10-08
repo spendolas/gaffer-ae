@@ -8,8 +8,47 @@
 // spawns, logs or throws: a malformed event is simply not informative.
 
 // CLI versions whose stream shapes the fixtures in test/fixtures/cli were
-// captured from. Exported for a future "newer than tested" notice; unused now.
-export var LAST_VERIFIED = { min: '2.1.236', max: '2.1.289' };
+// captured from (the $0 failure probes: bad --resume, signed out, bad model,
+// prompt too long). Bump max only after replaying those probes against the
+// new binary and adding its captures. chat-handler shows a one-time notice
+// when the running CLI falls outside this range; it never blocks anything.
+export var LAST_VERIFIED = { min: '2.1.236', max: '2.1.293' };
+
+// Leading x.y.z of a version string as numbers, or null when there is none.
+function parseVersion(v) {
+  if (typeof v !== 'string') return null;
+  var m = /^\s*v?(\d+)\.(\d+)\.(\d+)/.exec(v);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+// Numeric compare of two x.y.z arrays: negative, zero or positive.
+function compareParsed(a, b) {
+  for (var i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+// 'ok' inside LAST_VERIFIED (inclusive), 'newer' above max, 'older' below
+// min, 'unknown' for anything that is not a version. Pure.
+export function versionStatus(version) {
+  var v = parseVersion(version);
+  if (!v) return 'unknown';
+  var min = parseVersion(LAST_VERIFIED.min), max = parseVersion(LAST_VERIFIED.max);
+  if (compareParsed(v, max) > 0) return 'newer';
+  if (compareParsed(v, min) < 0) return 'older';
+  return 'ok';
+}
+
+// Panel copy for an out-of-range CLI, or null when there is nothing to say.
+// User-facing: no em or en dashes.
+export function versionNotice(version) {
+  var status = versionStatus(version);
+  if (status !== 'newer' && status !== 'older') return null;
+  var shown = parseVersion(version).join('.');
+  return 'Gaffer was tested with Claude Code ' + LAST_VERIFIED.min + ' to ' + LAST_VERIFIED.max
+    + '. You are on ' + shown + ', which is ' + status + ' than that range. If chat misbehaves, update Gaffer.';
+}
 
 var KNOWN_TYPES = ['system', 'assistant', 'user', 'result', 'rate_limit_event', 'stream_event'];
 

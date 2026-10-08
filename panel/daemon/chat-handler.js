@@ -8,9 +8,32 @@ import { fileURLToPath } from 'node:url';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
-import { newTurnState, observe, classify, userMessage as turnUserMessage } from './cli-contract.js';
+import { newTurnState, observe, classify, userMessage as turnUserMessage, versionStatus, versionNotice } from './cli-contract.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// The "Claude Code is outside the tested range" notice goes out at most once
+// per daemon life, across every panel and ChatHandler (one daemon serves all
+// AE instances, and the binary is the same for all of them).
+var cliVersionNoticeSent = false;
+export function resetCliVersionNoticeForTests() { cliVersionNoticeSent = false; }
+
+// After the first init event that names a CLI version: if it is outside
+// LAST_VERIFIED, log once and send one chat_event notice (the panel renders
+// it as an ordinary chat notice). Warn only: never blocks, never changes the
+// spawn, never throws; an unknown or unparsable version shows nothing.
+function maybeNoticeCliVersion(version, socket) {
+  if (cliVersionNoticeSent || !version) return;
+  try {
+    var status = versionStatus(version);
+    if (status !== 'newer' && status !== 'older') return;
+    cliVersionNoticeSent = true;
+    console.log('Gaffer chat: Claude Code ' + version + ' is ' + status + ' than the tested range, notifying the panel once');
+    if (socket && socket.readyState === 1) {
+      socket.send(JSON.stringify({ type: 'chat_event', event: 'cli_version', message: versionNotice(version) }));
+    }
+  } catch (e) { /* a notice must never affect the turn */ }
+}
 
 var GAFFER_TOOLS = [
   'mcp__gaffer__runJSX',
@@ -953,6 +976,7 @@ export class ChatHandler {
         return;
       }
       observe(st, event);
+      if (st.sawInit && st.cliVersion) maybeNoticeCliVersion(st.cliVersion, socket);
       try {
         this._processEvent(event, socket);
       } catch (e) {
