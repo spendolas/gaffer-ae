@@ -20,6 +20,9 @@ Write-Host "Checking prerequisites..."
 # install; the preference set here is local to this function.
 function Invoke-Native([string] $exe, [string[]] $arguments) {
     $ErrorActionPreference = "Continue"
+    # A launch that fails outright leaves $LASTEXITCODE untouched, so a stale
+    # 0 from an earlier call would read as success. Reset it first.
+    $global:LASTEXITCODE = -1
     $null = & $exe @arguments 2>&1
     return $LASTEXITCODE
 }

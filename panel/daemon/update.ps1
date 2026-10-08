@@ -32,32 +32,62 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # retry" after its 180s give-up, or a manual run next to the panel's) would
 # robocopy over each other and corrupt the install, so the whole run holds
 # $lockPath, a file created atomically (FileMode CreateNew) holding this PID.
-# A lock whose PID is dead or is not an update.ps1 is abandoned and taken
-# over; a lock older than 15 minutes whose holder is still an update.ps1 is a
-# stuck updater, which is stopped first, then taken over. panel\main.js reads
-# the same lock to decide whether an updater is still running; keep the path
-# in sync.
+# A lock whose PID is dead or is not a daemon\update.ps1 is abandoned and
+# taken over; a lock older than 15 minutes whose holder is still an
+# update.ps1 is a stuck updater, which is stopped first (its whole process
+# tree, not just the shell), then taken over.
+#
+# Takeovers are serialized by a second CreateNew file, $takeoverPath: only
+# its holder may stop or remove a lock, and it re-reads the lock's pid inside
+# the mutex and only removes the lock if that pid is still the one it judged
+# stale. Without this, updater B (which read the stale pid a moment earlier)
+# could remove updater A's fresh lock. The finally at the bottom, in turn,
+# only deletes a lock whose file still holds THIS pid, so a losing updater
+# can never delete the winner's lock on its way out. A takeover marker older
+# than 60 seconds was left by a crashed updater and is removed.
+# panel\main.js reads the same lock to decide whether an updater is still
+# running; keep the path in sync.
 $lockPath = Join-Path $env:TEMP "gaffer-update.lock"
+$takeoverPath = "$lockPath.takeover"
 $script:haveLock = $false
+$script:haveTakeover = $false
+# GAFFER_UPDATE_TEST_DELAY_MS widens the window between reading a stale
+# lock's pid and entering the takeover mutex. Only
+# scripts\windows-tests\test-5-update-ps1.ps1 sets it, to make the takeover
+# race deterministic.
+$testDelayMs = 0
+if ($env:GAFFER_UPDATE_TEST_DELAY_MS) { [int]::TryParse($env:GAFFER_UPDATE_TEST_DELAY_MS, [ref] $testDelayMs) | Out-Null }
 
-# The Win32_Process of a live update.ps1 holder, or $null.
+# The Win32_Process of a live daemon\update.ps1 holder, or $null. This very
+# process never counts as a holder (a lock carrying our own pid is a leftover
+# from a pid reuse). The process start time is not compared with the lock's
+# age: the path match already rules out the common pid-reuse cases.
 function Get-LockHolderProcess([string] $holder) {
     $holderPid = 0
     if (-not [int]::TryParse($holder, [ref] $holderPid) -or $holderPid -le 0) { return $null }
+    if ($holderPid -eq $PID) { return $null }
     $proc = $null
     try { $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -ErrorAction SilentlyContinue } catch {}
-    if (-not $proc -or -not ($proc.CommandLine -like "*update.ps1*")) { return $null }
+    if (-not $proc -or -not ($proc.CommandLine -like "*daemon\update.ps1*")) { return $null }
     return $proc
 }
 
-# Stop-Process -Force, then a short wait for the process to go away.
+# taskkill /T /F ends the holder AND every process it started (its curl.exe,
+# robocopy, npm); Stop-Process would end only the shell and orphan those.
+# Then a short wait for the process to go away. /F gives the holder no
+# chance to run its finally, so its lock stays for the caller to take over;
+# the closing pause lets the file system settle before the lock is re-read.
 function Stop-LockHolder([int] $holderPid) {
     Write-Host "Stopping an update that has run for over 15 minutes (pid $holderPid)"
-    Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+    $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+    $ErrorActionPreference = "Continue"
+    & $taskkill /PID $holderPid /T /F 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
     for ($i = 0; $i -lt 20; $i++) {
         if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Milliseconds 250
     }
+    Start-Sleep -Milliseconds 500
 }
 
 function Read-LockHolder {
@@ -70,56 +100,106 @@ function Read-LockHolder {
     } catch { return "" }
 }
 
-$tries = 0
-while (-not $script:haveLock) {
+# Create $path with CreateNew and this pid in it. $true when we created it.
+function New-PidFile([string] $path) {
     $fs = $null
     try {
         # The static File.Open, not New-Object FileStream: PS 5.1 reports a
         # failing constructor inside New-Object as a MethodInvocationException,
-        # which a typed catch may not match. The catch below is untyped for the
-        # same reason: ANY failure while the lock file exists means another
-        # updater created it first (CreateNew lost the race).
-        $fs = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        # which a typed catch may not match. The catch is untyped for the same
+        # reason: ANY failure while the file exists means another updater
+        # created it first (CreateNew lost the race).
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
         $bytes = [System.Text.Encoding]::ASCII.GetBytes("$PID")
         $fs.Write($bytes, 0, $bytes.Length)
         $fs.Dispose()
-        $fs = $null
-        $script:haveLock = $true
+        return $true
     } catch {
         if ($fs) { try { $fs.Dispose() } catch {} }
-        $tries++
-        $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue
-        if (-not $lockItem) {
-            # No lock file: it was released between our attempt and now, or
-            # the lock cannot be created here at all. Retry, bounded.
-            if ($tries -gt 3) {
-                Write-Host "ERROR: could not create the update lock at $lockPath ($($_.Exception.Message))"
-                Write-Output "err:lock"
-                Stop-Transcript
-                exit 1
-            }
+        return $false
+    }
+}
+
+# Serialize takeovers. $false when another live updater is mid-takeover.
+function Enter-TakeoverMutex {
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        if (New-PidFile $takeoverPath) { $script:haveTakeover = $true; return $true }
+        $item = Get-Item -LiteralPath $takeoverPath -ErrorAction SilentlyContinue
+        if (-not $item) { continue }
+        $age = ((Get-Date) - $item.LastWriteTime).TotalSeconds
+        if ($age -ge 60) {
+            Write-Host "Removing a takeover marker left by a crashed updater ($([int] $age) s old)"
+            Remove-Item -LiteralPath $takeoverPath -Force -ErrorAction SilentlyContinue
             continue
         }
-        $holder = Read-LockHolder
-        $proc = Get-LockHolderProcess $holder
-        $lockIsOld = (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -ge 15)
-        if ($proc -and -not $lockIsOld) {
-            Write-Host "Another update is already running (pid $holder), leaving it to finish."
-            Write-Output "busy:already-running"
-            Stop-Transcript
-            exit 3
-        }
+        return $false
+    }
+    return $false
+}
+function Exit-TakeoverMutex {
+    if ($script:haveTakeover) {
+        Remove-Item -LiteralPath $takeoverPath -Force -ErrorAction SilentlyContinue
+        $script:haveTakeover = $false
+    }
+}
+
+$tries = 0
+while (-not $script:haveLock) {
+    if (New-PidFile $lockPath) { $script:haveLock = $true; break }
+    $tries++
+    $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue
+    if (-not $lockItem) {
+        # No lock file: it was released between our attempt and now, or
+        # the lock cannot be created here at all. Retry, bounded.
         if ($tries -gt 3) {
-            Write-Host "ERROR: could not take the update lock at $lockPath"
+            Write-Host "ERROR: could not create the update lock at $lockPath"
             Write-Output "err:lock"
             Stop-Transcript
             exit 1
         }
-        if ($proc) { Stop-LockHolder ([int] $proc.ProcessId) }
-        if (-not $holder) { $holder = "unknown" }
-        Write-Host "Taking over an abandoned update lock (pid $holder)"
+        continue
+    }
+    $holder = Read-LockHolder
+    $proc = Get-LockHolderProcess $holder
+    $lockIsOld = (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -ge 15)
+    if ($proc -and -not $lockIsOld) {
+        Write-Host "Another update is already running (pid $holder), leaving it to finish."
+        Write-Output "busy:already-running"
+        Stop-Transcript
+        exit 3
+    }
+    if ($tries -gt 3) {
+        Write-Host "ERROR: could not take the update lock at $lockPath"
+        Write-Output "err:lock"
+        Stop-Transcript
+        exit 1
+    }
+    if ($testDelayMs -gt 0) { Start-Sleep -Milliseconds $testDelayMs }
+    if (-not (Enter-TakeoverMutex)) {
+        Write-Host "Another update is taking over the abandoned lock, leaving it to finish."
+        Write-Output "busy:already-running"
+        Stop-Transcript
+        exit 3
+    }
+    # Inside the mutex: the lock may have been taken over (and re-created)
+    # since the pid was read. Only act on the lock we judged stale.
+    $nowHolder = Read-LockHolder
+    if (-not (Test-Path -LiteralPath $lockPath) -or $nowHolder -ne $holder) { Exit-TakeoverMutex; continue }
+    if ($proc) {
+        Stop-LockHolder ([int] $proc.ProcessId)
+        $nowHolder = Read-LockHolder
+        if ((Test-Path -LiteralPath $lockPath) -and $nowHolder -ne $holder) { Exit-TakeoverMutex; continue }
+    }
+    if (Test-Path -LiteralPath $lockPath) {
+        $holderLabel = $holder
+        if (-not $holderLabel) { $holderLabel = "unknown" }
+        Write-Host "Taking over an abandoned update lock (pid $holderLabel)"
         Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
     }
+    # Still inside the mutex: the taker gets the lock, nobody can slip in
+    # between the removal and the re-creation.
+    if (New-PidFile $lockPath) { $script:haveLock = $true }
+    Exit-TakeoverMutex
 }
 
 # From here on the lock is held, so everything runs inside this try: the
@@ -140,50 +220,129 @@ function Exit-Update([string] $message) {
     exit 1
 }
 
-# Download budget: the asset is a few MB, and the limits bound STALLS, not a
-# slow but moving transfer. Invoke-WebRequest -TimeoutSec only bounds the
-# response headers on PS 5.1 (a stalled body can hang for minutes), so the
-# download goes through the curl.exe Windows ships (Windows 10 1803+), with
-# the same limits as update.sh: an attempt is abandoned when the connection
-# takes over 15s or the speed stays under 2 KB/s for 20s, --max-time caps
-# each attempt at 150s, curl retries such timeouts twice, and
+# Download budget: the asset is a few MB. The download goes first through the
+# curl.exe Windows ships (Windows 10 1803+, a Schannel build), with the same
+# limits as update.sh: an attempt is abandoned when the connection takes over
+# 15s or the speed stays under 2 KB/s for 20s, --max-time caps each attempt
+# at 150s (which also fails any link slower than asset size / 150s, about
+# 20 KB/s for a 3 MB asset), curl retries such timeouts twice, and
 # --retry-max-time 120 only lets a retry START while less than 120s have
-# passed. Worst case: the first attempt dies just under 120s, the second runs
-# its full 150s, no third starts: about 270s, then extract + robocopy + npm.
-# The panel (main.js waitForUpdatedVersion) gives up after 180s but extends
-# once by 180s while this lock is held, so the whole run has 360s. A 4xx
-# answer (404 on a missing asset) is final: curl does not retry it, and the
+# passed. Worst case for curl alone: the first attempt dies just under 120s,
+# the second runs its full 150s, no third starts: about 270s.
+#
+# curl.exe does not read the WinINET proxy (Internet Options, PAC scripts),
+# and its Schannel build fails the handshake when certificate revocation
+# cannot be checked. Both are everyday conditions behind a corporate proxy,
+# so a curl failure that is not a final 4xx answer falls back to .NET's
+# HttpWebRequest, which honours the system proxy with the user's default
+# credentials. HttpWebRequest is used directly, not through
+# Invoke-WebRequest, because only the raw response stream lets a stalled body
+# be bounded: ReadWriteTimeout applies to every Read, while
+# Invoke-WebRequest -TimeoutSec bounds only the response headers on PS 5.1.
+# The fallback only runs when curl gave up within 90s and has its own 150s
+# budget, so the worst case stays at about 90 + 150 = 240s, under the
+# curl-only worst case of 270s, then extract + robocopy + npm. The panel
+# (main.js waitForUpdatedVersion) gives up after 180s but extends once by
+# 180s while this lock is held, a 360s window; a worst-case download plus a
+# slow npm install can outlive it, and then the panel offers "Force stop &
+# retry", whose second updater exits busy against this lock, so a slow run
+# is never corrupted, only late. A 4xx answer (404 on a missing asset) is
+# final on both paths: curl does not retry it, there is no fallback, and the
 # error carries the status in parentheses like Invoke-WebRequest's did.
-# Invoke-WebRequest stays as the fallback for a Windows without curl.exe.
+#
+# --ssl-no-revoke: the asset's integrity rests on the TLS certificate chain
+# for github.com, which stays fully validated; only the OCSP/CRL revocation
+# lookup is skipped. That lookup failing (blocked by an inspecting proxy) is
+# the commonest curl.exe failure on managed Windows, and the .NET fallback
+# does not check revocation either (HttpWebRequest's default), so the flag
+# is not a downgrade from the path curl would otherwise fall back to.
+# Supported by every Schannel curl since 7.44; Windows ships 7.55 or newer.
+#
+# GAFFER_UPDATE_CURL replaces the curl.exe path (a failing stand-in exercises
+# the fallback). Only scripts\windows-tests\test-5-update-ps1.ps1 sets it.
 function Get-ReleaseAsset([string] $uri, [string] $outFile) {
     $curl = Join-Path $env:SystemRoot "System32\curl.exe"
+    if ($env:GAFFER_UPDATE_CURL) { $curl = $env:GAFFER_UPDATE_CURL }
     if (Test-Path -LiteralPath $curl -PathType Leaf) {
-        # Native stderr must not become a terminating error under the script's
-        # $ErrorActionPreference = "Stop"; this assignment is local to the function.
-        $ErrorActionPreference = "Continue"
-        $output = & $curl -f -L -sS --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 -o $outFile $uri 2>&1
-        $code = $LASTEXITCODE
-        $ErrorActionPreference = "Stop"
-        if ($code -eq 0) { return }
-        $text = ($output | ForEach-Object { "$_" }) -join " "
-        if ($code -eq 22 -and $text -match "returned error: (\d{3})") {
-            throw "The remote server returned an error: ($($Matches[1]))."
+        $curlStarted = Get-Date
+        $curlFailure = $null
+        $finalError = $null
+        try {
+            # Native stderr must not become a terminating error under the
+            # script's $ErrorActionPreference = "Stop"; this assignment is
+            # local to the function.
+            $ErrorActionPreference = "Continue"
+            $output = & $curl -f -L -sS --ssl-no-revoke --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 -o $outFile $uri 2>&1
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($code -eq 0) { return }
+            $text = ($output | ForEach-Object { "$_" }) -join " "
+            if ($code -eq 22 -and $text -match "returned error: (\d{3})") {
+                $status = [int] $Matches[1]
+                if ($status -ge 400 -and $status -lt 500) { $finalError = "The remote server returned an error: ($status)." }
+            }
+            if (-not $finalError) { $curlFailure = "curl.exe exit $code : $text" }
+        } catch {
+            $curlFailure = "curl.exe could not run: $($_.Exception.Message)"
         }
-        throw "curl.exe exit $code : $text"
+        $ErrorActionPreference = "Stop"
+        if ($finalError) { throw $finalError }
+        Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+        $curlSeconds = ((Get-Date) - $curlStarted).TotalSeconds
+        if ($curlSeconds -ge 90) {
+            throw "$curlFailure (no time left for the system proxy path after $([int] $curlSeconds)s)"
+        }
+        Write-Host "  curl.exe could not download the asset ($curlFailure), trying the system proxy path"
     }
+    Get-ReleaseAssetViaSystemProxy $uri $outFile
+}
+
+# The .NET path: system proxy (WinINET settings, PAC) with the user's default
+# credentials, 15s to connect and get headers, every body read bounded to a
+# 20s stall, the whole thing to 150s, 4xx final, otherwise up to 3 attempts
+# as long as a retry can start within 110s.
+function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
+    try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch {}
+    try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials } catch {}
     $started = Get-Date
     $attempt = 0
     while ($true) {
         $attempt++
         try {
-            Invoke-WebRequest -Uri $uri -OutFile $outFile -UseBasicParsing -TimeoutSec 35
+            $req = [System.Net.WebRequest]::Create($uri)
+            $req.Timeout = 15000
+            $req.ReadWriteTimeout = 20000
+            $req.AllowAutoRedirect = $true
+            $req.UserAgent = "gaffer-update"
+            $resp = $req.GetResponse()
+            try {
+                $in = $resp.GetResponseStream()
+                $out = [System.IO.File]::Create($outFile)
+                try {
+                    $buf = New-Object byte[] 65536
+                    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                        $out.Write($buf, 0, $n)
+                        if (((Get-Date) - $started).TotalSeconds -ge 150) { throw "download exceeded its 150s budget" }
+                    }
+                } finally {
+                    $out.Dispose()
+                    $in.Dispose()
+                }
+            } finally { $resp.Close() }
             return
         } catch {
+            Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+            # A .NET method's WebException arrives wrapped in a
+            # MethodInvocationException; look at both levels for the status.
             $status = 0
             try { $status = [int] $_.Exception.Response.StatusCode } catch {}
+            if ($status -eq 0) { try { $status = [int] $_.Exception.InnerException.Response.StatusCode } catch {} }
+            if ($status -ge 400 -and $status -lt 500) { throw "The remote server returned an error: ($status)." }
+            $reason = $_.Exception.Message
+            if ($_.Exception.InnerException) { $reason = $_.Exception.InnerException.Message }
             $elapsed = ((Get-Date) - $started).TotalSeconds
-            if (($status -ge 400 -and $status -lt 500) -or $attempt -ge 3 -or $elapsed -ge 110) { throw }
-            Write-Host "  download attempt $attempt failed ($($_.Exception.Message)), retrying"
+            if ($attempt -ge 3 -or $elapsed -ge 110) { throw "system proxy download failed: $reason" }
+            Write-Host "  download attempt $attempt failed ($reason), retrying"
             Start-Sleep -Seconds 2
         }
     }
@@ -260,7 +419,10 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
     # moment it changes. The usage-stats buffer and the icon cache are not in the
     # archive; excluding them also protects them from /PURGE.
     Write-Host "Replacing files..."
-    robocopy $extractDir $panelDir /E /PURGE `
+    # /R:2 /W:2: two retries, two seconds apart, on a file that is briefly
+    # locked (an indexer, a daemon not yet gone), instead of robocopy's
+    # default of a million retries at 30 seconds each.
+    robocopy $extractDir $panelDir /E /PURGE /R:2 /W:2 `
         /XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json `
         /XD node_modules dist .gaffer-icons | Out-Null
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
@@ -327,5 +489,8 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
     Stop-Transcript
 } finally {
     # Runs on every way out of the block above, including the exit calls.
-    if ($script:haveLock) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }
+    # Only ever delete a lock that is still ours: a stuck run that was taken
+    # over must not delete its successor's lock on the way out.
+    Exit-TakeoverMutex
+    if ($script:haveLock -and ((Read-LockHolder) -eq "$PID")) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }
 }
