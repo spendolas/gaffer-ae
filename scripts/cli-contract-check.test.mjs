@@ -311,7 +311,8 @@ test('chooseConfigDir and childEnv (pure): fresh dir by default, refusal on cred
   var fresh = chooseConfigDir(null, function () { return false; });
   assert.equal(fresh.refusal, null);
   assert.ok(fresh.dir.indexOf('gaffer-cli-contract-cfg-') !== -1);
-  var named = chooseConfigDir('/some/dir', function (p) { return p === join('/some/dir', '.credentials.json'); });
+  // resolve() adds a drive letter on Windows, so match the file name, not the whole path
+  var named = chooseConfigDir('/some/dir', function (p) { return /[\\/]\.credentials\.json$/.test(p); });
   assert.match(named.refusal, /REFUSING/);
   assert.equal(chooseConfigDir('/other/dir', function () { return false; }).refusal, null);
   var env = childEnv({ PATH: '/bin', HOME: '/real', CLAUDE_CONFIG_DIR: '/real/.claude', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_USE_BEDROCK: '1', KEEP: 'me' }, '/tmp/h', '/tmp/c');
