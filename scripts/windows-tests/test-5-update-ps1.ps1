@@ -14,13 +14,21 @@
 # (a proxy answer, not a missing asset). Cases 4 to 9 cover the
 # single-updater lock: a second updater exits busy while a live one holds
 # the lock (also when that one was launched with a forward-slash path, as
-# the panel's ExtendScript fallback does), an abandoned lock (dead pid, or a
-# file with no pid in it) is taken over (a stale takeover marker is cleared
-# on the way, a fresh one means busy, two updaters clearing the same stale
-# marker yield one winner), two updaters taking over the same stale lock
-# yield one winner (the gated one is rejected by the pid re-read inside the
-# mutex), a live holder older than 15 minutes (or dated in the future) is
-# stopped together with its child and grandchild and taken over, a holder
+# the panel's ExtendScript fallback does, and when it was started by hand
+# from inside the daemon folder with no daemon\ in its command line), a
+# holder created after the lock was written is a reused pid (not stopped,
+# its lock abandoned), an abandoned lock (dead pid, or a minutes-old file
+# with no pid in it) is taken over (a stale takeover marker is cleared on
+# the way, a fresh one means busy, two updaters clearing the same stale
+# marker yield one winner, a fresh marker renamed by mistake is put back),
+# a seconds-old file with no pid in it is busy, two updaters taking over the
+# same stale lock yield one winner (the gated one is rejected by the pid
+# re-read inside the mutex), a live holder whose lock is older than the
+# stuck age is stopped together with its child and grandchild and taken over
+# (the stuck age is lowered to 3 s with GAFFER_UPDATE_TEST_STUCK_AFTER and
+# the lock aged for real, because a holder younger than its lock is a
+# reused pid), a lock dated in the future with a live holder is busy (the
+# holder is not stopped) while one with a dead pid is taken over, a holder
 # that vanished just before the stop is not signalled, an updater whose lock
 # was replaced under it leaves the replacement alone on exit, the lock is
 # gone after every run, and the dev-install refusal still ends the log with
@@ -102,12 +110,25 @@ function Get-TreeHash([string] $dir) {
     return ($lines -join "`n")
 }
 
-function Invoke-Update([string] $dir, [string] $asset) {
+# $extraEnv holds env vars only this one run should see (the stuck-age
+# override); they are set for the run and removed right after.
+function Invoke-Update([string] $dir, [string] $asset, [hashtable] $extraEnv = @{}) {
     $env:GAFFER_UPDATE_ASSET = $asset
     $env:TEMP = "$scratch\tmp"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "daemon\update.ps1") | Out-Null
-    return $LASTEXITCODE
+    foreach ($k in $extraEnv.Keys) { Set-Item -Path "Env:\$k" -Value $extraEnv[$k] }
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "daemon\update.ps1") | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        foreach ($k in $extraEnv.Keys) { Remove-Item -Path "Env:\$k" -ErrorAction SilentlyContinue }
+    }
 }
+# The stuck cases run update.ps1 with the 15 minute stuck age lowered to
+# this and let the lock age for real: a holder created after its lock is a
+# reused pid to update.ps1 now, so a backdated lock would be abandoned, not
+# stopped.
+$stuckAfter = 3
+function Wait-LockPastStuck { Start-Sleep -Seconds ($stuckAfter + 1) }
 
 # The lock update.ps1 holds for its run (same TEMP Invoke-Update points it at).
 $lockPath = "$scratch\tmp\gaffer-update.lock"
@@ -125,9 +146,11 @@ function Get-LastLogLine {
 # updater it has a long-lived child (its curl.exe, robocopy or npm) which in
 # turn has a child (a grandchild sleep), and records their pids in
 # $scratch\fake\child.pid and grandchild.pid. -ForwardSlash launches it by
-# a "daemon/update.ps1" path, as the panel's ExtendScript fallback does.
+# a "daemon/update.ps1" path, as the panel's ExtendScript fallback does;
+# -Bare launches it as "-File update.ps1" from inside the daemon folder, as
+# a person does by hand, so no daemon\ appears in its command line.
 # Returns the process.
-function Start-FakeUpdater([switch] $ForwardSlash) {
+function Start-FakeUpdater([switch] $ForwardSlash, [switch] $Bare) {
     New-Item -ItemType Directory -Path "$scratch\fake\daemon" -Force | Out-Null
     Remove-Item -LiteralPath "$scratch\fake\child.pid", "$scratch\fake\grandchild.pid" -Force -ErrorAction SilentlyContinue
     $childScript = "$scratch\fake\child.ps1"
@@ -145,7 +168,11 @@ function Start-FakeUpdater([switch] $ForwardSlash) {
     Set-Content -LiteralPath "$scratch\fake\daemon\update.ps1" -Value ($body -join "`r`n")
     $scriptPath = "$scratch\fake\daemon\update.ps1"
     if ($ForwardSlash) { $scriptPath = $scriptPath.Replace('\', '/') }
-    $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath) -WindowStyle Hidden -PassThru
+    if ($Bare) {
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "update.ps1") -WorkingDirectory "$scratch\fake\daemon" -WindowStyle Hidden -PassThru
+    } else {
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath) -WindowStyle Hidden -PassThru
+    }
     for ($i = 0; $i -lt 80; $i++) {
         if ((Test-Path -LiteralPath "$scratch\fake\child.pid") -and (Test-Path -LiteralPath "$scratch\fake\grandchild.pid")) { break }
         Start-Sleep -Milliseconds 250
@@ -376,6 +403,56 @@ try {
     $fake = $null
     Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
 
+    # ---------- Case 4c: a holder started by hand from inside the daemon folder is an updater too ----------
+    # "powershell -File update.ps1" with the daemon folder as the working
+    # directory: no daemon\ in the command line. It is a live PowerShell
+    # created before the lock was written, which is what counts now.
+    $bare = Join-Path $scratch "Application Data\bare\com.gaffer.panel"
+    New-TestInstall $bare
+    $fake = Start-FakeUpdater -Bare
+    Start-Sleep -Seconds 1
+    $fakeCmd = ""
+    try { $fakeCmd = "$((Get-CimInstance Win32_Process -Filter "ProcessId = $($fake.Id)").CommandLine)" } catch {}
+    if ($fakeCmd -notmatch "daemon[\\/]update\.ps1" -and $fakeCmd -match "update\.ps1") { Pass "hand-started holder's command line has no daemon folder in it" } else { Fail "hand-started holder's command line is: $fakeCmd" }
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    $beforeTree = Get-TreeHash $bare
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $bare $ReleaseZip
+    if ($code -eq 3) { Pass "second updater exited 3 while a hand-started holder holds the lock" } else { Fail "second updater exited $code against a hand-started holder, expected 3" }
+    $logBare = ""
+    if (Test-Path -LiteralPath $logPath) { $logBare = Get-Content -LiteralPath $logPath -Raw }
+    if ($logBare -match [regex]::Escape("Another update is already running (pid $($fake.Id))")) { Pass "log names the hand-started holder as a running update" } else { Fail "hand-started holder was not recognised as an updater" }
+    if ((Get-TreeHash $bare) -eq $beforeTree) { Pass "hand-started run left the install untouched" } else { Fail "hand-started run modified the install" }
+    if ((Read-Lock) -eq "$($fake.Id)") { Pass "hand-started holder's lock kept its pid" } else { Fail "hand-started holder's lock was removed or rewritten" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Pass "hand-started holder is still alive" } else { Fail "hand-started holder was stopped" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 4d: a holder created after the lock was written is a reused pid ----------
+    # The lock is 2 minutes old; the live PowerShell holding its pid (a real
+    # daemon\update.ps1 command line, even) is seconds old, so it cannot be
+    # the updater that wrote the lock. The lock is abandoned and taken over;
+    # the process is left alone (not ours to stop).
+    $reuse = Join-Path $scratch "Application Data\pid-reuse\com.gaffer.panel"
+    New-TestInstall $reuse
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-2)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $reuse $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the lock whose pid was reused and exited 0" } else { Fail "update.ps1 exited $code on a reused-pid lock (log: $logPath)" }
+    $logReuse = ""
+    if (Test-Path -LiteralPath $logPath) { $logReuse = Get-Content -LiteralPath $logPath -Raw }
+    if ($logReuse -match [regex]::Escape("The lock's pid $($fake.Id) belongs to a process that is not the update that wrote the lock")) { Pass "log explains the reused pid" } else { Fail "no pid-reuse line in the log" }
+    if ($logReuse -match [regex]::Escape("Taking over an abandoned update lock (pid $($fake.Id))")) { Pass "reused-pid lock was taken over as abandoned" } else { Fail "no takeover line for the reused-pid lock" }
+    if ($logReuse -notmatch "Stopping an update") { Pass "no stop was attempted on the process that reused the pid" } else { Fail "the process that reused the pid was stopped" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Pass "the process that reused the pid (pid $($fake.Id)) is still alive" } else { Fail "the process that reused the pid was killed" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the reused-pid run" } else { Pass "lock released after the reused-pid run" }
+
     # ---------- Case 5: an abandoned lock (dead pid) is taken over ----------
     # Also: a takeover marker older than 60 seconds (left by a crashed
     # updater) does not block the takeover; it is removed.
@@ -498,18 +575,50 @@ try {
     if (Get-ChildItem -LiteralPath "$scratch\tmp" -Filter "gaffer-update.lock.takeover.stale.*" -ErrorAction SilentlyContinue) { Fail "renamed stale marker left behind" } else { Pass "no renamed stale marker left behind" }
     if ((Test-Path -LiteralPath $lockPath) -or (Test-Path -LiteralPath $takeoverPath)) { Fail "lock or marker left behind after the marker race" } else { Pass "lock and marker released after the marker race" }
 
-    # ---------- Case 6: a lock older than 15 minutes is taken over even with a live pid ----------
+    # ---------- Case 5e: a fresh marker renamed by mistake is put back ----------
+    # B judges the stale marker stale and stops at its marker gate. The
+    # marker is then replaced by a fresh one (another updater's). B,
+    # released, renames that fresh marker, re-checks its age, puts it back
+    # and exits busy, leaving the lock alone.
+    $putBack = Join-Path $scratch "Application Data\put-back\com.gaffer.panel"
+    New-TestInstall $putBack
+    [System.IO.File]::WriteAllText($lockPath, "$($dead.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-2)
+    [System.IO.File]::WriteAllText($takeoverPath, "99999", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $takeoverPath).LastWriteTime = (Get-Date).AddMinutes(-2)
+    $beforeTree = Get-TreeHash $putBack
+    $mgatePb = "$scratch\mgate-pb"
+    Remove-Item -LiteralPath $mgatePb, "$mgatePb.ready" -Force -ErrorAction SilentlyContinue
+    $pP = Start-Updater $putBack "$scratch\putback.out" @{ GAFFER_UPDATE_TEST_MARKER_GATE = $mgatePb }
+    Wait-ForFile "$mgatePb.ready" | Out-Null
+    Remove-Item -LiteralPath $takeoverPath -Force
+    [System.IO.File]::WriteAllText($takeoverPath, "88888", [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($mgatePb, "go")
+    $codeP = Wait-Updater $pP
+    $outP = Read-Out "$scratch\putback.out"
+    if ($codeP -eq 3) { Pass "updater exited 3 after renaming a fresh marker by mistake" } else { Fail "updater exited $($codeP) after the fresh marker, expected 3: $outP" }
+    if ($outP -match [regex]::Escape("The takeover marker was renewed by another update meanwhile, putting it back.")) { Pass "log records the put-back" } else { Fail "no put-back line: $outP" }
+    $markerNow = ""
+    if (Test-Path -LiteralPath $takeoverPath) { $markerNow = (Get-Content -LiteralPath $takeoverPath -Raw).Trim() }
+    if ($markerNow -eq "88888") { Pass "the fresh marker is back in place with its owner's pid" } else { Fail "the fresh marker was not put back (now: '$markerNow')" }
+    if (Get-ChildItem -LiteralPath "$scratch\tmp" -Filter "gaffer-update.lock.takeover.stale.*" -ErrorAction SilentlyContinue) { Fail "renamed marker left behind after the put-back" } else { Pass "no renamed marker left behind after the put-back" }
+    if ((Read-Lock) -eq "$($dead.Id)") { Pass "the put-back run left the lock alone" } else { Fail "the put-back run removed or rewrote the lock" }
+    if ((Get-TreeHash $putBack) -eq $beforeTree) { Pass "the put-back run left the install untouched" } else { Fail "the put-back run modified the install" }
+    Remove-Item -LiteralPath $lockPath, $takeoverPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 6: a lock older than the stuck age is taken over even with a live pid ----------
     # The holder, its child and its grandchild must all be stopped, found
-    # through Win32_Process, not taskkill /T.
+    # through Win32_Process, not taskkill /T. The lock ages for real past
+    # the lowered stuck age, so the holder (started earlier) predates it.
     $oldLock = Join-Path $scratch "Application Data\old-lock\com.gaffer.panel"
     New-TestInstall $oldLock
     $fake = Start-FakeUpdater
     Start-Sleep -Seconds 1
     [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
-    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-20)
+    Wait-LockPastStuck
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-    $code = Invoke-Update $oldLock $ReleaseZip
-    if ($code -eq 0) { Pass "update.ps1 took over the 20 minute old lock and exited 0" } else { Fail "update.ps1 exited $code on a 20 minute old lock (log: $logPath)" }
+    $code = Invoke-Update $oldLock $ReleaseZip @{ GAFFER_UPDATE_TEST_STUCK_AFTER = "$stuckAfter" }
+    if ($code -eq 0) { Pass "update.ps1 took over the stuck holder's lock and exited 0" } else { Fail "update.ps1 exited $code on the stuck holder's lock (log: $logPath)" }
     if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the old-lock run" } else { Pass "lock released after the old-lock run" }
     $logOld = ""
     if (Test-Path -LiteralPath $logPath) { $logOld = Get-Content -LiteralPath $logPath -Raw }
@@ -534,11 +643,11 @@ try {
     $fake = Start-FakeUpdater
     Start-Sleep -Seconds 1
     [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
-    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-20)
+    Wait-LockPastStuck
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $gateGone = "$scratch\gate-gone"
     Remove-Item -LiteralPath $gateGone, "$gateGone.ready" -Force -ErrorAction SilentlyContinue
-    $pG = Start-Updater $gone "$scratch\gone.out" @{ GAFFER_UPDATE_TEST_GATE = $gateGone }
+    $pG = Start-Updater $gone "$scratch\gone.out" @{ GAFFER_UPDATE_TEST_GATE = $gateGone; GAFFER_UPDATE_TEST_STUCK_AFTER = "$stuckAfter" }
     Wait-ForFile "$gateGone.ready" | Out-Null
     Stop-FakeUpdater $fake
     $goneId = $fake.Id
@@ -552,36 +661,68 @@ try {
     if ($outG -notmatch "Stopping an update that has run for over 15 minutes") { Pass "no stop was attempted on the vanished holder" } else { Fail "update.ps1 tried to stop a holder that was already gone" }
     if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the vanished-holder run" } else { Pass "lock released after the vanished-holder run" }
 
-    # ---------- Case 6c: a lock or marker dated in the future (clock moved back) is stale ----------
-    # A future write time must never read as fresh: the live holder of a
-    # future-dated lock is treated like one that has run for over 15 minutes.
+    # ---------- Case 6c: a lock dated in the future (clock moved back) with a LIVE holder is busy ----------
+    # A clock step, w32time or a network TEMP can date a healthy updater's
+    # lock in the future. Its holder is alive and a plausible updater, so
+    # the lock is busy and the holder must not be stopped: a negative age
+    # alone never kills.
     $future = Join-Path $scratch "Application Data\future-lock\com.gaffer.panel"
     New-TestInstall $future
     $fake = Start-FakeUpdater
     Start-Sleep -Seconds 1
     [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
     (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddDays(1)
+    $beforeTree = Get-TreeHash $future
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $future $ReleaseZip
+    if ($code -eq 3) { Pass "updater exited 3 on a future-dated lock with a live holder" } else { Fail "updater exited $code on a future-dated lock with a live holder, expected 3" }
+    $logFuture = ""
+    if (Test-Path -LiteralPath $logPath) { $logFuture = Get-Content -LiteralPath $logPath -Raw }
+    if ($logFuture -match [regex]::Escape("Another update is already running (pid $($fake.Id))")) { Pass "future-dated lock's live holder was reported as running" } else { Fail "future-dated lock's live holder was not reported as running" }
+    if ($logFuture -notmatch "Stopping an update") { Pass "no stop was attempted on the future-dated lock's live holder" } else { Fail "future-dated lock's live holder was stopped on the negative age alone" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Pass "future-dated lock's live holder (pid $($fake.Id)) is still alive" } else { Fail "future-dated lock's live holder was killed" }
+    if ((Read-Lock) -eq "$($fake.Id)") { Pass "future-dated live lock kept its holder's pid" } else { Fail "future-dated live lock was removed or rewritten" }
+    if ((Get-TreeHash $future) -eq $beforeTree) { Pass "future-dated live-lock run left the install untouched" } else { Fail "future-dated live-lock run modified the install" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 6d: a lock and marker dated in the future with a DEAD pid are stale ----------
+    # Nothing alive holds them, and a write time over 300 s ahead cannot be
+    # fresh: both are leftovers from before the clock moved back.
+    $futureDead = Join-Path $scratch "Application Data\future-dead\com.gaffer.panel"
+    New-TestInstall $futureDead
+    [System.IO.File]::WriteAllText($lockPath, "$($dead.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddDays(1)
     [System.IO.File]::WriteAllText($takeoverPath, "99999", [System.Text.Encoding]::ASCII)
     (Get-Item -LiteralPath $takeoverPath).LastWriteTime = (Get-Date).AddDays(1)
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-    $code = Invoke-Update $future $ReleaseZip
-    if ($code -eq 0) { Pass "update.ps1 took over the future-dated lock and exited 0" } else { Fail "update.ps1 exited $code on a future-dated lock (log: $logPath)" }
-    $logFuture = ""
-    if (Test-Path -LiteralPath $logPath) { $logFuture = Get-Content -LiteralPath $logPath -Raw }
-    if ($logFuture -match [regex]::Escape("Stopping an update that has run for over 15 minutes (pid $($fake.Id))")) { Pass "future-dated lock's live holder was treated as stuck" } else { Fail "future-dated lock's holder was not treated as stuck" }
-    if ($logFuture -match "Removing a takeover marker dated in the future") { Pass "future-dated takeover marker was cleared" } else { Fail "future-dated takeover marker was not cleared" }
-    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "future-dated lock's holder is still alive" } else { Pass "future-dated lock's holder was stopped" }
-    Stop-FakeUpdater $fake
-    $fake = $null
+    $code = Invoke-Update $futureDead $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the future-dated dead-pid lock and exited 0" } else { Fail "update.ps1 exited $code on a future-dated dead-pid lock (log: $logPath)" }
+    $logFutureDead = ""
+    if (Test-Path -LiteralPath $logPath) { $logFutureDead = Get-Content -LiteralPath $logPath -Raw }
+    if ($logFutureDead -match [regex]::Escape("Taking over an abandoned update lock (pid $($dead.Id))")) { Pass "future-dated dead-pid lock was taken over" } else { Fail "no takeover line for the future-dated dead-pid lock" }
+    if ($logFutureDead -match "Removing a takeover marker dated in the future") { Pass "future-dated takeover marker was cleared" } else { Fail "future-dated takeover marker was not cleared" }
     if ((Test-Path -LiteralPath $lockPath) -or (Test-Path -LiteralPath $takeoverPath)) { Fail "lock or marker left behind after the future-dated run" } else { Pass "lock and marker released after the future-dated run" }
 
-    # ---------- Case 7: a lock file with no pid in it is abandoned ----------
-    # Also the regression case for the lock acquisition itself: with the
-    # lock file present, the CreateNew failure must land in the catch, not
-    # end the script (a leftover file would then block every later update).
+    # ---------- Case 7: a seconds-old lock file with no pid in it is busy, a minutes-old one is abandoned ----------
+    # An updater between its CreateNew and its pid write looks like the
+    # first. Also the regression case for the lock acquisition itself: with
+    # the lock file present, the CreateNew failure must land in the catch,
+    # not end the script (a leftover file would then block every later
+    # update).
     $noPid = Join-Path $scratch "Application Data\no-pid\com.gaffer.panel"
     New-TestInstall $noPid
     [System.IO.File]::WriteAllText($lockPath, "not-a-pid", [System.Text.Encoding]::ASCII)
+    $beforeTree = Get-TreeHash $noPid
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $noPid $ReleaseZip
+    if ($code -eq 3) { Pass "updater exited 3 on a seconds-old lock without a pid" } else { Fail "updater exited $code on a seconds-old lock without a pid, expected 3" }
+    $last = Get-LastLogLine
+    if ($last -eq "busy:already-running") { Pass "young pid-less lock run ends with busy:already-running" } else { Fail "young pid-less lock run last log line: $last" }
+    if ((Read-Lock) -eq "not-a-pid") { Pass "young pid-less lock left in place for its owner" } else { Fail "young pid-less lock was removed or rewritten" }
+    if ((Get-TreeHash $noPid) -eq $beforeTree) { Pass "young pid-less lock run left the install untouched" } else { Fail "young pid-less lock run modified the install" }
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-2)
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $code = Invoke-Update $noPid $ReleaseZip
     if ($code -eq 0) { Pass "update.ps1 took over the pid-less lock and exited 0" } else { Fail "update.ps1 exited $code on a pid-less lock (log: $logPath)" }

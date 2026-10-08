@@ -14,16 +14,23 @@
 # "cd daemon; bash update.sh"; a my-update.sh holder is not an updater), an
 # abandoned lock (dead pid) is taken over (a stale takeover marker is cleared
 # on the way, a fresh one means busy, two updaters clearing the same stale
-# marker yield one winner), a live holder older than 15 minutes (or dated in
-# the future) is stopped together with its child and grandchild and taken
-# over, both when it leads its own process group and when it does not, a
-# holder that vanished just before the stop is not signalled, a seconds-old
-# lock with no pid yet counts as busy while an older one without a pid is
-# taken over, two updaters taking over the same stale lock yield exactly one
-# winner (the gated one is rejected by the re-read inside the mutex and
-# leaves the winner's lock alone), an updater whose lock was replaced under
-# it leaves the replacement alone on exit, the lock is gone after success
-# and after a failure, and the dev-install refusal still ends the log with
+# marker yield one winner, a fresh marker renamed by mistake is put back), a
+# live holder whose lock is older than the stuck age is stopped together
+# with its child and grandchild and taken over, both when it leads its own
+# process group and when it does not (the stuck age is lowered to 3 s with
+# GAFFER_UPDATE_TEST_STUCK_AFTER and the lock aged for real, because a
+# holder younger than its lock is a reused pid), a holder started after the
+# lock was written is a reused pid, not stopped, its lock abandoned, a lock
+# dated in the future with a live holder is busy (the holder is not
+# stopped) while one with a dead pid is taken over, a lock dated within the
+# 300 s skew tolerance is young, a holder that vanished just before the stop
+# is not signalled, a seconds-old lock with no pid yet counts as busy while
+# an older one without a pid is taken over, two updaters taking over the
+# same stale lock yield exactly one winner (the gated one is rejected by the
+# re-read inside the mutex and leaves the winner's lock alone), an updater
+# whose lock was replaced under it leaves the replacement alone on exit, the
+# lock is gone after success and after a failure, a broken download ends the
+# log with err:download, and the dev-install refusal still ends the log with
 # err:dev-install. The races are made deterministic with the script's
 # GAFFER_UPDATE_TEST_*_GATE files, never with sleeps.
 #
@@ -151,6 +158,11 @@ wait_until() {
   fail "timed out waiting until: $1"; return 1
 }
 count_in_log() { grep -c -- "$1" "$LOG" 2>/dev/null || true; }
+# The stuck cases run update.sh with the 15 minute stuck age lowered to this
+# and let the lock age for real: a holder younger than its lock is a reused
+# pid to update.sh now, so a backdated lock would be abandoned, not stopped.
+STUCK_AFTER=3
+age_lock_past_stuck() { sleep $((STUCK_AFTER + 1)); }
 
 # Fake release asset from the committed tree
 (cd "$REPO_ROOT" && bash scripts/package-release.sh 9.9.9 feedfacecafe "$SCRATCH/dist" >/dev/null)
@@ -235,6 +247,9 @@ fi
 AFTER="$(cd "$BROKEN_INSTALL" && find . -path ./daemon/node_modules -prune -o -type f -print0 | sort -z | xargs -0 shasum)"
 if [ "$BEFORE" = "$AFTER" ]; then pass "broken download left the install untouched"; else fail "broken download modified the install"; fi
 if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after a failed update"; else pass "update lock released after a failed update"; fi
+# tar's own complaint must not be the last line: the panel reads ok:/err:.
+if [ "$(tail -n1 "$LOG")" = "err:download" ]; then pass "broken download ends the log with err:download"; else fail "broken download last log line: $(tail -n1 "$LOG")"; fi
+if grep -q "^ERROR: download or extract failed" "$LOG"; then pass "broken download logs an ERROR line"; else fail "no ERROR line for the broken download"; fi
 
 # ---------- Case 3: a second updater exits busy while a live one holds the lock ----------
 BUSY_INSTALL="$SCRATCH/Application Support/busy/com.gaffer.panel"
@@ -361,7 +376,7 @@ if [ "$(count_in_log '^ok:9.9.9$')" = "1" ]; then pass "exactly one marker-race 
 if ls "$TMPDIR" | grep -q 'gaffer-update.lock.takeover.stale'; then fail "renamed stale marker left behind"; else pass "no renamed stale marker left behind"; fi
 if [ -e "$LOCK_DIR" ] || [ -e "$LOCK_DIR.takeover" ]; then fail "lock or marker left behind after the marker race"; else pass "lock and marker released after the marker race"; fi
 
-# ---------- Case 5: a lock older than 15 minutes is taken over even with a live pid ----------
+# ---------- Case 5: a lock older than the stuck age is taken over even with a live pid ----------
 # The holder here does not lead its own process group (it is a job of this
 # harness), so update.sh must find its child AND grandchild itself.
 OLD_INSTALL="$SCRATCH/Application Support/old-lock/com.gaffer.panel"
@@ -370,12 +385,12 @@ FAKE_PID="$(start_fake_updater)"
 trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
 if [ "$(ps -o pgid= -p "$FAKE_PID" | tr -d ' ')" != "$FAKE_PID" ]; then pass "fake holder does not lead its own process group"; else fail "fake holder leads its own process group, the per-process branch is not exercised"; fi
 mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
-touch -t "$(date -v-20M +%Y%m%d%H%M.%S 2>/dev/null || date -d '20 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+age_lock_past_stuck
 : > "$LOG"
-if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$OLD_INSTALL/daemon/update.sh"; then
-  pass "update.sh took over the 20 minute old lock and exited 0"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_STUCK_AFTER="$STUCK_AFTER" npm_config_audit=false npm_config_fund=false bash "$OLD_INSTALL/daemon/update.sh"; then
+  pass "update.sh took over the stuck holder's lock and exited 0"
 else
-  fail "update.sh did not take over the 20 minute old lock (log: $LOG)"
+  fail "update.sh did not take over the stuck holder's lock (log: $LOG)"
 fi
 if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the old-lock run"; else pass "lock released after the old-lock run"; fi
 if grep -q "Stopping an update that has run for over 15 minutes (pid $FAKE_PID)" "$LOG"; then pass "log records stopping the stuck holder"; else fail "no stop line for the stuck holder in the log"; fi
@@ -399,9 +414,9 @@ FAKE_PID="$(start_fake_updater leader)"
 trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
 if [ "$(ps -o pgid= -p "$FAKE_PID" | tr -d ' ')" = "$FAKE_PID" ]; then pass "setsid fake holder leads its own process group"; else fail "setsid fake holder does not lead its own process group (pgid $(ps -o pgid= -p "$FAKE_PID"))"; fi
 mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
-touch -t "$(date -v-20M +%Y%m%d%H%M.%S 2>/dev/null || date -d '20 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+age_lock_past_stuck
 : > "$LOG"
-if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$LEADER_INSTALL/daemon/update.sh"; then
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_STUCK_AFTER="$STUCK_AFTER" npm_config_audit=false npm_config_fund=false bash "$LEADER_INSTALL/daemon/update.sh"; then
   pass "update.sh took over the group-leading stuck holder's lock and exited 0"
 else
   fail "update.sh did not take over the group-leading holder's lock (log: $LOG)"
@@ -426,11 +441,11 @@ new_install "$GONE_INSTALL"
 FAKE_PID="$(start_fake_updater)"
 trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
 mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
-touch -t "$(date -v-20M +%Y%m%d%H%M.%S 2>/dev/null || date -d '20 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+age_lock_past_stuck
 : > "$LOG"
 rm -f "$SCRATCH/gate-gone" "$SCRATCH/gate-gone.ready"
 set +e
-( PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_GATE="$SCRATCH/gate-gone" npm_config_audit=false npm_config_fund=false bash "$GONE_INSTALL/daemon/update.sh"; echo $? > "$SCRATCH/gone.exit" ) &
+( PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_GATE="$SCRATCH/gate-gone" GAFFER_UPDATE_TEST_STUCK_AFTER="$STUCK_AFTER" npm_config_audit=false npm_config_fund=false bash "$GONE_INSTALL/daemon/update.sh"; echo $? > "$SCRATCH/gone.exit" ) &
 wait_for_file "$SCRATCH/gate-gone.ready"
 stop_fake_updater "$FAKE_PID"
 touch "$SCRATCH/gate-gone"
@@ -506,9 +521,10 @@ if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the racing takeovers"; 
 if [ -e "$LOCK_DIR.takeover" ]; then fail "takeover marker left behind after the racing takeovers"; else pass "no takeover marker left behind"; fi
 if ls "$TMPDIR" | grep -q 'gaffer-update.lock.stale'; then fail "stale lock copy left behind"; else pass "no stale lock copy left behind"; fi
 
-# ---------- Case 7: a lock or marker dated in the future (clock moved back) is stale ----------
-# A future mtime must never read as "young" or "fresh": the live holder of a
-# future-dated lock is treated like one that has run for over 15 minutes.
+# ---------- Case 7: a lock dated in the future (clock moved back) with a LIVE holder is busy ----------
+# A clock step, NTP or a network TMPDIR can date a healthy updater's lock in
+# the future. Its holder is alive and is an update.sh, so the lock is busy
+# and the holder must not be stopped: a negative age alone never kills.
 FUTURE_INSTALL="$SCRATCH/Application Support/future-lock/com.gaffer.panel"
 new_install "$FUTURE_INSTALL"
 FAKE_PID="$(start_fake_updater)"
@@ -516,19 +532,110 @@ trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || 
 FUTURE_STAMP="$(date -v+1d +%Y%m%d%H%M.%S 2>/dev/null || date -d '1 day' +%Y%m%d%H%M.%S)"
 mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
 touch -t "$FUTURE_STAMP" "$LOCK_DIR"
+BEFORE="$(tree_hash "$FUTURE_INSTALL")"
+: > "$LOG"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$FUTURE_INSTALL/daemon/update.sh"
+FUTURE_EXIT=$?
+set -e
+if [ "$FUTURE_EXIT" -eq 3 ]; then pass "updater exited 3 on a future-dated lock with a live holder"; else fail "updater exited $FUTURE_EXIT on a future-dated lock with a live holder, expected 3"; fi
+if grep -q "Another update is already running (pid $FAKE_PID)" "$LOG"; then pass "future-dated lock's live holder was reported as running"; else fail "future-dated lock's live holder was not reported as running"; fi
+if grep -q "Stopping an update" "$LOG"; then fail "future-dated lock's live holder was stopped on the negative age alone"; else pass "no stop was attempted on the future-dated lock's live holder"; fi
+if kill -0 "$FAKE_PID" 2>/dev/null; then pass "future-dated lock's live holder (pid $FAKE_PID) is still alive"; else fail "future-dated lock's live holder was killed"; fi
+if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$FAKE_PID" ]; then pass "future-dated live lock kept its holder's pid"; else fail "future-dated live lock was removed or rewritten"; fi
+if [ "$BEFORE" = "$(tree_hash "$FUTURE_INSTALL")" ]; then pass "future-dated live-lock run left the install untouched"; else fail "future-dated live-lock run modified the install"; fi
+stop_fake_updater "$FAKE_PID"
+rm -rf "$LOCK_DIR"
+
+# ---------- Case 7b: a lock and marker dated in the future with a DEAD pid are stale ----------
+# Nothing alive holds them, and a mtime over 300 s ahead cannot be "young"
+# or "fresh": both are leftovers from before the clock moved back.
+FUTURE_DEAD_INSTALL="$SCRATCH/Application Support/future-dead/com.gaffer.panel"
+new_install "$FUTURE_DEAD_INSTALL"
+DEAD_PID="$(start_fake_updater)"
+stop_fake_updater "$DEAD_PID"
+mkdir -p "$LOCK_DIR" && echo "$DEAD_PID" > "$LOCK_DIR/pid"
+touch -t "$FUTURE_STAMP" "$LOCK_DIR"
 mkdir -p "$LOCK_DIR.takeover"
 touch -t "$FUTURE_STAMP" "$LOCK_DIR.takeover"
 : > "$LOG"
-if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$FUTURE_INSTALL/daemon/update.sh"; then
-  pass "update.sh took over the future-dated lock and exited 0"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$FUTURE_DEAD_INSTALL/daemon/update.sh"; then
+  pass "update.sh took over the future-dated dead-pid lock and exited 0"
 else
-  fail "update.sh did not take over the future-dated lock (log: $LOG)"
+  fail "update.sh did not take over the future-dated dead-pid lock (log: $LOG)"
 fi
-if grep -q "Stopping an update that has run for over 15 minutes (pid $FAKE_PID)" "$LOG"; then pass "future-dated lock's live holder was treated as stuck"; else fail "future-dated lock's holder was not treated as stuck"; fi
+if grep -q "Taking over an abandoned update lock (pid $DEAD_PID)" "$LOG"; then pass "future-dated dead-pid lock was taken over"; else fail "no takeover line for the future-dated dead-pid lock"; fi
 if grep -q "Removing a takeover marker dated in the future" "$LOG"; then pass "future-dated takeover marker was cleared"; else fail "future-dated takeover marker was not cleared"; fi
-wait "$FAKE_PID" 2>/dev/null || true
-stop_fake_updater "$FAKE_PID"
 if [ -e "$LOCK_DIR" ] || [ -e "$LOCK_DIR.takeover" ]; then fail "lock or marker left behind after the future-dated run"; else pass "lock and marker released after the future-dated run"; fi
+
+# ---------- Case 7c: a pid-less lock dated within the skew tolerance is young ----------
+# 100 s ahead is what a stepped clock produces, not a leftover: busy.
+SKEW_INSTALL="$SCRATCH/Application Support/skew-lock/com.gaffer.panel"
+new_install "$SKEW_INSTALL"
+mkdir -p "$LOCK_DIR"
+touch -t "$(date -v+100S +%Y%m%d%H%M.%S 2>/dev/null || date -d '100 seconds' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+: > "$LOG"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$SKEW_INSTALL/daemon/update.sh"
+SKEW_EXIT=$?
+set -e
+if [ "$SKEW_EXIT" -eq 3 ]; then pass "updater exited 3 on a pid-less lock dated 100 s ahead"; else fail "updater exited $SKEW_EXIT on a pid-less lock dated 100 s ahead, expected 3"; fi
+if [ -d "$LOCK_DIR" ]; then pass "lock dated 100 s ahead left in place for its owner"; else fail "lock dated 100 s ahead was removed"; fi
+rm -rf "$LOCK_DIR"
+
+# ---------- Case 7d: a holder started after the lock was written is a reused pid ----------
+# The lock is 2 minutes old; the live update.sh holding its pid is seconds
+# old, so it cannot be the updater that wrote the lock. The lock is
+# abandoned and taken over; the process is left alone (not ours to stop).
+REUSE_INSTALL="$SCRATCH/Application Support/pid-reuse/com.gaffer.panel"
+new_install "$REUSE_INSTALL"
+mkdir -p "$LOCK_DIR"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+FAKE_PID="$(start_fake_updater)"
+trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
+# Writing the pid file would refresh the dir's mtime: write, then backdate again.
+echo "$FAKE_PID" > "$LOCK_DIR/pid"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+: > "$LOG"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" npm_config_audit=false npm_config_fund=false bash "$REUSE_INSTALL/daemon/update.sh"; then
+  pass "update.sh took over the lock whose pid was reused and exited 0"
+else
+  fail "update.sh did not take over the reused-pid lock (log: $LOG)"
+fi
+if grep -q "The lock's pid $FAKE_PID now belongs to a process started after the lock was written (pid reused)" "$LOG"; then pass "log explains the reused pid"; else fail "no pid-reuse line in the log"; fi
+if grep -q "Taking over an abandoned update lock (pid $FAKE_PID)" "$LOG"; then pass "reused-pid lock was taken over as abandoned"; else fail "no takeover line for the reused-pid lock"; fi
+if grep -q "Stopping an update" "$LOG"; then fail "the process that reused the pid was stopped"; else pass "no stop was attempted on the process that reused the pid"; fi
+if kill -0 "$FAKE_PID" 2>/dev/null; then pass "the process that reused the pid (pid $FAKE_PID) is still alive"; else fail "the process that reused the pid was killed"; fi
+stop_fake_updater "$FAKE_PID"
+if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the reused-pid run"; else pass "lock released after the reused-pid run"; fi
+
+# ---------- Case 7e: a fresh marker renamed by mistake is put back ----------
+# B judges the stale marker stale and stops at its marker gate. The marker
+# is then replaced by a fresh one (another updater's). B, released, renames
+# that fresh marker, re-checks its age, puts it back and exits busy.
+PUTBACK_INSTALL="$SCRATCH/Application Support/put-back/com.gaffer.panel"
+new_install "$PUTBACK_INSTALL"
+mkdir -p "$LOCK_DIR" && echo "$DEAD_PID" > "$LOCK_DIR/pid"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR"
+mkdir -p "$LOCK_DIR.takeover"
+touch -t "$(date -v-2M +%Y%m%d%H%M.%S 2>/dev/null || date -d '2 minutes ago' +%Y%m%d%H%M.%S)" "$LOCK_DIR.takeover"
+BEFORE="$(tree_hash "$PUTBACK_INSTALL")"
+: > "$LOG"
+rm -f "$SCRATCH/mgate-pb" "$SCRATCH/mgate-pb.ready"
+set +e
+( PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_MARKER_GATE="$SCRATCH/mgate-pb" bash "$PUTBACK_INSTALL/daemon/update.sh"; echo $? > "$SCRATCH/putback.exit" ) &
+wait_for_file "$SCRATCH/mgate-pb.ready"
+rm -rf "$LOCK_DIR.takeover" && mkdir "$LOCK_DIR.takeover" && echo 99999 > "$LOCK_DIR.takeover/pid"
+touch "$SCRATCH/mgate-pb"
+wait
+set -e
+if [ "$(cat "$SCRATCH/putback.exit")" = "3" ]; then pass "updater exited 3 after renaming a fresh marker by mistake"; else fail "updater exited $(cat "$SCRATCH/putback.exit") after the fresh marker, expected 3"; fi
+if grep -q "The takeover marker was renewed by another update meanwhile, putting it back." "$LOG"; then pass "log records the put-back"; else fail "no put-back line in the log"; fi
+if [ -d "$LOCK_DIR.takeover" ] && [ "$(cat "$LOCK_DIR.takeover/pid" 2>/dev/null)" = "99999" ]; then pass "the fresh marker is back in place with its owner's pid"; else fail "the fresh marker was not put back"; fi
+if ls "$TMPDIR" | grep -q 'gaffer-update.lock.takeover.stale'; then fail "renamed marker left behind after the put-back"; else pass "no renamed marker left behind after the put-back"; fi
+if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$DEAD_PID" ]; then pass "the put-back run left the lock alone"; else fail "the put-back run removed or rewrote the lock"; fi
+if [ "$BEFORE" = "$(tree_hash "$PUTBACK_INSTALL")" ]; then pass "the put-back run left the install untouched"; else fail "the put-back run modified the install"; fi
+rm -rf "$LOCK_DIR" "$LOCK_DIR.takeover"
 
 # ---------- Case 8: an updater whose lock was replaced under it leaves the replacement alone ----------
 # A holds the lock and stops at its hold gate; the lock's pid file is then
