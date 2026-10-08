@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newTurnState, observe, classify, userMessage, LAST_VERIFIED, versionStatus, versionNotice } from '../cli-contract.js';
+import { newTurnState, observe, classify, userMessage, LAST_VERIFIED, NEWER_PATCH_TOLERANCE, versionStatus, versionDetail, versionNotice } from '../cli-contract.js';
 
 // Each fixture is a scrubbed stream-json capture from a real `claude -p` run
 // (standalone 2.1.236, the desktop app's 2.1.289 and 2.1.293), replayed
@@ -244,13 +244,20 @@ test('LAST_VERIFIED is the fixture range', () => {
   ['2.1.236', '2.1.289', '2.1.293'].forEach(function (v) { assert.equal(versionStatus(v), 'ok', v); });
 });
 
-test('versionStatus: numeric compare table', () => {
+test('versionStatus: numeric compare table, with the tolerated patch window above max', () => {
+  assert.equal(NEWER_PATCH_TOLERANCE, 30);
   var table = [
     ['2.1.236', 'ok'], ['2.1.289', 'ok'], ['2.1.293', 'ok'], ['2.1.250', 'ok'],
-    ['2.1.294', 'newer'], ['2.1.300', 'newer'], ['2.2.0', 'newer'], ['3.0.0', 'newer'], ['10.0.0', 'newer'],
+    // Patches up to max.patch + 30 on the same minor are the normal state of
+    // most installs within days: ok for the panel.
+    ['2.1.294', 'ok'], ['2.1.300', 'ok'], ['2.1.310', 'ok'], ['2.1.323', 'ok'],
+    // Beyond the window, or a new minor or major: newer.
+    ['2.1.324', 'newer'], ['2.1.400', 'newer'], ['2.2.0', 'newer'], ['2.2.293', 'newer'], ['3.0.0', 'newer'], ['10.0.0', 'newer'],
     ['2.1.235', 'older'], ['2.1.9', 'older'], ['2.0.999', 'older'], ['1.9.9', 'older'],
-    ['2.1.293 (Claude Code)', 'ok'], ['v2.1.294', 'newer'], ['  2.1.230\n', 'older'],
+    ['2.1.293 (Claude Code)', 'ok'], ['v2.1.294', 'ok'], ['v2.2.0', 'newer'], ['  2.1.230\n', 'older'],
     ['unknown', 'unknown'], ['', 'unknown'], ['2.1', 'unknown'], ['abc', 'unknown'],
+    // Absurd components are not a version (digits are capped at six).
+    ['2.1.2934567', 'unknown'], ['1234567.0.0', 'unknown'], ['2.1234567.0', 'unknown'],
     [null, 'unknown'], [undefined, 'unknown'], [2.1, 'unknown'], [{}, 'unknown'],
   ];
   table.forEach(function (row) {
@@ -258,16 +265,23 @@ test('versionStatus: numeric compare table', () => {
   });
 });
 
-test('versionNotice: copy only for newer/older, names both ends, no dashes', () => {
+test('versionDetail: aboveMax marks the tolerated patches so a caller can log them', () => {
+  assert.deepEqual(versionDetail('2.1.289'), { status: 'ok', aboveMax: false, shown: '2.1.289' });
+  assert.deepEqual(versionDetail('2.1.300 (Claude Code)'), { status: 'ok', aboveMax: true, shown: '2.1.300' });
+  assert.deepEqual(versionDetail('2.2.0'), { status: 'newer', aboveMax: true, shown: '2.2.0' });
+  assert.deepEqual(versionDetail('2.1.100'), { status: 'older', aboveMax: false, shown: '2.1.100' });
+  assert.deepEqual(versionDetail('nope'), { status: 'unknown', aboveMax: false, shown: null });
+});
+
+test('versionNotice: direction-aware copy, nothing for ok or tolerated or unknown, no dashes', () => {
   assert.equal(versionNotice('2.1.289'), null);
+  assert.equal(versionNotice('2.1.310'), null, 'a tolerated patch shows nothing');
   assert.equal(versionNotice('unknown'), null);
   assert.equal(versionNotice(null), null);
-  var newer = versionNotice('2.1.310 (Claude Code)');
-  assert.match(newer, /tested with Claude Code 2\.1\.236 to 2\.1\.293/);
-  assert.match(newer, /You are on 2\.1\.310, which is newer/);
-  assert.match(newer, /update Gaffer/);
-  assert.equal(newer.indexOf('(Claude Code)'), -1, 'only the bare version is shown');
+  var newer = versionNotice('2.2.0 (Claude Code)');
+  assert.equal(newer, 'Gaffer has not been tested with Claude Code 2.2.0 yet. If chat misbehaves, check for a Gaffer update.');
+  assert.match(versionNotice('2.1.400'), /not been tested with Claude Code 2\.1\.400 yet/, 'a far patch gets the newer copy too');
   var older = versionNotice('2.1.200');
-  assert.match(older, /2\.1\.200, which is older/);
+  assert.equal(older, 'Gaffer was tested with Claude Code 2.1.236 to 2.1.293. You are on 2.1.200, which is older. Update Claude Code if chat misbehaves.');
   [newer, older].forEach(function (m) { assert.equal(/[–—]/.test(m), false); });
 });

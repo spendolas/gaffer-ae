@@ -65,23 +65,44 @@ function doPost(e) {
     return ContentService.createTextOutput('bad json').setMimeType(ContentService.MimeType.TEXT);
   }
 
+  var rows = rowsForPayload(body);
+  for (var i = 0; i < rows.length; i++) sheet.appendRow(rows[i]);
+
+  return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
+}
+
+// The rows one POST appends, in header order. Pure (no SpreadsheetApp), so
+// scripts/telemetry-sheet-webhook.test.mjs can run it under Node.
+//
+// errorKinds is install-wide for the day, not per model, so it is written on
+// the FIRST row of a POST only. Writing it on every row would make a
+// SUM over the column count the same failures once per model. Older
+// daemons (before 0.11.3) send no errorKinds at all: the column is then
+// empty, as before.
+//
+// A day with failures but no completed turn (every turn died before a result
+// event) arrives with an empty byModel and a non-empty errorKinds. It still
+// gets one row, with model "(none)" and zero counters, so the failures are
+// not dropped on the floor: the daemon deletes its buffer once the POST
+// returns, whatever this script did with it.
+function rowsForPayload(body) {
   var date = body.date || '';
   var sentAt = body.sentAt || '';
   var installId = body.installId || '';
-  var byModel = body.byModel || {};
+  var byModel = body.byModel && typeof body.byModel === 'object' ? body.byModel : {};
   var gafferVersion = body.gafferVersion || '';
   var os = body.os || '';
-  // Per-day failure counters are install-wide, not per model; stored once as
-  // a JSON string on each of the day's rows (empty when none were sent).
   var errorKinds = body.errorKinds && typeof body.errorKinds === 'object'
     ? JSON.stringify(body.errorKinds) : '';
+  var hasErrorKinds = errorKinds !== '' && errorKinds !== '{}';
 
+  var rows = [];
   for (var key in byModel) {
     var parts = key.split('::');
     var model = parts[0] || '';
     var requestedModel = parts[1] || model; // no downshift → same as model
-    var m = byModel[key];
-    sheet.appendRow([
+    var m = byModel[key] && typeof byModel[key] === 'object' ? byModel[key] : {};
+    rows.push([
       date,
       sentAt,
       installId,
@@ -98,9 +119,18 @@ function doPost(e) {
       m.aeVersion || '',
       m.cliVersion || '',
       m.cliSource || '',
+      rows.length === 0 ? errorKinds : '',
+    ]);
+  }
+
+  if (rows.length === 0 && hasErrorKinds) {
+    rows.push([
+      date, sentAt, installId, '(none)', '(none)',
+      0, 0, 0, 0, 0, 0,
+      gafferVersion, os, '', '', '',
       errorKinds,
     ]);
   }
 
-  return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
+  return rows;
 }

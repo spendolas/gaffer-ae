@@ -14,10 +14,19 @@
 // when the running CLI falls outside this range; it never blocks anything.
 export var LAST_VERIFIED = { min: '2.1.236', max: '2.1.293' };
 
+// Claude Code ships several patch releases a week, so a CLI a few patches
+// above max is the normal state of almost every install within days of a
+// Gaffer release. Patches up to this many above max.patch (same major and
+// minor) count as 'ok' for the panel: chat-handler only writes a log line.
+// A new minor or major, or a patch further out, is 'newer' and gets the
+// notice.
+export var NEWER_PATCH_TOLERANCE = 30;
+
 // Leading x.y.z of a version string as numbers, or null when there is none.
+// Components are capped at six digits so an absurd string is not a version.
 function parseVersion(v) {
   if (typeof v !== 'string') return null;
-  var m = /^\s*v?(\d+)\.(\d+)\.(\d+)/.exec(v);
+  var m = /^\s*v?(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?!\d)/.exec(v);
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
@@ -29,25 +38,45 @@ function compareParsed(a, b) {
   return 0;
 }
 
-// 'ok' inside LAST_VERIFIED (inclusive), 'newer' above max, 'older' below
-// min, 'unknown' for anything that is not a version. Pure.
-export function versionStatus(version) {
+// Everything the callers need in one pure read:
+//   status:   'ok' | 'newer' | 'older' | 'unknown' (what versionStatus returns)
+//   aboveMax: true when the version is above LAST_VERIFIED.max at all, so a
+//             tolerated patch (status 'ok', aboveMax true) can still be logged
+//   shown:    the bare x.y.z, or null for an unknown version
+export function versionDetail(version) {
   var v = parseVersion(version);
-  if (!v) return 'unknown';
+  if (!v) return { status: 'unknown', aboveMax: false, shown: null };
   var min = parseVersion(LAST_VERIFIED.min), max = parseVersion(LAST_VERIFIED.max);
-  if (compareParsed(v, max) > 0) return 'newer';
-  if (compareParsed(v, min) < 0) return 'older';
-  return 'ok';
+  var shown = v.join('.');
+  if (compareParsed(v, max) > 0) {
+    var sameLine = v[0] === max[0] && v[1] === max[1];
+    var tolerated = sameLine && v[2] - max[2] <= NEWER_PATCH_TOLERANCE;
+    return { status: tolerated ? 'ok' : 'newer', aboveMax: true, shown: shown };
+  }
+  if (compareParsed(v, min) < 0) return { status: 'older', aboveMax: false, shown: shown };
+  return { status: 'ok', aboveMax: false, shown: shown };
+}
+
+// 'ok' inside LAST_VERIFIED (inclusive) or within the tolerated patch window
+// above max, 'newer' for a new minor or major or a patch beyond the window,
+// 'older' below min, 'unknown' for anything that is not a version. Pure.
+export function versionStatus(version) {
+  return versionDetail(version).status;
 }
 
 // Panel copy for an out-of-range CLI, or null when there is nothing to say.
-// User-facing: no em or en dashes.
+// Direction-aware: an older CLI is the user's to update, a newer one is
+// Gaffer's to catch up with. User-facing: no em or en dashes.
 export function versionNotice(version) {
-  var status = versionStatus(version);
-  if (status !== 'newer' && status !== 'older') return null;
-  var shown = parseVersion(version).join('.');
-  return 'Gaffer was tested with Claude Code ' + LAST_VERIFIED.min + ' to ' + LAST_VERIFIED.max
-    + '. You are on ' + shown + ', which is ' + status + ' than that range. If chat misbehaves, update Gaffer.';
+  var d = versionDetail(version);
+  if (d.status === 'older') {
+    return 'Gaffer was tested with Claude Code ' + LAST_VERIFIED.min + ' to ' + LAST_VERIFIED.max
+      + '. You are on ' + d.shown + ', which is older. Update Claude Code if chat misbehaves.';
+  }
+  if (d.status === 'newer') {
+    return 'Gaffer has not been tested with Claude Code ' + d.shown + ' yet. If chat misbehaves, check for a Gaffer update.';
+  }
+  return null;
 }
 
 var KNOWN_TYPES = ['system', 'assistant', 'user', 'result', 'rate_limit_event', 'stream_event'];

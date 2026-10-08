@@ -8,30 +8,47 @@ import { fileURLToPath } from 'node:url';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
-import { newTurnState, observe, classify, userMessage as turnUserMessage, versionStatus, versionNotice } from './cli-contract.js';
+import { newTurnState, observe, classify, userMessage as turnUserMessage, versionDetail, versionNotice } from './cli-contract.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // The "Claude Code is outside the tested range" notice goes out at most once
-// per daemon life, across every panel and ChatHandler (one daemon serves all
-// AE instances, and the binary is the same for all of them).
-var cliVersionNoticeSent = false;
-export function resetCliVersionNoticeForTests() { cliVersionNoticeSent = false; }
+// per panel socket: a second AE instance has its own socket and gets its own
+// copy, and a panel that reconnects (new socket) is told again once. The
+// daemon log line goes out once per version string per daemon life, whatever
+// the panels do, so the log stays readable.
+var cliVersionNoticedSockets = new WeakSet();
+var cliVersionLogged = {};
+export function resetCliVersionNoticeForTests() {
+  cliVersionNoticedSockets = new WeakSet();
+  cliVersionLogged = {};
+}
 
 // After the first init event that names a CLI version: if it is outside
 // LAST_VERIFIED, log once and send one chat_event notice (the panel renders
-// it as an ordinary chat notice). Warn only: never blocks, never changes the
-// spawn, never throws; an unknown or unparsable version shows nothing.
+// it as an ordinary chat notice). A patch a little above the tested max is
+// the normal state of most installs, so it only gets the log line. Warn
+// only: never blocks, never changes the spawn, never throws; an unknown or
+// unparsable version shows nothing. The per-socket flag is set only after
+// the send went through, so a closed socket does not swallow the notice.
 function maybeNoticeCliVersion(version, socket) {
-  if (cliVersionNoticeSent || !version) return;
+  if (!version) return;
   try {
-    var status = versionStatus(version);
-    if (status !== 'newer' && status !== 'older') return;
-    cliVersionNoticeSent = true;
-    console.log('Gaffer chat: Claude Code ' + version + ' is ' + status + ' than the tested range, notifying the panel once');
-    if (socket && socket.readyState === 1) {
-      socket.send(JSON.stringify({ type: 'chat_event', event: 'cli_version', message: versionNotice(version) }));
+    var d = versionDetail(version);
+    if (d.status === 'unknown') return;
+    var outOfRange = d.status === 'newer' || d.status === 'older';
+    if (!outOfRange && !d.aboveMax) return;
+    if (!cliVersionLogged[d.shown]) {
+      cliVersionLogged[d.shown] = true;
+      console.log(outOfRange
+        ? 'Gaffer chat: Claude Code ' + d.shown + ' is ' + d.status + ' than the tested range, notifying each panel once'
+        : 'Gaffer chat: Claude Code ' + d.shown + ' is a few patches above the tested range, no notice shown');
     }
+    if (!outOfRange) return;
+    if (!socket || typeof socket !== 'object' || cliVersionNoticedSockets.has(socket)) return;
+    if (socket.readyState !== 1) return;
+    socket.send(JSON.stringify({ type: 'chat_event', event: 'cli_version', message: versionNotice(version) }));
+    cliVersionNoticedSockets.add(socket);
   } catch (e) { /* a notice must never affect the turn */ }
 }
 

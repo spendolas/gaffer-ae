@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           (cd panel/daemon && npm ci && npm test)
           node scripts/check-ps-encoding.mjs
-          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs
 
       - name: Build assets
         if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
