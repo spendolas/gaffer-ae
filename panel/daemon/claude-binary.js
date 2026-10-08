@@ -434,6 +434,16 @@ function cacheStillValid(deps) {
   return true;
 }
 
+// Which lookup step the cached binary came from and what `--version` said,
+// or null before the first successful lookup. Deliberately NOT the path:
+// telemetry reads this, and a path names the user's home folder. `step` is
+// one of the STEP_* strings logged by found(); `version` is the raw
+// `--version` line (e.g. "2.1.289 (Claude Code)" or "unknown").
+export function lastClaudeLookup() {
+  if (!cached) return null;
+  return { step: cached.step, version: cached.version };
+}
+
 // Test-only: forget the cached hit and any in-flight lookup.
 export function resetClaudeLookupForTests() {
   cached = null;

@@ -100,8 +100,47 @@ function getGafferVersion() {
 
 var OS_INFO = osPlatform() + ' ' + osRelease();
 
+// Claude Code version as sent to telemetry: the leading x.y.z of whatever
+// string we were handed ("2.1.289 (Claude Code)" from `--version`, or
+// `claude_code_version` from the stream's init event), else 'unknown'. Only
+// those digits ever leave the machine: no build hash, no path, no suffix.
+var CLI_VERSION_RE = /^(\d{1,4}\.\d{1,4}\.\d{1,5})/;
+export function sanitizeCliVersion(v) {
+  if (typeof v !== 'string') return 'unknown';
+  var m = CLI_VERSION_RE.exec(v.trim());
+  return m ? m[1] : 'unknown';
+}
+
+// Where the binary came from, as a closed enum. Anything else (a new lookup
+// step, a typo, an object) collapses to 'unknown' so the endpoint can never
+// receive a path or a folder name under this key.
+var CLI_SOURCES = ['desktop-app', 'standalone', 'config-pin', 'path', 'unknown'];
+export function sanitizeCliSource(s) {
+  return CLI_SOURCES.indexOf(s) !== -1 ? s : 'unknown';
+}
+
+// Maps claude-binary.js's lookup step (the string found() logs) onto the
+// telemetry enum. 'known location' is a fixed standalone install path;
+// PATH and login-shell hits are both "whatever the shell would run".
+export function cliSourceFromStep(step) {
+  switch (step) {
+    case 'desktop app': return 'desktop-app';
+    case 'known location': return 'standalone';
+    case 'config': return 'config-pin';
+    case 'PATH':
+    case 'login shell': return 'path';
+    default: return 'unknown';
+  }
+}
+
+// Turn outcomes counted per day (cli-contract.js kinds plus text_fallback,
+// which marks a verdict that needed the CLI's human text because the
+// structured fields had drifted). A closed list: the counter map is sent as
+// is, so no free-form key may ever reach it.
+var TURN_KINDS = ['stale_session', 'too_long', 'auth', 'model', 'api_error', 'unknown_error', 'text_fallback'];
+
 function emptyBuffer() {
-  return { date: todayKey(), byModel: {} };
+  return { date: todayKey(), byModel: {}, errorKinds: {} };
 }
 
 function readBuffer() {
@@ -149,6 +188,13 @@ export function recordUsage(entry) {
     // Last-seen AE version for this model pair today — not aggregated, just
     // enough to see which AE version a model pairing ran on.
     bucket.aeVersion = entry.aeVersion || bucket.aeVersion || 'unknown';
+    // Last-seen Claude Code version and where the binary came from, same
+    // pattern. Both pass through a sanitizer so only "x.y.z" and a closed
+    // enum are ever stored: never the path, never a folder hash.
+    var cliVersion = sanitizeCliVersion(entry.cliVersion);
+    bucket.cliVersion = cliVersion !== 'unknown' ? cliVersion : (bucket.cliVersion || 'unknown');
+    var cliSource = sanitizeCliSource(entry.cliSource);
+    bucket.cliSource = cliSource !== 'unknown' ? cliSource : (bucket.cliSource || 'unknown');
     buffer.byModel[key] = bucket;
 
     writeBuffer(buffer);
@@ -156,6 +202,44 @@ export function recordUsage(entry) {
     // Telemetry must never affect the chat flow.
     console.error('Gaffer telemetry: recordUsage failed (ignored)', e.message);
   }
+}
+
+// Counts one classified failed turn for today (cli-contract.js verdict). `ok`
+// turns are not counted here (recordUsage already counts turns); unknown
+// kinds are dropped rather than stored. `via === 'text'` additionally bumps
+// text_fallback, the "our structural knowledge is stale" signal. Buffers
+// regardless of the toggle, like recordUsage.
+export function recordTurnKind(kind, via) {
+  try {
+    var keys = [];
+    if (TURN_KINDS.indexOf(kind) !== -1) keys.push(kind);
+    if (via === 'text') keys.push('text_fallback');
+    if (!keys.length) return;
+
+    var buffer = readBuffer();
+    var today = todayKey();
+    if (buffer.date !== today) {
+      flush(buffer);
+      buffer = emptyBuffer();
+    }
+    if (!buffer.errorKinds || typeof buffer.errorKinds !== 'object') buffer.errorKinds = {};
+    keys.forEach(function (k) { buffer.errorKinds[k] = (buffer.errorKinds[k] || 0) + 1; });
+    writeBuffer(buffer);
+  } catch (e) {
+    console.error('Gaffer telemetry: recordTurnKind failed (ignored)', e.message);
+  }
+}
+
+// The errorKinds map restricted to the closed key list with integer values,
+// so a hand-edited or corrupted buffer can never smuggle a free-form key out.
+function cleanErrorKinds(map) {
+  var out = {};
+  if (!map || typeof map !== 'object') return out;
+  TURN_KINDS.forEach(function (k) {
+    var n = map[k];
+    if (typeof n === 'number' && isFinite(n) && n > 0) out[k] = Math.floor(n);
+  });
+  return out;
 }
 
 // POSTs the day's aggregate and clears the local buffer, but only once the
@@ -170,17 +254,26 @@ export function flush(buffer) {
       if (!isEnabled()) { resolve(false); return; }
 
       buffer = buffer || readBuffer();
-      if (!buffer.byModel || Object.keys(buffer.byModel).length === 0) { resolve(false); return; }
+      var errorKinds = cleanErrorKinds(buffer.errorKinds);
+      var hasModels = buffer.byModel && Object.keys(buffer.byModel).length > 0;
+      if (!hasModels && Object.keys(errorKinds).length === 0) { resolve(false); return; }
 
       flushInProgress = true;
 
+      // Field inventory (the receiving sheet reads only what it knows and
+      // ignores the rest, so adding a key here never breaks delivery):
+      // date, sentAt, installId, gafferVersion, os, byModel{turns, tokens,
+      // costUsd, aeVersion, cliVersion, cliSource}, errorKinds{kind: count}.
+      // Nothing in here may ever be a path, a hostname, a user name or text
+      // from the CLI or the chat.
       var payload = JSON.stringify({
         date: buffer.date,
         sentAt: new Date().toISOString(),
         installId: getInstallId(),
         gafferVersion: getGafferVersion(),
         os: OS_INFO,
-        byModel: buffer.byModel,
+        byModel: buffer.byModel || {},
+        errorKinds: errorKinds,
       });
 
       var isHttps = TELEMETRY_URL.indexOf('https:') === 0;

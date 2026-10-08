@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { findClaudeBinary } from './claude-binary.js';
+import { findClaudeBinary, lastClaudeLookup } from './claude-binary.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -630,9 +630,27 @@ export class ChatHandler {
     // Production: node's spawn and the real binary lookup, unchanged.
     this._spawn = opts.spawn || spawn;
     this._findClaudeBinary = opts.findClaudeBinary || findClaudeBinary;
+    // Which lookup step found the binary and its `--version` line (telemetry
+    // and the spawn log). Never the path.
+    this._lastClaudeLookup = opts.lastClaudeLookup || lastClaudeLookup;
+    // Classifier state of the turn in flight, so the result handler can read
+    // the CLI version the init event reported.
+    this._turnState = null;
     // Called with the socket when a turn fails because Claude is not signed in,
     // so the owner (index.js) can re-push the account card's auth status.
     this._onAuthError = opts.onAuthError || null;
+  }
+
+  // { version, source } of the binary the last lookup settled on, for logs
+  // and telemetry: the version as `--version` printed it (or 'unknown') and
+  // the telemetry source enum. Never throws, never includes the path.
+  _claudeLookupInfo() {
+    var info = null;
+    try { info = this._lastClaudeLookup(); } catch (e) { info = null; }
+    return {
+      version: (info && info.version) || 'unknown',
+      source: telemetry.cliSourceFromStep(info && info.step),
+    };
   }
 
   // Resolve a stable identity for the currently signed-in account from disk
@@ -881,10 +899,12 @@ export class ChatHandler {
     console.log('Gaffer chat PATH: ' + env.PATH);
     // Resolved model/effort actually handed to the CLI this turn — the record
     // for tracing what a panel selection maps to.
+    var lookup = this._claudeLookupInfo();
     console.log('Gaffer chat spawn: --model ' + model
       + (effort && EFFORTS.indexOf(effort) !== -1 ? ' --effort ' + effort : ' (no --effort)')
       + ' | window=' + this._lastWindow
-      + ' resume=' + (sessionId ? 'yes' : 'new'));
+      + ' resume=' + (sessionId ? 'yes' : 'new')
+      + ' cli=' + lookup.version + ' source=' + lookup.source);
 
     // Cache for the background compaction call.
     this.claudeBin = claudeBin;
@@ -914,6 +934,7 @@ export class ChatHandler {
     // observed before Gaffer's own handling; at close, classify() decides what
     // the turn was from structured fields first, CLI text second.
     var st = newTurnState(!!sessionId);
+    this._turnState = st;
     var loggedBadLine = false;
 
     // One stdout line. A JSON parse failure is not an event and is ignored
@@ -970,6 +991,8 @@ export class ChatHandler {
           // A successful result followed by a non-zero or null exit: the
           // turn is still ok, but the odd exit is worth a trace.
           + (verdict.kind === 'ok' && verdict.exitCode !== undefined ? ' okDespiteExit=' + verdict.exitCode : ''));
+        // Per-day failure counters (kind + text_fallback), never the text.
+        if (verdict.kind !== 'ok') telemetry.recordTurnKind(verdict.kind, verdict.via);
       }
 
       // Self-heal a dead --resume: the CLI's session storage can be wiped
@@ -1129,10 +1152,16 @@ export class ChatHandler {
       // errors inside recordUsage are caught there and never reach here.
       try {
         var usage = event.usage || {};
+        // Claude Code version: the stream's own init event first, the
+        // lookup's `--version` line as fallback. telemetry.js reduces either
+        // to "x.y.z" and the source to a closed enum before storing.
+        var lookupInfo = this._claudeLookupInfo();
         telemetry.recordUsage({
           model: this._lastModel,
           requestedModel: this._lastRequestedModel,
           aeVersion: socket && socket._gafferKey,
+          cliVersion: (this._turnState && this._turnState.cliVersion) || lookupInfo.version,
+          cliSource: lookupInfo.source,
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,
