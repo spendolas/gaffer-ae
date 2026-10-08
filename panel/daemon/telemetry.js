@@ -103,8 +103,10 @@ var OS_INFO = osPlatform() + ' ' + osRelease();
 // Claude Code version as sent to telemetry: the leading x.y.z of whatever
 // string we were handed ("2.1.289 (Claude Code)" from `--version`, or
 // `claude_code_version` from the stream's init event), else 'unknown'. Only
-// those digits ever leave the machine: no build hash, no path, no suffix.
-var CLI_VERSION_RE = /^(\d{1,4}\.\d{1,4}\.\d{1,5})/;
+// those digits ever leave the machine: no build hash, no path, no suffix. A
+// leading "v" is tolerated; a component longer than the cap is not a version
+// at all (the lookahead stops "2.1.2934567" from passing as "2.1.29345").
+var CLI_VERSION_RE = /^v?(\d{1,4}\.\d{1,4}\.\d{1,5})(?!\d)/;
 export function sanitizeCliVersion(v) {
   if (typeof v !== 'string') return 'unknown';
   var m = CLI_VERSION_RE.exec(v.trim());
@@ -242,6 +244,36 @@ function cleanErrorKinds(map) {
   return out;
 }
 
+// The byModel map with cliVersion and cliSource re-run through their
+// sanitizers, so a hand-edited or corrupted buffer can never smuggle free
+// text out under those keys at send time (recordUsage sanitizes on the way
+// in; this is the belt to that brace). Other bucket fields are copied as is.
+function cleanByModel(map) {
+  var out = {};
+  if (!map || typeof map !== 'object') return out;
+  Object.keys(map).forEach(function (key) {
+    var b = map[key];
+    if (!b || typeof b !== 'object') return;
+    var copy = Object.assign({}, b);
+    copy.cliVersion = sanitizeCliVersion(b.cliVersion);
+    copy.cliSource = sanitizeCliSource(b.cliSource);
+    out[key] = copy;
+  });
+  return out;
+}
+
+// Deletes the on-disk buffer only while it still holds the flushed day. A
+// buffer whose date moved on (or that cannot be read) is left alone.
+function clearBufferIfDate(date) {
+  try {
+    if (!existsSync(BUFFER_PATH)) return;
+    var current = null;
+    try { current = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8')); } catch (e) { current = null; }
+    if (current && typeof current === 'object' && current.date !== date) return;
+    unlinkSync(BUFFER_PATH);
+  } catch (e) { /* ignore */ }
+}
+
 // POSTs the day's aggregate and clears the local buffer, but only once the
 // send is confirmed. Gated on isEnabled() — off just means "keep buffering,
 // don't send" (Key decision 6): data survives and goes out in full once
@@ -255,8 +287,10 @@ export function flush(buffer) {
 
       buffer = buffer || readBuffer();
       var errorKinds = cleanErrorKinds(buffer.errorKinds);
-      var hasModels = buffer.byModel && Object.keys(buffer.byModel).length > 0;
+      var byModel = cleanByModel(buffer.byModel);
+      var hasModels = Object.keys(byModel).length > 0;
       if (!hasModels && Object.keys(errorKinds).length === 0) { resolve(false); return; }
+      var flushedDate = buffer.date;
 
       flushInProgress = true;
 
@@ -272,7 +306,7 @@ export function flush(buffer) {
         installId: getInstallId(),
         gafferVersion: getGafferVersion(),
         os: OS_INFO,
-        byModel: buffer.byModel || {},
+        byModel: byModel,
         errorKinds: errorKinds,
       });
 
@@ -286,9 +320,11 @@ export function flush(buffer) {
         res.on('end', function () {
           // Clear only once the request was actually sent without a
           // connection error — a best-effort "sent" signal, not a guarantee
-          // the sheet stored it.
-          try { if (existsSync(BUFFER_PATH)) unlinkSync(BUFFER_PATH); }
-          catch (e) { /* ignore */ }
+          // the sheet stored it. And clear only the day that was sent: a
+          // day-rollover flush runs while recordUsage/recordTurnKind may
+          // already have written the new day's first turn to the same file,
+          // and deleting that would lose it.
+          clearBufferIfDate(flushedDate);
           flushInProgress = false;
           resolve(true);
         });

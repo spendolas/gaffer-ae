@@ -24,11 +24,19 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Each probe has its own 90 s limit and a SIGTERM-then-SIGKILL; this is
+    # the cap on the whole job should the CLI misbehave in a way the script
+    # does not anticipate (an npm install that hangs, for instance).
+    timeout-minutes: 15
     # Belt-and-suspenders: even though no push/pull_request trigger exists
     # above, keep this job explicitly scoped to its own triggers only.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Nothing here writes back to the repo; do not leave the token in
+          # .git/config for the installed CLI to find.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -42,13 +50,13 @@ jobs:
           npm install -g @anthropic-ai/claude-code@latest
           claude --version
 
-      # A throwaway HOME and config dir make the run signed out and keep
-      # anything the CLI writes on first run off the real runner home.
+      # The script gives the CLI its own throwaway HOME and config dir (and
+      # ignores any exported CLAUDE_CONFIG_DIR), so the run is signed out and
+      # nothing the CLI writes on first run lands in the real runner home. It
+      # aborts if any probe turns out to be signed in or to cost anything.
       - name: Run the contract check
         run: |
           set -euo pipefail
-          export HOME="$(mktemp -d)"
-          export CLAUDE_CONFIG_DIR="$(mktemp -d)"
           node scripts/cli-contract-check.mjs --out "$RUNNER_TEMP/cli-contract-captures"
 
       # Raw stdout/stderr of each probe, for comparing against

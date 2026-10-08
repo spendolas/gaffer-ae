@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  REQUIRED_FLAGS, GAFFER_EFFORTS, ZERO_UUID,
+  REQUIRED_FLAGS, GAFFER_EFFORTS, ZERO_UUID, SCRUBBED_ENV,
   parseVersionLine, helpListsFlag, missingFlags, parseEffortChoices, missingEfforts,
-  parseStreamLines, envelopeProblems, classifyCapture,
+  parseStreamLines, envelopeProblems, classifyCapture, paidTurnProblems, chooseConfigDir, childEnv,
 } from './cli-contract-check.mjs';
 
 // The pure helpers of the weekly CLI contract check, plus one end-to-end run
@@ -157,15 +157,31 @@ function writeFakeClaude(dir, mode) {
     'var RESUME = ' + JSON.stringify(fx.resume.stdout) + ';',
     'var RESUME_ERR = ' + JSON.stringify(fx.resume.stderr) + ';',
     'var AUTH = ' + JSON.stringify(fx.auth.stdout) + ';',
+    // Every invocation appends its argv and the env it saw to a log file the
+    // test names through GAFFER_FAKE_LOG (which the script passes through).
+    'if (process.env.GAFFER_FAKE_LOG) {',
+    '  fs.appendFileSync(process.env.GAFFER_FAKE_LOG, JSON.stringify({ args: args, env: process.env }) + "\\n");',
+    '}',
     'function out(s, code) { fs.writeSync(1, s); process.exitCode = code; }',
-    'if (args[0] === "--version") { out(mode === "noversion" ? "Claude Code\\n" : "2.1.293 (Claude Code)\\n", 0); }',
-    'else if (args[0] === "--help") { out(mode === "noflag" ? HELP.replace("  --verbose", "  --loud") : HELP, 0); }',
+    // A result edited in place: the auth capture with one field changed.
+    'function authWith(patch) {',
+    '  return AUTH.split("\\n").filter(Boolean).map(function (l) {',
+    '    var e = JSON.parse(l); if (e.type === "result") Object.assign(e, patch); return JSON.stringify(e);',
+    '  }).join("\\n") + "\\n";',
+    '}',
+    // Ignore SIGTERM and sleep: only SIGKILL ends this.
+    'function hang() { process.on("SIGTERM", function () {}); setInterval(function () {}, 1000); }',
+    'if (args[0] === "--version") { if (mode === "hangversion") hang(); else out(mode === "noversion" ? "Claude Code\\n" : "2.1.293 (Claude Code)\\n", 0); }',
+    'else if (args[0] === "--help") { if (mode === "hanghelp") { fs.writeSync(1, "partial help\\n"); hang(); } else out(mode === "noflag" ? HELP.replace("  --verbose", "  --loud") : HELP, 0); }',
     'else if (args.indexOf("--resume") !== -1) {',
     '  if (mode === "resumetext") { var e = JSON.parse(RESUME.trim()); e.num_turns = 1; out(JSON.stringify(e) + "\\n", 1); fs.writeSync(2, RESUME_ERR); }',
+    '  else if (mode === "paidresume") { var p = JSON.parse(RESUME.trim()); p.total_cost_usd = 0.0123; out(JSON.stringify(p) + "\\n", 1); }',
     '  else { out(RESUME, 1); fs.writeSync(2, RESUME_ERR); }',
     '}',
     'else if (args.indexOf("--verbose") === -1) { fs.writeSync(2, "Error: When using --print, --output-format=stream-json requires --verbose\\n"); process.exitCode = 1; }',
     'else if (mode === "noauth") { out(AUTH.replace("authentication_failed", "something_else"), 1); }',
+    'else if (mode === "paid") { out(authWith({ total_cost_usd: 0.004 }), 1); }',
+    'else if (mode === "okturn") { out(authWith({ is_error: false, subtype: "success", result: "Hello!" }), 0); }',
     'else { out(AUTH, 1); }',
   ].join('\n');
   var p = join(dir, 'claude');
@@ -174,13 +190,25 @@ function writeFakeClaude(dir, mode) {
   return p;
 }
 
-function runScript(bin) {
+function runScript(bin, extra) {
+  extra = extra || {};
+  var args = [SCRIPT, '--bin', bin].concat(extra.args || []);
+  var env = Object.assign({}, process.env, extra.env || {});
   return new Promise(function (done) {
-    execFile(process.execPath, [SCRIPT, '--bin', bin], { encoding: 'utf-8', timeout: 60000 }, function (err, stdout, stderr) {
-      done({ code: err ? err.code : 0, stdout: stdout || '', stderr: stderr || '' });
+    var started = Date.now();
+    execFile(process.execPath, args, { encoding: 'utf-8', timeout: 60000, env: env }, function (err, stdout, stderr) {
+      done({ code: err ? err.code : 0, stdout: stdout || '', stderr: stderr || '', ms: Date.now() - started });
     });
   });
 }
+
+// The fake's invocation log: one {args, env} per call, in order.
+function readFakeLog(path) {
+  try { return readFileSync(path, 'utf8').split('\n').filter(Boolean).map(function (l) { return JSON.parse(l); }); }
+  catch (e) { return []; }
+}
+
+function isProbe(call, flag) { return call.args.indexOf(flag) !== -1; }
 
 var canExecFake = process.platform !== 'win32';
 
@@ -213,6 +241,142 @@ test('end to end: a missing binary fails with exit 1 and says it could not run',
   var r = await runScript('/nonexistent/claude-' + process.pid);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /could not run/);
+});
+
+// ---- isolation: the child can never be a signed-in paid turn ----
+
+test('isolation: an exported CLAUDE_CONFIG_DIR, HOME, API keys and backend switches never reach the child', { skip: !canExecFake }, async () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var exportedCfg = join(dir, 'exported-config');
+  mkdirSync(exportedCfg);
+  writeFileSync(join(exportedCfg, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"not-real"}}');
+  var log = join(dir, 'calls.jsonl');
+  var r = await runScript(writeFakeClaude(dir, 'ok'), { env: {
+    GAFFER_FAKE_LOG: log,
+    CLAUDE_CONFIG_DIR: exportedCfg,
+    HOME: join(dir, 'exported-home'),
+    ANTHROPIC_API_KEY: 'sk-ant-not-real',
+    ANTHROPIC_AUTH_TOKEN: 'tok',
+    CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CODE_USE_VERTEX: '1',
+    ANTHROPIC_BASE_URL: 'https://proxy.example',
+    ANTHROPIC_BEDROCK_BASE_URL: 'https://bedrock.example',
+  } });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /config dir: .* \(fresh, signed out\)/);
+  assert.match(r.stdout, /home: .* \(fresh\)/);
+  var calls = readFakeLog(log);
+  assert.ok(calls.length >= 5, 'every probe ran: ' + calls.length);
+  calls.forEach(function (c) {
+    assert.notEqual(c.env.CLAUDE_CONFIG_DIR, exportedCfg, 'exported CLAUDE_CONFIG_DIR ignored');
+    assert.ok(c.env.CLAUDE_CONFIG_DIR && c.env.CLAUDE_CONFIG_DIR.indexOf('gaffer-cli-contract-cfg-') !== -1, 'fresh temp config dir: ' + c.env.CLAUDE_CONFIG_DIR);
+    assert.ok(c.env.HOME && c.env.HOME.indexOf('gaffer-cli-contract-home-') !== -1, 'fresh temp HOME: ' + c.env.HOME);
+    assert.equal(c.env.USERPROFILE, c.env.HOME);
+    SCRUBBED_ENV.forEach(function (k) { assert.equal(k in c.env, false, k + ' removed from the child env'); });
+  });
+  // One run, one config dir and one home, shared by all probes.
+  assert.equal(new Set(calls.map(function (c) { return c.env.CLAUDE_CONFIG_DIR; })).size, 1);
+  assert.equal(new Set(calls.map(function (c) { return c.env.HOME; })).size, 1);
+});
+
+test('isolation: --config-dir is honoured when it holds no credentials', { skip: !canExecFake }, async () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var cfg = join(dir, 'plain-config');
+  mkdirSync(cfg);
+  writeFileSync(join(cfg, 'settings.json'), '{}');
+  var log = join(dir, 'calls.jsonl');
+  var r = await runScript(writeFakeClaude(dir, 'ok'), { args: ['--config-dir', cfg], env: { GAFFER_FAKE_LOG: log } });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /from --config-dir, no credentials file/);
+  var calls = readFakeLog(log);
+  assert.ok(calls.length >= 5);
+  calls.forEach(function (c) { assert.equal(c.env.CLAUDE_CONFIG_DIR, cfg); });
+});
+
+test('isolation: --config-dir with a .credentials.json refuses to run before any probe', { skip: !canExecFake }, async () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var cfg = join(dir, 'signed-in-config');
+  mkdirSync(cfg);
+  writeFileSync(join(cfg, '.credentials.json'), '{}');
+  var log = join(dir, 'calls.jsonl');
+  var r = await runScript(writeFakeClaude(dir, 'ok'), { args: ['--config-dir', cfg], env: { GAFFER_FAKE_LOG: log } });
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /REFUSING to run: .*\.credentials\.json exists/);
+  assert.equal(/PASS |FAIL /.test(r.stdout), false, 'no probe ran');
+  assert.deepEqual(readFakeLog(log), [], 'the binary was never invoked');
+});
+
+test('chooseConfigDir and childEnv (pure): fresh dir by default, refusal on credentials, env scrubbed', () => {
+  var fresh = chooseConfigDir(null, function () { return false; });
+  assert.equal(fresh.refusal, null);
+  assert.ok(fresh.dir.indexOf('gaffer-cli-contract-cfg-') !== -1);
+  var named = chooseConfigDir('/some/dir', function (p) { return p === join('/some/dir', '.credentials.json'); });
+  assert.match(named.refusal, /REFUSING/);
+  assert.equal(chooseConfigDir('/other/dir', function () { return false; }).refusal, null);
+  var env = childEnv({ PATH: '/bin', HOME: '/real', CLAUDE_CONFIG_DIR: '/real/.claude', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_USE_BEDROCK: '1', KEEP: 'me' }, '/tmp/h', '/tmp/c');
+  assert.deepEqual(env, { PATH: '/bin', KEEP: 'me', HOME: '/tmp/h', USERPROFILE: '/tmp/h', CLAUDE_CONFIG_DIR: '/tmp/c' });
+  assert.deepEqual(SCRUBBED_ENV.slice().sort(), ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL',
+    'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']);
+});
+
+test('paidTurnProblems (pure): quiet on the $0 failure captures, loud on cost or success', () => {
+  assert.deepEqual(paidTurnProblems(parseStreamLines(fixture('auth-293').stdout).events), []);
+  assert.deepEqual(paidTurnProblems(parseStreamLines(fixture('resume-293').stdout).events), []);
+  assert.deepEqual(paidTurnProblems([]), []);
+  assert.deepEqual(paidTurnProblems([{ type: 'result', is_error: true, total_cost_usd: 0 }]), []);
+  var cost = paidTurnProblems([{ type: 'result', is_error: true, total_cost_usd: 0.002 }]);
+  assert.equal(cost.length, 1);
+  assert.match(cost[0], /total_cost_usd=0\.002/);
+  var ok = paidTurnProblems([{ type: 'result', is_error: false, subtype: 'success', total_cost_usd: 0 }]);
+  assert.equal(ok.length, 1);
+  assert.match(ok[0], /SUCCEEDED/);
+  assert.equal(paidTurnProblems([{ type: 'result', is_error: false, total_cost_usd: 1 }]).length, 2);
+});
+
+test('abort: a probe that reports total_cost_usd > 0 fails loudly and stops before the next probe', { skip: !canExecFake }, async () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var log = join(dir, 'calls.jsonl');
+  var r = await runScript(writeFakeClaude(dir, 'paidresume'), { env: { GAFFER_FAKE_LOG: log } });
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL bad --resume is a \$0 signed-out failure: result reports total_cost_usd=0\.0123/);
+  assert.match(r.stdout, /ABORTING: a probe was not the signed-out \$0 failure/);
+  assert.match(r.stdout, /CLI CONTRACT CHECK FAILED/);
+  var calls = readFakeLog(log);
+  assert.ok(calls.some(function (c) { return isProbe(c, '--resume'); }), 'the resume probe ran');
+  assert.equal(calls.filter(function (c) { return isProbe(c, '-p') && !isProbe(c, '--resume'); }).length, 0, 'no later -p probe ran after the abort');
+});
+
+test('abort: a signed-out turn that costs money or succeeds fails loudly', { skip: !canExecFake }, async () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var paid = await runScript(writeFakeClaude(dir, 'paid'));
+  assert.equal(paid.code, 1, paid.stdout + paid.stderr);
+  assert.match(paid.stdout, /FAIL signed-out turn is a \$0 signed-out failure: result reports total_cost_usd=0\.004/);
+  assert.match(paid.stdout, /ABORTING/);
+  var dir2 = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var log = join(dir2, 'calls.jsonl');
+  var ok = await runScript(writeFakeClaude(dir2, 'okturn'), { env: { GAFFER_FAKE_LOG: log } });
+  assert.equal(ok.code, 1, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /the turn SUCCEEDED \(subtype=success\)/);
+  assert.match(ok.stdout, /ABORTING/);
+  // The informational no-verbose probe, which would be the third -p turn, never ran.
+  var pTurns = readFakeLog(log).filter(function (c) { return isProbe(c, '-p'); });
+  assert.equal(pTurns.length, 2, 'resume probe and signed-out turn only');
+});
+
+// ---- timeouts: a CLI that ignores SIGTERM cannot hang the job ----
+
+['hangversion', 'hanghelp'].forEach(function (mode) {
+  test('timeout: a fake claude whose ' + (mode === 'hangversion' ? '--version (execFile path)' : '--help (file-redirect path)') + ' ignores SIGTERM is killed and the check finishes', { skip: !canExecFake }, async () => {
+    var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+    var r = await runScript(writeFakeClaude(dir, mode), { env: { GAFFER_CLI_CONTRACT_TIMEOUT_MS: '1500' } });
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /CLI CONTRACT CHECK FAILED/);
+    // 1.5 s timeout, 5 s SIGTERM grace, 1 s last resort, plus the other probes: well under the 60 s harness limit.
+    assert.ok(r.ms < 30000, 'finished in ' + r.ms + ' ms');
+    if (mode === 'hangversion') assert.match(r.stdout, /FAIL --version prints x\.y\.z/);
+    else assert.match(r.stdout, /FAIL --help runs: exit=null/);
+  });
 });
 
 test('ZERO_UUID is the nil-style id the fixtures were captured with', () => {

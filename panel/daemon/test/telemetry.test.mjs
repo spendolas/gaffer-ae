@@ -27,8 +27,13 @@ var server = http.createServer(function (req, res) {
   req.on('data', function (c) { body += c; });
   req.on('end', function () {
     server.lastBody = body;
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ok');
+    // A test may park a promise here to hold the response open.
+    var hold = server.holdUntil || Promise.resolve();
+    server.holdUntil = null;
+    hold.then(function () {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+    });
   });
 });
 await new Promise(function (resolve) { server.listen(0, resolve); });
@@ -140,7 +145,10 @@ test('sanitizers: version regex and length cap, source enum, step mapping', () =
   assert.equal(telemetry.sanitizeCliVersion('2.1.293'), '2.1.293');
   assert.equal(telemetry.sanitizeCliVersion('  2.1.293 (Claude Code)\n'), '2.1.293');
   assert.equal(telemetry.sanitizeCliVersion('2.1.293-beta.1+d96fccce310b'), '2.1.293');
-  assert.equal(telemetry.sanitizeCliVersion('v2.1.293'), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion('v2.1.293'), '2.1.293', 'a leading v is tolerated');
+  assert.equal(telemetry.sanitizeCliVersion('vv2.1.293'), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion('2.1.2934567'), 'unknown', 'an over-long patch is not truncated into a version');
+  assert.equal(telemetry.sanitizeCliVersion('2.1.29345'), '2.1.29345', 'five digits is still inside the cap');
   assert.equal(telemetry.sanitizeCliVersion('2.1'), 'unknown');
   assert.equal(telemetry.sanitizeCliVersion('unknown'), 'unknown');
   assert.equal(telemetry.sanitizeCliVersion(null), 'unknown');
@@ -234,6 +242,59 @@ test('flush() while opted out sends nothing even with the new fields buffered', 
   assert.equal(server.lastBody, null, 'no HTTP request made while disabled');
   assert.ok(existsSync(BUFFER_PATH), 'buffer preserved for later send');
   clearBuffer();
+});
+
+test('flush() re-sanitizes cliVersion and cliSource per bucket, so a hand-edited buffer cannot smuggle text', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  writeFileSync(BUFFER_PATH, JSON.stringify({
+    date: '2020-01-01',
+    byModel: {
+      'haiku::haiku': { turns: 1, cliVersion: '/Users/me/.local/bin/claude 2.1.1', cliSource: '/Users/me/claude.app', aeVersion: '25.0' },
+      'opus::opus': { turns: 2, cliVersion: 'v2.1.300 (Claude Code)', cliSource: 'standalone' },
+      'junk::junk': 'not an object',
+    },
+  }));
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  assert.deepEqual(payload.byModel['haiku::haiku'], { turns: 1, cliVersion: 'unknown', cliSource: 'unknown', aeVersion: '25.0' });
+  assert.deepEqual(payload.byModel['opus::opus'], { turns: 2, cliVersion: '2.1.300', cliSource: 'standalone' });
+  assert.equal('junk::junk' in payload.byModel, false);
+  assert.equal(PATH_LIKE.test(server.lastBody), false, 'no path-like string anywhere in the payload: ' + server.lastBody);
+});
+
+test('day rollover: a flush of yesterday does not delete the new day already written to the buffer', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: { 'a::a': { turns: 1 } } }));
+  server.lastBody = null;
+  // Hold the HTTP response until the new day's turn has been recorded, the
+  // way a real rollover interleaves: the flush is in flight while the turn
+  // that triggered it writes today's bucket to the same file.
+  var release;
+  server.holdUntil = new Promise(function (r) { release = r; });
+
+  var flushing = telemetry.flush();
+  await new Promise(function (r) { setTimeout(r, 20); });
+  telemetry.recordUsage({ model: 'haiku', inputTokens: 1 });
+  var today = new Date().toISOString().slice(0, 10);
+  assert.equal(JSON.parse(readFileSync(BUFFER_PATH, 'utf-8')).date, today, 'today is on disk while the flush is in flight');
+  release();
+
+  var sent = await flushing;
+  assert.equal(sent, true);
+  assert.equal(JSON.parse(server.lastBody).date, '2020-01-01', 'yesterday was what went out');
+  assert.ok(existsSync(BUFFER_PATH), 'today\'s buffer survived the flush');
+  var after = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8'));
+  assert.equal(after.date, today);
+  assert.equal(after.byModel['haiku::haiku'].turns, 1);
+
+  // And the plain case still clears: a flush of today's own buffer removes it.
+  server.lastBody = null;
+  assert.equal(await telemetry.flush(), true);
+  assert.equal(existsSync(BUFFER_PATH), false);
 });
 
 test('flush() sends a day that only has errorKinds (a turn that died before any result event)', async () => {

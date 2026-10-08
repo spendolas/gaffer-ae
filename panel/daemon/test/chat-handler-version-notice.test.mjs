@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync, unlinkSync } from 'node:fs';
 
-// The one-per-daemon-life "Claude Code is outside the tested range" notice,
-// driven through a real ChatHandler with a fake child: sent once as a
-// chat_event, only when the init event's version is out of range, never for
-// an unknown version, and never in place of the turn's own outcome.
+// The once-per-panel-socket "Claude Code is outside the tested range" notice,
+// driven through a real ChatHandler with a fake child: sent once per socket
+// as a chat_event, only when the init event's version is a new minor or major
+// (or far above the tested patch window) or older than min, never for a
+// tolerated patch or an unknown version, and never in place of the turn's
+// own outcome.
 
 var runTag = process.pid + '-' + Date.now();
 process.env.GAFFER_CONFIG_PATH = join(tmpdir(), 'gaffer-vn-config-' + runTag + '.json');
@@ -90,38 +92,84 @@ test('in-range version: no notice, turn completes normally', async () => {
   assert.equal(sock.sent.filter(function (m) { return m.type === 'chat_done'; }).length, 1);
 });
 
-test('newer version: exactly one notice per daemon life, across turns, handlers and sockets', async () => {
+test('a few patches above max: one daemon log line, never a notice', async () => {
   resetCliVersionNoticeForTests();
   var h = harness(), sock = fakeSocket();
   var lines = await quiet(function () { return turn(h, sock, okStream('2.1.310')); });
+  assert.equal(sock.notices().length, 0);
+  assert.equal(lines.filter(function (l) { return /2\.1\.310 is a few patches above the tested range/.test(l); }).length, 1, 'one daemon log line');
+  // Later turns, same version: not even the log line again.
+  var more = await quiet(function () { return turn(h, sock, okStream('2.1.310')); });
+  assert.equal(more.filter(function (l) { return /above the tested range/.test(l); }).length, 0);
+  assert.equal(sock.notices().length, 0);
+  assert.equal(sock.sent.filter(function (m) { return m.type === 'chat_done'; }).length, 2);
+});
+
+test('new minor version: one notice per panel socket, one log line per daemon life', async () => {
+  resetCliVersionNoticeForTests();
+  var h = harness(), sock = fakeSocket();
+  var lines = await quiet(function () { return turn(h, sock, okStream('2.2.0')); });
   var n = sock.notices();
   assert.equal(n.length, 1);
-  assert.match(n[0].message, /tested with Claude Code 2\.1\.236 to 2\.1\.293/);
-  assert.match(n[0].message, /2\.1\.310, which is newer/);
+  assert.equal(n[0].message, 'Gaffer has not been tested with Claude Code 2.2.0 yet. If chat misbehaves, check for a Gaffer update.');
   assert.equal(/[–—]/.test(n[0].message), false, 'no dashes in panel copy');
-  assert.equal(lines.filter(function (l) { return /is newer than the tested range/.test(l); }).length, 1, 'one daemon log line');
+  assert.equal(lines.filter(function (l) { return /2\.2\.0 is newer than the tested range/.test(l); }).length, 1, 'one daemon log line');
   // The turn itself still ends with its own outcome, after the notice.
   var types = sock.sent.map(function (m) { return m.type; });
   assert.ok(types.indexOf('chat_event') < types.indexOf('chat_done'));
   assert.equal(sock.sent.filter(function (m) { return m.type === 'chat_done'; }).length, 1);
   assert.equal(sock.sent.filter(function (m) { return m.type === 'chat_error'; }).length, 0);
 
-  // Second turn on the same handler: silent.
-  await quiet(function () { return turn(h, sock, okStream('2.1.310')); });
+  // Second turn on the same socket: silent, and no second log line.
+  var again = await quiet(function () { return turn(h, sock, okStream('2.2.0')); });
   assert.equal(sock.notices().length, 1);
-  // Another handler (another AE instance) on another socket: still silent.
+  assert.equal(again.filter(function (l) { return /tested range/.test(l); }).length, 0);
+
+  // Another AE instance (its own handler and socket) is told once too.
   var h2 = harness(), sock2 = fakeSocket();
-  await quiet(function () { return turn(h2, sock2, okStream('2.1.310')); });
-  assert.equal(sock2.notices().length, 0);
+  sock2._gafferKey = 'other-ae';
+  await quiet(function () { return turn(h2, sock2, okStream('2.2.0')); });
+  assert.equal(sock2.notices().length, 1);
+
+  // The first panel reconnects (same AE key, new socket): told once again.
+  var sock3 = fakeSocket();
+  await quiet(function () { return turn(h, sock3, okStream('2.2.0')); });
+  assert.equal(sock3.notices().length, 1);
+  await quiet(function () { return turn(h, sock3, okStream('2.2.0')); });
+  assert.equal(sock3.notices().length, 1);
 });
 
-test('older version: one notice saying older', async () => {
+test('a socket that is not open does not consume the notice: the next open turn gets it', async () => {
+  resetCliVersionNoticeForTests();
+  var h = harness(), sock = fakeSocket();
+  sock.readyState = 3;
+  await quiet(function () { return turn(h, sock, okStream('2.2.0')); });
+  assert.equal(sock.notices().length, 0);
+  sock.readyState = 1;
+  await quiet(function () { return turn(h, sock, okStream('2.2.0')); });
+  assert.equal(sock.notices().length, 1);
+  // A send that throws does not consume it either: the next stream event in
+  // the same turn retries, and the notice still lands exactly once.
+  resetCliVersionNoticeForTests();
+  var h2 = harness(), flaky = fakeSocket(), realSend = flaky.send, failed = false;
+  flaky.send = function (m) {
+    if (!failed && /cli_version/.test(m)) { failed = true; throw new Error('socket went away'); }
+    return realSend(m);
+  };
+  await quiet(function () { return turn(h2, flaky, okStream('2.2.0')); });
+  assert.equal(failed, true, 'the first send threw');
+  assert.equal(flaky.notices().length, 1);
+  await quiet(function () { return turn(h2, flaky, okStream('2.2.0')); });
+  assert.equal(flaky.notices().length, 1);
+});
+
+test('older version: one notice saying older, pointing at a Claude Code update', async () => {
   resetCliVersionNoticeForTests();
   var h = harness(), sock = fakeSocket();
   await quiet(function () { return turn(h, sock, okStream('2.1.100')); });
   var n = sock.notices();
   assert.equal(n.length, 1);
-  assert.match(n[0].message, /2\.1\.100, which is older/);
+  assert.equal(n[0].message, 'Gaffer was tested with Claude Code 2.1.236 to 2.1.293. You are on 2.1.100, which is older. Update Claude Code if chat misbehaves.');
 });
 
 test('unknown or missing version: nothing, and the flag is not consumed', async () => {
