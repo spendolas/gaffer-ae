@@ -35,7 +35,9 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # A lock whose PID is dead or is not a daemon\update.ps1 is abandoned and
 # taken over; a lock older than 15 minutes whose holder is still an
 # update.ps1 is a stuck updater, which is stopped first (its whole process
-# tree, not just the shell), then taken over.
+# tree, not just the shell), then taken over. A lock (or takeover marker)
+# whose write time lies in the future is a leftover from before the clock
+# moved backwards and counts as stale, never as fresh.
 #
 # Takeovers are serialized by a second CreateNew file, $takeoverPath: only
 # its holder may stop or remove a lock, and it re-reads the lock's pid inside
@@ -44,21 +46,36 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # could remove updater A's fresh lock. The finally at the bottom, in turn,
 # only deletes a lock whose file still holds THIS pid, so a losing updater
 # can never delete the winner's lock on its way out. A takeover marker older
-# than 60 seconds was left by a crashed updater and is removed.
+# than 60 seconds was left by a crashed updater; it is cleared by renaming it
+# away (atomic, so of two updaters that both saw it stale exactly one clears
+# it and goes on, the other exits busy) and only then re-created.
 # panel\main.js reads the same lock to decide whether an updater is still
 # running; keep the path in sync.
 $lockPath = Join-Path $env:TEMP "gaffer-update.lock"
 $takeoverPath = "$lockPath.takeover"
 $script:haveLock = $false
 $script:haveTakeover = $false
-# GAFFER_UPDATE_TEST_DELAY_MS widens the window between reading a stale
-# lock's pid and entering the takeover mutex. Only
-# scripts\windows-tests\test-5-update-ps1.ps1 sets it, to make the takeover
-# race deterministic.
-$testDelayMs = 0
-if ($env:GAFFER_UPDATE_TEST_DELAY_MS) { [int]::TryParse($env:GAFFER_UPDATE_TEST_DELAY_MS, [ref] $testDelayMs) | Out-Null }
+# Test-only gates, set only by scripts\windows-tests\test-5-update-ps1.ps1
+# to make the takeover races deterministic. Each names a file: the script
+# writes "<file>.ready" when it reaches the gate, then waits (up to 60s)
+# until <file> exists.
+#   GAFFER_UPDATE_TEST_GATE         after reading a stale lock's pid, before
+#                                   entering the takeover mutex
+#   GAFFER_UPDATE_TEST_MARKER_GATE  after judging the takeover marker stale,
+#                                   before renaming it away
+#   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
+function Wait-TestGate([string] $gate) {
+    if (-not $gate) { return }
+    try { [System.IO.File]::WriteAllText("$gate.ready", "$PID") } catch {}
+    for ($i = 0; $i -lt 600; $i++) {
+        if (Test-Path -LiteralPath $gate) { return }
+        Start-Sleep -Milliseconds 100
+    }
+}
 
-# The Win32_Process of a live daemon\update.ps1 holder, or $null. This very
+# The Win32_Process of a live update.ps1 holder, or $null. The panel spawns
+# the script as daemon\update.ps1, its ExtendScript fallback as
+# daemon/update.ps1 (forward slash), so either separator counts. This very
 # process never counts as a holder (a lock carrying our own pid is a leftover
 # from a pid reuse). The process start time is not compared with the lock's
 # age: the path match already rules out the common pid-reuse cases.
@@ -68,21 +85,68 @@ function Get-LockHolderProcess([string] $holder) {
     if ($holderPid -eq $PID) { return $null }
     $proc = $null
     try { $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -ErrorAction SilentlyContinue } catch {}
-    if (-not $proc -or -not ($proc.CommandLine -like "*daemon\update.ps1*")) { return $null }
+    if (-not $proc -or -not ("$($proc.CommandLine)" -match "daemon[\\/]update\.ps1")) { return $null }
     return $proc
 }
 
-# taskkill /T /F ends the holder AND every process it started (its curl.exe,
-# robocopy, npm); Stop-Process would end only the shell and orphan those.
-# Then a short wait for the process to go away. /F gives the holder no
-# chance to run its finally, so its lock stays for the caller to take over;
-# the closing pause lets the file system settle before the lock is re-read.
-function Stop-LockHolder([int] $holderPid) {
+# The same process as $proc, right now: same pid, same creation time. $null
+# when it is gone or the pid now belongs to something else.
+function Test-SameProcess($proc) {
+    if (-not $proc) { return $false }
+    $now = Get-LockHolderProcess "$($proc.ProcessId)"
+    if (-not $now) { return $false }
+    return ("$($now.CreationDate)" -eq "$($proc.CreationDate)")
+}
+
+# Every process below the holder, any depth, from one Win32_Process snapshot.
+# A child is only followed when it was created after its parent: Windows
+# reuses pids, so a ParentProcessId can point at a process that merely
+# inherited the pid of a long-gone parent, and taskkill /T follows those.
+function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {
+    $all = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
+    $found = @{}
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue(@{ Id = $rootPid; Created = $rootCreated })
+    while ($queue.Count -gt 0) {
+        $cur = $queue.Dequeue()
+        foreach ($p in $all) {
+            if ($p.ParentProcessId -ne $cur.Id -or $p.ProcessId -eq $rootPid -or $found.ContainsKey($p.ProcessId)) { continue }
+            if ($cur.Created -and $p.CreationDate -and $p.CreationDate -lt $cur.Created) { continue }
+            $found[$p.ProcessId] = $true
+            $queue.Enqueue(@{ Id = $p.ProcessId; Created = $p.CreationDate })
+        }
+    }
+    return @($found.Keys)
+}
+
+# End the holder AND every process it started (its curl.exe, robocopy, npm,
+# and whatever those started); ending only the shell would orphan those. The
+# descendants come from Win32_Process (parent pid plus creation order, see
+# above), youngest first, then the holder; taskkill /T /F, which follows
+# stale parent pids, is only the fallback when that enumeration fails. A
+# forced stop gives the holder no chance to run its finally, so its lock
+# stays for the caller to take over; the closing pause lets the file system
+# settle before the lock is re-read.
+function Stop-LockHolder($proc) {
+    $holderPid = [int] $proc.ProcessId
     Write-Host "Stopping an update that has run for over 15 minutes (pid $holderPid)"
-    $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
-    $ErrorActionPreference = "Continue"
-    & $taskkill /PID $holderPid /T /F 2>&1 | Out-Null
-    $ErrorActionPreference = "Stop"
+    # A flag, not a null test on the array: in PowerShell an empty array
+    # compared with $null yields an empty (falsy) result, and a holder with
+    # no descendants left would wrongly take the taskkill path.
+    $listed = $false
+    $kids = @()
+    try { $kids = @(Get-DescendantProcessIds $holderPid $proc.CreationDate); $listed = $true } catch { $listed = $false }
+    if ($listed) {
+        Write-Host "  stopping the stuck update and its $($kids.Count) descendant process(es)"
+        foreach ($k in $kids) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "  could not list the stuck update's processes, using taskkill /T"
+        $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        $ErrorActionPreference = "Continue"
+        & $taskkill /PID $holderPid /T /F 2>&1 | Out-Null
+        $ErrorActionPreference = "Stop"
+    }
     for ($i = 0; $i -lt 20; $i++) {
         if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Milliseconds 250
@@ -120,20 +184,47 @@ function New-PidFile([string] $path) {
     }
 }
 
-# Serialize takeovers. $false when another live updater is mid-takeover.
+# Serialize takeovers. $false when another live updater is mid-takeover, or
+# when another updater cleared the same stale marker first. A stale marker
+# (60 seconds or older, or dated in the future) is cleared by renaming it to
+# a name only this process uses: the rename is atomic, so of several
+# updaters that all judged it stale exactly one succeeds. The renamed file's
+# own age is checked once more: had a fresh marker slipped in between the
+# age check and the rename, the rename would have stolen a live updater's
+# mutex, so a young one is put back and this updater yields.
+function Test-MarkerStale([double] $age) { return ($age -ge 60 -or $age -lt 0) }
 function Enter-TakeoverMutex {
-    for ($attempt = 0; $attempt -lt 3; $attempt++) {
-        if (New-PidFile $takeoverPath) { $script:haveTakeover = $true; return $true }
-        $item = Get-Item -LiteralPath $takeoverPath -ErrorAction SilentlyContinue
-        if (-not $item) { continue }
-        $age = ((Get-Date) - $item.LastWriteTime).TotalSeconds
-        if ($age -ge 60) {
-            Write-Host "Removing a takeover marker left by a crashed updater ($([int] $age) s old)"
-            Remove-Item -LiteralPath $takeoverPath -Force -ErrorAction SilentlyContinue
-            continue
+    if (New-PidFile $takeoverPath) { $script:haveTakeover = $true; return $true }
+    $item = Get-Item -LiteralPath $takeoverPath -ErrorAction SilentlyContinue
+    if (-not $item) { return $false }
+    $age = ((Get-Date) - $item.LastWriteTime).TotalSeconds
+    if (-not (Test-MarkerStale $age)) { return $false }
+    Wait-TestGate $env:GAFFER_UPDATE_TEST_MARKER_GATE
+    $stale = "$takeoverPath.stale.$PID"
+    try {
+        Move-Item -LiteralPath $takeoverPath -Destination $stale -ErrorAction Stop
+    } catch {
+        Write-Host "Another update cleared the stale takeover marker first, leaving it to finish."
+        return $false
+    }
+    $moved = Get-Item -LiteralPath $stale -ErrorAction SilentlyContinue
+    if ($moved) { $age = ((Get-Date) - $moved.LastWriteTime).TotalSeconds }
+    if (-not (Test-MarkerStale $age)) {
+        Write-Host "The takeover marker was renewed by another update meanwhile, putting it back."
+        if (-not (Test-Path -LiteralPath $takeoverPath)) {
+            try { Move-Item -LiteralPath $stale -Destination $takeoverPath -ErrorAction Stop } catch { Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue }
+        } else {
+            Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
         }
         return $false
     }
+    if ($age -lt 0) {
+        Write-Host "Removing a takeover marker dated in the future (the clock moved back since it was left)"
+    } else {
+        Write-Host "Removing a takeover marker left by a crashed updater ($([int] $age) s old)"
+    }
+    Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
+    if (New-PidFile $takeoverPath) { $script:haveTakeover = $true; return $true }
     return $false
 }
 function Exit-TakeoverMutex {
@@ -161,7 +252,9 @@ while (-not $script:haveLock) {
     }
     $holder = Read-LockHolder
     $proc = Get-LockHolderProcess $holder
-    $lockIsOld = (((Get-Date) - $lockItem.LastWriteTime).TotalMinutes -ge 15)
+    # Older than 15 minutes, or dated in the future (clock moved backwards).
+    $lockAge = ((Get-Date) - $lockItem.LastWriteTime).TotalSeconds
+    $lockIsOld = ($lockAge -ge 900 -or $lockAge -lt 0)
     if ($proc -and -not $lockIsOld) {
         Write-Host "Another update is already running (pid $holder), leaving it to finish."
         Write-Output "busy:already-running"
@@ -174,7 +267,7 @@ while (-not $script:haveLock) {
         Stop-Transcript
         exit 1
     }
-    if ($testDelayMs -gt 0) { Start-Sleep -Milliseconds $testDelayMs }
+    Wait-TestGate $env:GAFFER_UPDATE_TEST_GATE
     if (-not (Enter-TakeoverMutex)) {
         Write-Host "Another update is taking over the abandoned lock, leaving it to finish."
         Write-Output "busy:already-running"
@@ -184,11 +277,32 @@ while (-not $script:haveLock) {
     # Inside the mutex: the lock may have been taken over (and re-created)
     # since the pid was read. Only act on the lock we judged stale.
     $nowHolder = Read-LockHolder
-    if (-not (Test-Path -LiteralPath $lockPath) -or $nowHolder -ne $holder) { Exit-TakeoverMutex; continue }
+    if (-not (Test-Path -LiteralPath $lockPath)) {
+        Write-Host "The abandoned lock was released meanwhile, retrying."
+        Exit-TakeoverMutex; continue
+    }
+    if ($nowHolder -ne $holder) {
+        $label = $nowHolder
+        if (-not $label) { $label = "unknown" }
+        Write-Host "The abandoned lock now belongs to pid $label, rechecking."
+        Exit-TakeoverMutex; continue
+    }
     if ($proc) {
-        Stop-LockHolder ([int] $proc.ProcessId)
-        $nowHolder = Read-LockHolder
-        if ((Test-Path -LiteralPath $lockPath) -and $nowHolder -ne $holder) { Exit-TakeoverMutex; continue }
+        # Re-read the holder itself inside the mutex: stop it only if it is
+        # still the same live updater (same pid, same creation time), never
+        # a process that took its pid meanwhile.
+        if (Test-SameProcess $proc) {
+            Stop-LockHolder $proc
+            $nowHolder = Read-LockHolder
+            if ((Test-Path -LiteralPath $lockPath) -and $nowHolder -ne $holder) {
+                $label = $nowHolder
+                if (-not $label) { $label = "unknown" }
+                Write-Host "The abandoned lock now belongs to pid $label, rechecking."
+                Exit-TakeoverMutex; continue
+            }
+        } else {
+            Write-Host "The stuck update (pid $($proc.ProcessId)) is already gone, not stopping it."
+        }
     }
     if (Test-Path -LiteralPath $lockPath) {
         $holderLabel = $holder
@@ -201,6 +315,7 @@ while (-not $script:haveLock) {
     if (New-PidFile $lockPath) { $script:haveLock = $true }
     Exit-TakeoverMutex
 }
+Wait-TestGate $env:GAFFER_UPDATE_TEST_HOLD_GATE
 
 # From here on the lock is held, so everything runs inside this try: the
 # finally releases the lock on every way out, exit calls included.
@@ -240,15 +355,19 @@ function Exit-Update([string] $message) {
 # be bounded: ReadWriteTimeout applies to every Read, while
 # Invoke-WebRequest -TimeoutSec bounds only the response headers on PS 5.1.
 # The fallback only runs when curl gave up within 90s and has its own 150s
-# budget, so the worst case stays at about 90 + 150 = 240s, under the
-# curl-only worst case of 270s, then extract + robocopy + npm. The panel
-# (main.js waitForUpdatedVersion) gives up after 180s but extends once by
-# 180s while this lock is held, a 360s window; a worst-case download plus a
-# slow npm install can outlive it, and then the panel offers "Force stop &
-# retry", whose second updater exits busy against this lock, so a slow run
-# is never corrupted, only late. A 4xx answer (404 on a missing asset) is
-# final on both paths: curl does not retry it, there is no fallback, and the
-# error carries the status in parentheses like Invoke-WebRequest's did.
+# budget, checked before every body read (a read may block for 20s, so the
+# last one is only started while at least 20s of the budget remain), so the
+# worst case stays at about 90 + 150 = 240s, under the curl-only worst case
+# of 270s, then extract + robocopy + npm. The panel (main.js
+# waitForUpdatedVersion) gives up after 180s but extends once by 180s while
+# this lock is held, a 360s window; a worst-case download plus a slow npm
+# install can outlive it, and then the panel offers "Force stop & retry",
+# whose second updater exits busy against this lock, so a slow run is never
+# corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
+# is final: any other 4xx (403, 407, 429) is what a proxy intercepting
+# curl.exe answers, so those fall back like a connection failure. The .NET
+# path has nothing left to fall back to, so every 4xx is final there. Both
+# carry the status in parentheses like Invoke-WebRequest's error did.
 #
 # --ssl-no-revoke: the asset's integrity rests on the TLS certificate chain
 # for github.com, which stays fully validated; only the OCSP/CRL revocation
@@ -279,7 +398,7 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
             $text = ($output | ForEach-Object { "$_" }) -join " "
             if ($code -eq 22 -and $text -match "returned error: (\d{3})") {
                 $status = [int] $Matches[1]
-                if ($status -ge 400 -and $status -lt 500) { $finalError = "The remote server returned an error: ($status)." }
+                if ($status -eq 404 -or $status -eq 410) { $finalError = "The remote server returned an error: ($status)." }
             }
             if (-not $finalError) { $curlFailure = "curl.exe exit $code : $text" }
         } catch {
@@ -299,8 +418,8 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
 
 # The .NET path: system proxy (WinINET settings, PAC) with the user's default
 # credentials, 15s to connect and get headers, every body read bounded to a
-# 20s stall, the whole thing to 150s, 4xx final, otherwise up to 3 attempts
-# as long as a retry can start within 110s.
+# 20s stall and only started while 20s of the 150s budget remain, 4xx final,
+# otherwise up to 3 attempts as long as a retry can start within 110s.
 function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch {}
     try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials } catch {}
@@ -320,9 +439,13 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
                 $out = [System.IO.File]::Create($outFile)
                 try {
                     $buf = New-Object byte[] 65536
-                    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                    while ($true) {
+                        # A read may block for ReadWriteTimeout (20s): only
+                        # start one while that much of the budget remains.
+                        if (((Get-Date) - $started).TotalSeconds -gt 130) { throw "download exceeded its 150s budget" }
+                        $n = $in.Read($buf, 0, $buf.Length)
+                        if ($n -le 0) { break }
                         $out.Write($buf, 0, $n)
-                        if (((Get-Date) - $started).TotalSeconds -ge 150) { throw "download exceeded its 150s budget" }
                     }
                 } finally {
                     $out.Dispose()

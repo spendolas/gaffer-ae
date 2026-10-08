@@ -10,31 +10,46 @@
 # the result. A second case feeds it a broken download and a third a 404
 # URL (the branch real users take); both check that nothing in the install
 # changed. Case 3b makes curl.exe fail and checks the system proxy fallback
-# downloads the real latest release. Cases 4 to 8 cover the single-updater
-# lock: a second updater exits busy while a live one holds the lock, an
-# abandoned lock (dead pid, or a file with no pid in it) is taken over (a
-# stale takeover marker is removed on the way, a fresh one means busy), two
-# updaters taking over the same stale lock yield one winner, a live holder
-# older than 15 minutes is stopped together with its child and taken over,
-# the lock is gone after every run, and the dev-install refusal still ends
-# the log with err:dev-install.
+# downloads the real latest release; 3c does the same with a 403 from curl
+# (a proxy answer, not a missing asset). Cases 4 to 9 cover the
+# single-updater lock: a second updater exits busy while a live one holds
+# the lock (also when that one was launched with a forward-slash path, as
+# the panel's ExtendScript fallback does), an abandoned lock (dead pid, or a
+# file with no pid in it) is taken over (a stale takeover marker is cleared
+# on the way, a fresh one means busy, two updaters clearing the same stale
+# marker yield one winner), two updaters taking over the same stale lock
+# yield one winner (the gated one is rejected by the pid re-read inside the
+# mutex), a live holder older than 15 minutes (or dated in the future) is
+# stopped together with its child and grandchild and taken over, a holder
+# that vanished just before the stop is not signalled, an updater whose lock
+# was replaced under it leaves the replacement alone on exit, the lock is
+# gone after every run, and the dev-install refusal still ends the log with
+# err:dev-install. The races are made deterministic with update.ps1's
+# GAFFER_UPDATE_TEST_*_GATE files, never with sleeps.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
-# while a Gaffer daemon is up (close After Effects first).
+# while a Gaffer daemon is up (close After Effects first). To run next to a
+# live daemon without touching it, pass -ShimDaemonStop: each scratch
+# install then gets a no-op stop-daemon.ps1 instead of the real one, so the
+# updater's Stop-Daemon finds nothing to stop (the twin of the Mac harness's
+# GAFFER_TEST_SHIM_DAEMON_STOP). Everything else (download, robocopy, npm
+# install, lock) is exercised for real.
 #
 # Inputs, built on the Mac (see the implementation plan):
 #   -UpdateScriptDir  folder with the NEW update.ps1 and stop-daemon.ps1
 #   -OldInstallZip    git archive --format=zip -o old-install.zip ce16c2f:panel
 #   -ReleaseZip       gaffer-update-win.zip from scripts/package-release.sh
 #   -NodeDir          optional folder holding node.exe / npm.cmd to put on PATH
+#   -ShimDaemonStop   leave a running daemon alone (see above)
 #
 # Run:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-5-update-ps1.ps1 -UpdateScriptDir <dir> -OldInstallZip <zip> -ReleaseZip <zip> [-NodeDir <dir>]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-5-update-ps1.ps1 -UpdateScriptDir <dir> -OldInstallZip <zip> -ReleaseZip <zip> [-NodeDir <dir>] [-ShimDaemonStop]
 param(
     [Parameter(Mandatory = $true)][string] $UpdateScriptDir,
     [Parameter(Mandatory = $true)][string] $OldInstallZip,
     [Parameter(Mandatory = $true)][string] $ReleaseZip,
-    [string] $NodeDir = ""
+    [string] $NodeDir = "",
+    [switch] $ShimDaemonStop
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -43,10 +58,12 @@ function Pass([string] $m) { Write-Host "PASS: $m" }
 function Fail([string] $m) { Write-Host "FAIL: $m"; $script:fails++ }
 
 Write-Host "PowerShell $($PSVersionTable.PSVersion)"
-if (Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue) {
-    Write-Host "ABORT: something is listening on port 9823 (a running Gaffer daemon). Close After Effects first."
+if (-not $ShimDaemonStop -and (Get-NetTCPConnection -LocalPort 9823 -State Listen -ErrorAction SilentlyContinue)) {
+    Write-Host "ABORT: something is listening on port 9823 (a running Gaffer daemon). Close After Effects first,"
+    Write-Host "or re-run with -ShimDaemonStop to leave the daemon alone."
     exit 2
 }
+if ($ShimDaemonStop) { Write-Host "-ShimDaemonStop set: Stop-Daemon is a no-op in every scratch install, the live daemon is left alone" }
 if (-not (Select-String -Path (Join-Path $UpdateScriptDir "update.ps1") -Pattern "GAFFER_UPDATE_ASSET" -Quiet)) {
     Write-Host "FAIL: update.ps1 does not honor GAFFER_UPDATE_ASSET (still the main-archive updater)"
     exit 1
@@ -62,7 +79,12 @@ function New-TestInstall([string] $dir) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     Expand-Archive -Path $OldInstallZip -DestinationPath $dir -Force
     Copy-Item (Join-Path $UpdateScriptDir "update.ps1") (Join-Path $dir "daemon\update.ps1") -Force
-    Copy-Item (Join-Path $UpdateScriptDir "stop-daemon.ps1") (Join-Path $dir "daemon\stop-daemon.ps1") -Force
+    if ($ShimDaemonStop) {
+        # Same signature as the real one; finds nothing to stop.
+        Set-Content -LiteralPath (Join-Path $dir "daemon\stop-daemon.ps1") -Value "function Stop-Daemon { param([int[]] `$ProcIds = `$null) }"
+    } else {
+        Copy-Item (Join-Path $UpdateScriptDir "stop-daemon.ps1") (Join-Path $dir "daemon\stop-daemon.ps1") -Force
+    }
     Set-Content -LiteralPath (Join-Path $dir "chat-history.json") -Value '{"messages":["legacy"]}'
     Set-Content -LiteralPath (Join-Path $dir "chat-history-26.0.json") -Value '{"messages":["ae26"]}'
     Set-Content -LiteralPath (Join-Path $dir ".gaffer-config.json") -Value '{"installId":"legacy"}'
@@ -100,36 +122,96 @@ function Get-LastLogLine {
 }
 # A long-lived process whose command line contains "daemon\update.ps1",
 # which is what the lock's liveness check looks for. Like a real stuck
-# updater it has a long-lived child (its curl.exe, robocopy or npm) and
-# records that child's pid in $scratch\fake\child.pid. Returns the process.
-function Start-FakeUpdater {
+# updater it has a long-lived child (its curl.exe, robocopy or npm) which in
+# turn has a child (a grandchild sleep), and records their pids in
+# $scratch\fake\child.pid and grandchild.pid. -ForwardSlash launches it by
+# a "daemon/update.ps1" path, as the panel's ExtendScript fallback does.
+# Returns the process.
+function Start-FakeUpdater([switch] $ForwardSlash) {
     New-Item -ItemType Directory -Path "$scratch\fake\daemon" -Force | Out-Null
-    Remove-Item -LiteralPath "$scratch\fake\child.pid" -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath "$scratch\fake\child.pid", "$scratch\fake\grandchild.pid" -Force -ErrorAction SilentlyContinue
+    $childScript = "$scratch\fake\child.ps1"
+    $childBody = @(
+        '$g = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 300") -WindowStyle Hidden -PassThru',
+        "[System.IO.File]::WriteAllText('$scratch\fake\grandchild.pid', `"`$(`$g.Id)`")",
+        'Start-Sleep -Seconds 300'
+    )
+    Set-Content -LiteralPath $childScript -Value ($childBody -join "`r`n")
     $body = @(
-        '$child = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 300") -WindowStyle Hidden -PassThru',
+        "`$child = Start-Process -FilePath `"powershell.exe`" -ArgumentList @(`"-NoProfile`", `"-ExecutionPolicy`", `"Bypass`", `"-File`", `"$childScript`") -WindowStyle Hidden -PassThru",
         "[System.IO.File]::WriteAllText('$scratch\fake\child.pid', `"`$(`$child.Id)`")",
         'Start-Sleep -Seconds 300'
     )
     Set-Content -LiteralPath "$scratch\fake\daemon\update.ps1" -Value ($body -join "`r`n")
-    $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$scratch\fake\daemon\update.ps1") -WindowStyle Hidden -PassThru
-    for ($i = 0; $i -lt 40; $i++) {
-        if (Test-Path -LiteralPath "$scratch\fake\child.pid") { break }
+    $scriptPath = "$scratch\fake\daemon\update.ps1"
+    if ($ForwardSlash) { $scriptPath = $scriptPath.Replace('\', '/') }
+    $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath) -WindowStyle Hidden -PassThru
+    for ($i = 0; $i -lt 80; $i++) {
+        if ((Test-Path -LiteralPath "$scratch\fake\child.pid") -and (Test-Path -LiteralPath "$scratch\fake\grandchild.pid")) { break }
         Start-Sleep -Milliseconds 250
     }
     return $p
 }
-function Get-FakeUpdaterChildId {
-    if (-not (Test-Path -LiteralPath "$scratch\fake\child.pid")) { return 0 }
-    return [int] (Get-Content -LiteralPath "$scratch\fake\child.pid" -Raw).Trim()
+function Get-FakePid([string] $name) {
+    if (-not (Test-Path -LiteralPath "$scratch\fake\$name.pid")) { return 0 }
+    return [int] (Get-Content -LiteralPath "$scratch\fake\$name.pid" -Raw).Trim()
 }
+function Get-FakeUpdaterChildId { return (Get-FakePid "child") }
+function Get-FakeUpdaterGrandchildId { return (Get-FakePid "grandchild") }
 function Stop-FakeUpdater($p) {
     if (-not $p) { return }
     $childId = Get-FakeUpdaterChildId
+    $grandchildId = Get-FakeUpdaterGrandchildId
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     if ($childId -gt 0) { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue }
+    if ($grandchildId -gt 0) { Stop-Process -Id $grandchildId -Force -ErrorAction SilentlyContinue }
     $p.WaitForExit(5000) | Out-Null
 }
 $fake = $null
+
+# Start update.ps1 in $dir detached, its stdout (Write-Host lines included)
+# captured in $outFile so each racer's output can be judged on its own (two
+# concurrent Start-Transcript -Append writers overwrite each other's lines).
+# $extraEnv holds env vars only this one process should see; they are set
+# for the spawn and removed right after. Start-Process does not quote list
+# arguments: the install paths contain a space, so -File is quoted by hand.
+function Start-Updater([string] $dir, [string] $outFile, [hashtable] $extraEnv) {
+    $env:GAFFER_UPDATE_ASSET = $ReleaseZip
+    $env:TEMP = "$scratch\tmp"
+    foreach ($k in $extraEnv.Keys) { Set-Item -Path "Env:\$k" -Value $extraEnv[$k] }
+    try {
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $dir "daemon\update.ps1") + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput $outFile
+        # PS 5.1: a -PassThru process reports no ExitCode unless its handle
+        # was cached while it was alive.
+        $null = $p.Handle
+        return $p
+    } finally {
+        foreach ($k in $extraEnv.Keys) { Remove-Item -Path "Env:\$k" -ErrorAction SilentlyContinue }
+    }
+}
+# Waits (up to 10 minutes) and returns the exit code; the parameterless
+# WaitForExit() is what makes ExitCode readable.
+function Wait-Updater($p) {
+    $p.WaitForExit(600000) | Out-Null
+    $p.WaitForExit()
+    return $p.ExitCode
+}
+function Wait-ForFile([string] $path) {
+    for ($i = 0; $i -lt 300; $i++) {
+        if (Test-Path -LiteralPath $path) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    Fail "timed out waiting for $path"
+    return $false
+}
+function Read-Out([string] $path) {
+    if (Test-Path -LiteralPath $path) { return [string] (Get-Content -LiteralPath $path -Raw) }
+    return ""
+}
+function Read-Lock {
+    if (Test-Path -LiteralPath $lockPath) { return (Get-Content -LiteralPath $lockPath -Raw -ErrorAction SilentlyContinue).Trim() }
+    return ""
+}
 
 $realTemp = $env:TEMP
 try {
@@ -203,7 +285,7 @@ try {
     $log404 = ""
     if (Test-Path -LiteralPath $logPath) { $log404 = Get-Content -LiteralPath $logPath -Raw }
     if ($log404 -match "\(404\)") { Pass "update.ps1 reached the download and got the server's 404" } else { Fail "update.ps1 did not reach the download (offline or URL branch broke); log: $logPath" }
-    # A 4xx is final: curl.exe must not hand it to the system proxy path.
+    # A 404 is final: curl.exe must not hand it to the system proxy path.
     if ($log404 -notmatch "trying the system proxy path") { Pass "404 from curl.exe did not fall back to the system proxy path" } else { Fail "404 from curl.exe fell back to the system proxy path" }
 
     # ---------- Case 3b: a curl.exe failure falls back to the system proxy path ----------
@@ -229,6 +311,25 @@ try {
     if (Test-Path -LiteralPath (Join-Path $fallback "daemon\index.js")) { Pass "fallback run installed the release files" } else { Fail "fallback run left no daemon\index.js" }
     if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after the fallback run" } else { Pass "update lock released after the fallback run" }
 
+    # ---------- Case 3c: a 403 from curl.exe is a proxy answer, not a missing asset: fall back ----------
+    # Only 404 and 410 are final. A proxy that intercepts curl.exe answers
+    # 403 or 407, and the .NET path (system proxy, user credentials) may
+    # well get through, so such a status must fall back like exit 7 did.
+    $forbidden = Join-Path $scratch "Application Data\forbidden\com.gaffer.panel"
+    New-TestInstall $forbidden
+    $fakeCurl403 = Join-Path $scratch "curl-403.cmd"
+    # Redirect first: "echo ... 403 1>&2" would echo a trailing space, and
+    # a parenthesised echo trips over the "(22)" in the message.
+    Set-Content -LiteralPath $fakeCurl403 -Value "@>&2 echo curl: (22) The requested URL returned error: 403`r`n@exit /b 22"
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $env:GAFFER_UPDATE_CURL = $fakeCurl403
+    try { $code = Invoke-Update $forbidden $latestUrl } finally { Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue }
+    $log403 = ""
+    if (Test-Path -LiteralPath $logPath) { $log403 = Get-Content -LiteralPath $logPath -Raw }
+    if ($log403 -match "curl\.exe could not download the asset \(curl\.exe exit 22 : curl: \(22\) The requested URL returned error: 403\s*\), trying the system proxy path") { Pass "403 from curl.exe was handed to the system proxy path" } else { Fail "403 from curl.exe did not fall back; log: $logPath" }
+    if ($code -eq 0) { Pass "system proxy path completed the update after curl's 403" } else { Fail "update.ps1 exited $code after curl's 403 (offline?); log: $logPath" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after the 403 run" } else { Pass "update lock released after the 403 run" }
+
     # ---------- Case 4: a second updater exits busy while a live one holds the lock ----------
     $busy = Join-Path $scratch "Application Data\busy\com.gaffer.panel"
     New-TestInstall $busy
@@ -245,6 +346,30 @@ try {
     $holder = ""
     if (Test-Path -LiteralPath $lockPath) { $holder = (Get-Content -LiteralPath $lockPath -Raw).Trim() }
     if ($holder -eq "$($fake.Id)") { Pass "live lock kept its holder's pid" } else { Fail "live lock was removed or rewritten (now: '$holder')" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 4b: a holder launched by a forward-slash path is an updater too ----------
+    # The panel's ExtendScript fallback runs ".../daemon/update.ps1"; its
+    # command line has no backslash before update.ps1.
+    $slash = Join-Path $scratch "Application Data\slash\com.gaffer.panel"
+    New-TestInstall $slash
+    $fake = Start-FakeUpdater -ForwardSlash
+    Start-Sleep -Seconds 1
+    $fakeCmd = ""
+    try { $fakeCmd = "$((Get-CimInstance Win32_Process -Filter "ProcessId = $($fake.Id)").CommandLine)" } catch {}
+    if ($fakeCmd -match "daemon/update\.ps1" -and $fakeCmd -notmatch "daemon\\update\.ps1") { Pass "forward-slash holder's command line reads daemon/update.ps1" } else { Fail "forward-slash holder's command line is: $fakeCmd" }
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    $beforeTree = Get-TreeHash $slash
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $slash $ReleaseZip
+    if ($code -eq 3) { Pass "second updater exited 3 while a forward-slash holder holds the lock" } else { Fail "second updater exited $code against a forward-slash holder, expected 3" }
+    $logSlash = ""
+    if (Test-Path -LiteralPath $logPath) { $logSlash = Get-Content -LiteralPath $logPath -Raw }
+    if ($logSlash -match [regex]::Escape("Another update is already running (pid $($fake.Id))")) { Pass "log names the forward-slash holder as a running update" } else { Fail "forward-slash holder was not recognised as an updater" }
+    if ((Get-TreeHash $slash) -eq $beforeTree) { Pass "forward-slash run left the install untouched" } else { Fail "forward-slash run modified the install" }
+    if ((Read-Lock) -eq "$($fake.Id)") { Pass "forward-slash holder's lock kept its pid" } else { Fail "forward-slash holder's lock was removed or rewritten" }
     Stop-FakeUpdater $fake
     $fake = $null
     Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
@@ -292,13 +417,13 @@ try {
     Remove-Item -LiteralPath $lockPath, $takeoverPath -Force -ErrorAction SilentlyContinue
 
     # ---------- Case 5c: two updaters taking over the same stale lock yield one winner ----------
-    # Both read the dead pid; B then sleeps a second (GAFFER_UPDATE_TEST_DELAY_MS)
-    # before entering the takeover mutex, by which time A holds a fresh lock.
-    # B must re-read the pid inside the mutex, see it is no longer the stale
-    # one, exit busy, and never delete A's lock on its way out. Two
-    # concurrent Start-Transcript -Append writers overwrite each other's
-    # lines (both start at offset 0), so this case judges by exit codes and
-    # the two install trees, not by counting log lines.
+    # B reads the dead pid and stops at its gate (GAFFER_UPDATE_TEST_GATE)
+    # before entering the takeover mutex. A then takes over and holds a fresh
+    # lock. B, released, must re-read the pid inside the mutex, see it is no
+    # longer the stale one, re-loop, find A's live lock and exit busy, never
+    # deleting A's lock on its way out. Each racer's stdout is captured on
+    # its own, so the exact rejection path is asserted: the mutex was free,
+    # so B is not rejected by the takeover-in-progress check.
     $raceA = Join-Path $scratch "Application Data\race-a\com.gaffer.panel"
     $raceB = Join-Path $scratch "Application Data\race-b\com.gaffer.panel"
     New-TestInstall $raceA
@@ -307,25 +432,73 @@ try {
     [System.IO.File]::WriteAllText($lockPath, "$($dead.Id)", [System.Text.Encoding]::ASCII)
     (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-2)
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-    $env:GAFFER_UPDATE_ASSET = $ReleaseZip
-    $env:TEMP = "$scratch\tmp"
-    # Start-Process does not quote list arguments: the install paths contain
-    # a space, so the -File argument is quoted by hand.
-    $pA = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $raceA "daemon\update.ps1") + '"')) -WindowStyle Hidden -PassThru
-    $env:GAFFER_UPDATE_TEST_DELAY_MS = "1000"
-    try {
-        $pB = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $raceB "daemon\update.ps1") + '"')) -WindowStyle Hidden -PassThru
-    } finally { Remove-Item Env:\GAFFER_UPDATE_TEST_DELAY_MS -ErrorAction SilentlyContinue }
-    $pA.WaitForExit(600000) | Out-Null
-    $pB.WaitForExit(600000) | Out-Null
-    if ($pA.ExitCode -eq 0 -and $pB.ExitCode -eq 3) { Pass "racing takeovers: the first exited 0, the delayed one exited 3 (busy)" } else { Fail "racing takeovers exited A=$($pA.ExitCode) B=$($pB.ExitCode) (expected A=0, B=3)" }
+    $gateB = "$scratch\gate-b"
+    Remove-Item -LiteralPath $gateB, "$gateB.ready" -Force -ErrorAction SilentlyContinue
+    $pB = Start-Updater $raceB "$scratch\race-b.out" @{ GAFFER_UPDATE_TEST_GATE = $gateB }
+    Wait-ForFile "$gateB.ready" | Out-Null
+    $pA = Start-Updater $raceA "$scratch\race-a.out" @{}
+    $aPid = ""
+    for ($i = 0; $i -lt 300; $i++) {
+        $aPid = Read-Lock
+        if ($aPid -and $aPid -ne "$($dead.Id)" -and -not (Test-Path -LiteralPath $takeoverPath)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    [System.IO.File]::WriteAllText($gateB, "go")
+    $codeA = Wait-Updater $pA
+    $codeB = Wait-Updater $pB
+    $outA = Read-Out "$scratch\race-a.out"
+    $outB = Read-Out "$scratch\race-b.out"
+    if ($codeA -eq 0 -and $codeB -eq 3) { Pass "racing takeovers: the first exited 0, the gated one exited 3 (busy)" } else { Fail "racing takeovers exited A=$($codeA) B=$($codeB) (expected A=0, B=3)" }
+    if ($outA -match [regex]::Escape("Taking over an abandoned update lock (pid $($dead.Id))")) { Pass "the first racing updater took over the dead-pid lock" } else { Fail "the first racing updater did not record the takeover" }
+    if ($outB -match [regex]::Escape("The abandoned lock now belongs to pid $aPid, rechecking.")) { Pass "the gated updater was rejected by the pid re-read inside the mutex" } else { Fail "no re-read rejection line for pid $aPid in the gated updater's output: $outB" }
+    if ($outB -match [regex]::Escape("Another update is already running (pid $aPid)")) { Pass "the gated updater then saw the winner's live lock" } else { Fail "the gated updater did not report the winner's live lock" }
+    if ($outB -notmatch "Another update is taking over the abandoned lock") { Pass "the gated updater was not rejected by the takeover-in-progress check" } else { Fail "the gated updater was rejected by the takeover-in-progress check instead (wrong path)" }
+    if ($outB -notmatch "Taking over an abandoned update lock") { Pass "the gated updater took nothing over" } else { Fail "the gated updater took over the winner's lock" }
     $gotA = Get-Content -LiteralPath (Join-Path $raceA "version.json") -Raw
     if ($gotA -eq $wantVersion) { Pass "the first racing updater installed the release" } else { Fail "the first racing updater did not install the release: $gotA" }
-    if ((Get-TreeHash $raceB) -eq $beforeTreeB) { Pass "the delayed racing updater left its install untouched" } else { Fail "the delayed racing updater modified its install (it must not take over the winner's lock)" }
+    if ((Get-TreeHash $raceB) -eq $beforeTreeB) { Pass "the gated racing updater left its install untouched" } else { Fail "the gated racing updater modified its install (it must not take over the winner's lock)" }
     if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the racing takeovers" } else { Pass "lock released after the racing takeovers" }
     if (Test-Path -LiteralPath $takeoverPath) { Fail "takeover marker left behind after the racing takeovers" } else { Pass "no takeover marker left behind" }
 
+    # ---------- Case 5d: two updaters clearing the same stale takeover marker yield one winner ----------
+    # B judges the marker stale and stops at its marker gate. A then clears
+    # it (an atomic rename), takes over the dead-pid lock and goes on. B,
+    # released, must fail its own rename (the marker is gone), exit busy and
+    # clear nothing.
+    $mraceA = Join-Path $scratch "Application Data\marker-race-a\com.gaffer.panel"
+    $mraceB = Join-Path $scratch "Application Data\marker-race-b\com.gaffer.panel"
+    New-TestInstall $mraceA
+    New-TestInstall $mraceB
+    [System.IO.File]::WriteAllText($lockPath, "$($dead.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-2)
+    [System.IO.File]::WriteAllText($takeoverPath, "99999", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $takeoverPath).LastWriteTime = (Get-Date).AddMinutes(-2)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $mgateB = "$scratch\mgate-b"
+    Remove-Item -LiteralPath $mgateB, "$mgateB.ready" -Force -ErrorAction SilentlyContinue
+    $pB = Start-Updater $mraceB "$scratch\mrace-b.out" @{ GAFFER_UPDATE_TEST_MARKER_GATE = $mgateB }
+    Wait-ForFile "$mgateB.ready" | Out-Null
+    $pA = Start-Updater $mraceA "$scratch\mrace-a.out" @{}
+    for ($i = 0; $i -lt 300; $i++) {
+        $aPid = Read-Lock
+        if ($aPid -and $aPid -ne "$($dead.Id)" -and -not (Test-Path -LiteralPath $takeoverPath)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    [System.IO.File]::WriteAllText($mgateB, "go")
+    $codeA = Wait-Updater $pA
+    $codeB = Wait-Updater $pB
+    $outA = Read-Out "$scratch\mrace-a.out"
+    $outB = Read-Out "$scratch\mrace-b.out"
+    if ($codeA -eq 0 -and $codeB -eq 3) { Pass "marker race: the first exited 0, the gated one exited 3 (busy)" } else { Fail "marker race exited A=$($codeA) B=$($codeB) (expected A=0, B=3)" }
+    if ($outA -match "Removing a takeover marker left by a crashed updater") { Pass "the first updater cleared the stale marker" } else { Fail "the first updater did not clear the stale marker: $outA" }
+    if ($outB -match "Another update cleared the stale takeover marker first") { Pass "the gated updater was rejected by its failed marker rename" } else { Fail "the gated updater was not rejected by the marker rename: $outB" }
+    if ($outB -notmatch "Removing a takeover marker") { Pass "the gated updater cleared nothing" } else { Fail "the gated updater also cleared a marker" }
+    if (Get-ChildItem -LiteralPath "$scratch\tmp" -Filter "gaffer-update.lock.takeover.stale.*" -ErrorAction SilentlyContinue) { Fail "renamed stale marker left behind" } else { Pass "no renamed stale marker left behind" }
+    if ((Test-Path -LiteralPath $lockPath) -or (Test-Path -LiteralPath $takeoverPath)) { Fail "lock or marker left behind after the marker race" } else { Pass "lock and marker released after the marker race" }
+
     # ---------- Case 6: a lock older than 15 minutes is taken over even with a live pid ----------
+    # The holder, its child and its grandchild must all be stopped, found
+    # through Win32_Process, not taskkill /T.
     $oldLock = Join-Path $scratch "Application Data\old-lock\com.gaffer.panel"
     New-TestInstall $oldLock
     $fake = Start-FakeUpdater
@@ -339,12 +512,66 @@ try {
     $logOld = ""
     if (Test-Path -LiteralPath $logPath) { $logOld = Get-Content -LiteralPath $logPath -Raw }
     if ($logOld -match [regex]::Escape("Stopping an update that has run for over 15 minutes (pid $($fake.Id))")) { Pass "log records stopping the stuck holder" } else { Fail "no stop line for the stuck holder in the log" }
+    if ($logOld -match "stopping the stuck update and its (\d+) descendant process\(es\)" -and [int] $Matches[1] -ge 2) { Pass "descendants were enumerated through Win32_Process ($($Matches[1]) found)" } else { Fail "no descendant enumeration line (or fewer than 2 found) in the log" }
+    if ($logOld -notmatch "using taskkill /T") { Pass "taskkill /T fallback was not needed" } else { Fail "the taskkill /T fallback ran" }
     if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "stuck holder (pid $($fake.Id)) is still alive after the takeover" } else { Pass "stuck holder was stopped before the takeover" }
-    # The holder's child (its curl.exe, robocopy or npm) must go with it, not be orphaned.
+    # The holder's child (its curl.exe, robocopy or npm) and grandchild must go with it, not be orphaned.
     $childId = Get-FakeUpdaterChildId
+    $grandchildId = Get-FakeUpdaterGrandchildId
     if ($childId -gt 0 -and -not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) { Pass "stuck holder's child (pid $childId) was stopped too" } else { Fail "stuck holder's child (pid $childId) is still alive after the takeover" }
+    if ($grandchildId -gt 0 -and -not (Get-Process -Id $grandchildId -ErrorAction SilentlyContinue)) { Pass "stuck holder's grandchild (pid $grandchildId) was stopped too" } else { Fail "stuck holder's grandchild (pid $grandchildId) is still alive after the takeover" }
     Stop-FakeUpdater $fake
     $fake = $null
+
+    # ---------- Case 6b: a stuck holder that vanished just before the stop is not signalled ----------
+    # The updater reads the live holder, stops at its gate; the holder exits
+    # meanwhile; the re-read inside the mutex must find it gone and skip the
+    # stop (a pid reused by an unrelated process would otherwise be killed).
+    $gone = Join-Path $scratch "Application Data\gone-holder\com.gaffer.panel"
+    New-TestInstall $gone
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-20)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $gateGone = "$scratch\gate-gone"
+    Remove-Item -LiteralPath $gateGone, "$gateGone.ready" -Force -ErrorAction SilentlyContinue
+    $pG = Start-Updater $gone "$scratch\gone.out" @{ GAFFER_UPDATE_TEST_GATE = $gateGone }
+    Wait-ForFile "$gateGone.ready" | Out-Null
+    Stop-FakeUpdater $fake
+    $goneId = $fake.Id
+    $fake = $null
+    Start-Sleep -Milliseconds 500
+    [System.IO.File]::WriteAllText($gateGone, "go")
+    $codeG = Wait-Updater $pG
+    $outG = Read-Out "$scratch\gone.out"
+    if ($codeG -eq 0) { Pass "update.ps1 took over the lock of a holder that vanished at the gate" } else { Fail "update.ps1 exited $($codeG) after the holder vanished: $outG" }
+    if ($outG -match [regex]::Escape("The stuck update (pid $goneId) is already gone, not stopping it.")) { Pass "log records that the vanished holder was not signalled" } else { Fail "no 'already gone' line for the vanished holder: $outG" }
+    if ($outG -notmatch "Stopping an update that has run for over 15 minutes") { Pass "no stop was attempted on the vanished holder" } else { Fail "update.ps1 tried to stop a holder that was already gone" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the vanished-holder run" } else { Pass "lock released after the vanished-holder run" }
+
+    # ---------- Case 6c: a lock or marker dated in the future (clock moved back) is stale ----------
+    # A future write time must never read as fresh: the live holder of a
+    # future-dated lock is treated like one that has run for over 15 minutes.
+    $future = Join-Path $scratch "Application Data\future-lock\com.gaffer.panel"
+    New-TestInstall $future
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddDays(1)
+    [System.IO.File]::WriteAllText($takeoverPath, "99999", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $takeoverPath).LastWriteTime = (Get-Date).AddDays(1)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $future $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the future-dated lock and exited 0" } else { Fail "update.ps1 exited $code on a future-dated lock (log: $logPath)" }
+    $logFuture = ""
+    if (Test-Path -LiteralPath $logPath) { $logFuture = Get-Content -LiteralPath $logPath -Raw }
+    if ($logFuture -match [regex]::Escape("Stopping an update that has run for over 15 minutes (pid $($fake.Id))")) { Pass "future-dated lock's live holder was treated as stuck" } else { Fail "future-dated lock's holder was not treated as stuck" }
+    if ($logFuture -match "Removing a takeover marker dated in the future") { Pass "future-dated takeover marker was cleared" } else { Fail "future-dated takeover marker was not cleared" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "future-dated lock's holder is still alive" } else { Pass "future-dated lock's holder was stopped" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    if ((Test-Path -LiteralPath $lockPath) -or (Test-Path -LiteralPath $takeoverPath)) { Fail "lock or marker left behind after the future-dated run" } else { Pass "lock and marker released after the future-dated run" }
 
     # ---------- Case 7: a lock file with no pid in it is abandoned ----------
     # Also the regression case for the lock acquisition itself: with the
@@ -373,12 +600,32 @@ try {
     if ($last -eq "err:dev-install") { Pass "log ends with err:dev-install" } else { Fail "last log line is not err:dev-install: $last" }
     if ((Get-TreeHash $dev) -eq $beforeTree) { Pass "dev install left untouched" } else { Fail "dev install was modified" }
     if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the dev-install refusal" } else { Pass "lock released after the dev-install refusal" }
+
+    # ---------- Case 9: an updater whose lock was replaced under it leaves the replacement alone ----------
+    # A holds the lock and stops at its hold gate; the lock file is then
+    # rewritten with another updater's pid (as a takeover would); A is
+    # released and exits (a broken asset ends it quickly). A's finally must
+    # leave the lock, now someone else's, in place.
+    $hold = Join-Path $scratch "Application Data\hold-lock\com.gaffer.panel"
+    New-TestInstall $hold
+    $gateHold = "$scratch\gate-hold"
+    Remove-Item -LiteralPath $gateHold, "$gateHold.ready" -Force -ErrorAction SilentlyContinue
+    $pH = Start-Updater $hold "$scratch\hold.out" @{ GAFFER_UPDATE_TEST_HOLD_GATE = $gateHold; GAFFER_UPDATE_ASSET = $notZip }
+    Wait-ForFile "$gateHold.ready" | Out-Null
+    $holdPid = Read-Lock
+    [System.IO.File]::WriteAllText($lockPath, "424242", [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($gateHold, "go")
+    $codeH = Wait-Updater $pH
+    if ($holdPid -and $holdPid -ne "424242") { Pass "updater A held the lock at its gate (pid $holdPid)" } else { Fail "updater A did not hold the lock at its gate (lock read: '$holdPid')" }
+    if ($codeH -ne 0) { Pass "updater A exited (non-zero, broken asset) after its lock was replaced" } else { Fail "updater A exited 0 on a broken asset" }
+    if ((Test-Path -LiteralPath $lockPath) -and ((Read-Lock) -eq "424242")) { Pass "A's exit left the replacement lock (pid 424242) in place" } else { Fail "A's exit removed or rewrote the replacement lock (now: '$(Read-Lock)')" }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
 } finally {
     if ($fake) { Stop-FakeUpdater $fake }
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue
-    Remove-Item Env:\GAFFER_UPDATE_TEST_DELAY_MS -ErrorAction SilentlyContinue
+    foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 }
 
