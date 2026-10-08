@@ -10,6 +10,7 @@
 - Chat problems such as being signed out, a model that is not available on your plan, or a conversation that has grown too long now show as proper error messages. Before, some of them could appear as a strange reply in the chat.
 - Fixed a bug where a normal answer that happened to mention "context" and "length" could reset your conversation.
 - The chat no longer ends with an empty bubble when Claude stops unexpectedly. You see what went wrong instead.
+- Only one updater can run at a time. If an update is slow and you press "Force stop & retry", Gaffer now waits for the running update instead of starting a second one over it, which could leave a broken install. A stuck download also gives up after about two minutes instead of ten.
 
 ## v0.11.1 - 2026-10-07
 

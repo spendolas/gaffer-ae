@@ -16,6 +16,61 @@ LOG="${TMPDIR:-/tmp}/gaffer-update.log"
 exec >> "$LOG" 2>&1
 echo "=== Update started: $(date) ==="
 
+# Last log line contract (the only channel back to a human or a tool):
+#   ok:<version>            installed
+#   err:<code>              failed (err:dev-install, err:lock) or a bare ERROR line
+#   busy:already-running    another updater holds the lock; this one did nothing
+# Exit codes: 0 ok, 1 failed, 3 busy.
+
+# Single-updater lock. Two updaters interleaving (the panel's "Force stop &
+# retry" after its 180s give-up, or a manual run next to the panel's) would
+# rsync over each other and corrupt the install, so the whole run holds
+# $LOCK_DIR, created atomically with mkdir and holding this PID. A lock whose
+# PID is dead, is not an update.sh, or that is older than 15 minutes is
+# considered abandoned and taken over. panel/main.js reads the same lock to
+# decide whether an updater is still running; keep the path and layout in sync.
+LOCK_DIR="${TMPDIR:-/tmp}/gaffer-update.lock"
+HAVE_LOCK=""
+lock_holder_running() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -q 'update\.sh' || return 1
+  # -mmin +15 prints the dir only when it is older than 15 minutes
+  [ -z "$(find "$LOCK_DIR" -maxdepth 0 -mmin +15 2>/dev/null)" ]
+}
+acquire_lock() {
+  local tries=0 holder
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if lock_holder_running "$holder"; then
+      echo "Another update is already running (pid $holder), leaving it to finish."
+      echo "busy:already-running"
+      exit 3
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -gt 3 ]; then
+      echo "ERROR: could not take the update lock at $LOCK_DIR"
+      echo "err:lock"
+      exit 1
+    fi
+    echo "Taking over an abandoned update lock (pid ${holder:-unknown})"
+    rm -rf "$LOCK_DIR"
+  done
+  echo "$$" > "$LOCK_DIR/pid"
+  HAVE_LOCK=1
+}
+cleanup() {
+  cd /
+  rm -rf "$TMP_DIR"
+  if [ -n "$HAVE_LOCK" ]; then rm -rf "$LOCK_DIR"; fi
+}
+# The lock and the temp dir go away however the script exits. Set before the
+# lock is taken so no exit path can leak it; a busy exit never held it.
+trap cleanup EXIT
+acquire_lock
+
 # Stop whatever holds the daemon's WebSocket port (9823), reliable regardless
 # of how it was launched (`node index.js`, `env node index.js`, or the SEA
 # binary). The old pattern kills (pkill -f "node.*daemon/index.js") never matched
@@ -48,15 +103,16 @@ if [ -d "$PANEL_DIR/../.git" ] || [ -d "$PANEL_DIR/.git" ]; then
   exit 1
 fi
 
-# The temp dir goes away however the script exits.
-trap 'cd /; rm -rf "$TMP_DIR"' EXIT
-
 # Download the release asset and extract it into a SUBFOLDER of TMP_DIR, so
 # the downloaded archive itself is never synced into the panel dir.
+# Download budget: the asset is a few MB. --max-time caps EACH attempt at 35s
+# (connect included), two retries, and --retry-max-time stops retrying once
+# 110s have passed, so a hung download dies in about 110s at worst, inside the
+# panel's 180s give-up (main.js reloadAfterUpdate) rather than outliving it.
 mkdir -p "$EXTRACT_DIR"
 echo "Downloading $ASSET_SOURCE"
 case "$ASSET_SOURCE" in
-  http://*|https://*) curl -fsSL --connect-timeout 20 --max-time 600 --retry 2 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" ;;
+  http://*|https://*) curl -fsSL --connect-timeout 15 --max-time 35 --retry 2 --retry-max-time 110 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" ;;
   *) cp "$ASSET_SOURCE" "$TMP_DIR/$ASSET_NAME" ;;
 esac
 tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR"

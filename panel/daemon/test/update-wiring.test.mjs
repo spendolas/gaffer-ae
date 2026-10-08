@@ -58,10 +58,43 @@ test('a failed check that sent If-None-Match clears the release cache (refusal i
 
 test('update copy in main.js has no em or en dashes', () => {
   for (const line of main.split('\n')) {
-    if (/Update did not complete|Could not check for updates|Gaffer is up to date|Update available, v/.test(line)) {
+    if (/Update did not complete|Could not check for updates|Gaffer is up to date|Update available, v|still running|Still updating/.test(line)) {
       assert.ok(!/[–—]/.test(line), 'dash in: ' + line.trim());
     }
   }
+});
+
+test('Force stop & retry never launches a second updater next to a live one', () => {
+  // Both scripts hold <tmp>/gaffer-update.lock for their run; the panel reads
+  // the same lock (pid file, 15 minute takeover age) before forcing.
+  const sh = read('../update.sh');
+  const ps1 = read('../update.ps1');
+  for (const script of [sh, ps1]) {
+    assert.ok(script.includes('gaffer-update.lock'), 'updater script has no gaffer-update.lock');
+    assert.ok(script.includes('busy:already-running'), 'updater script never reports busy:already-running');
+  }
+  assert.ok(main.includes("'gaffer-update.lock'") || main.includes('gaffer-update.lock'), 'main.js does not know the lock path');
+  assert.ok(main.includes('15 * 60 * 1000'), 'main.js does not apply the 15 minute takeover age');
+  const force = main.indexOf('function forceStopAndRetryUpdate()');
+  assert.ok(force !== -1, 'no forceStopAndRetryUpdate');
+  const body = main.slice(force, main.indexOf('function runUpdate()', force));
+  assert.ok(body.indexOf('runningUpdaterPid()') !== -1, 'force path does not check for a running updater');
+  assert.ok(body.indexOf('runningUpdaterPid()') < body.indexOf('forceStopDaemonPort('), 'force path kills the daemon port before checking the lock');
+  assert.ok(body.includes('waitForUpdatedVersion('), 'force path does not fall back to waiting');
+});
+
+test('download timeouts in both updater scripts fit inside the panel give-up', () => {
+  const sh = read('../update.sh');
+  const ps1 = read('../update.ps1');
+  const curl = sh.match(/curl [^\n]*--max-time (\d+)[^\n]*--retry (\d+)[^\n]*--retry-max-time (\d+)/);
+  assert.ok(curl, 'update.sh curl line lost its --max-time / --retry / --retry-max-time');
+  assert.ok(Number(curl[3]) <= 120, 'curl --retry-max-time exceeds 120s');
+  assert.ok(!/--max-time 600/.test(sh));
+  const iwr = ps1.match(/Invoke-WebRequest[^\n]*-TimeoutSec (\d+)/);
+  assert.ok(iwr, 'update.ps1 lost Invoke-WebRequest -TimeoutSec');
+  assert.ok(Number(iwr[1]) * 3 <= 120, 'three Invoke-WebRequest attempts exceed 120s');
+  assert.ok(/\$elapsed -ge 110/.test(ps1), 'update.ps1 has no total download deadline');
+  assert.ok(main.includes('waited >= 180000'), 'panel give-up moved; re-check the script timeouts against it');
 });
 
 test('panel-capture forces the update-available state with a version', () => {

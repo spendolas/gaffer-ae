@@ -2710,7 +2710,90 @@
     }
   }
 
+  // Mirrors the single-updater lock in update.sh / update.ps1: an updater
+  // holds <tmp>/gaffer-update.lock (a dir with a pid file on macOS, a pid
+  // file on Windows) for its whole run, and a second one exits at once with
+  // busy:already-running. Returns the live holder's pid, or 0 when no updater
+  // is running by the scripts' own rules (no lock, dead pid, or a lock older
+  // than their 15 minute takeover age). Needs the panel's Node context; without
+  // it the answer is "not running", which is what the panel assumed before.
+  function runningUpdaterPid() {
+    if (typeof require === 'undefined') return 0;
+    try {
+      var fs = require('fs');
+      var isWin = process.platform === 'win32';
+      var lock = isWin
+        ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-update.lock'
+        : (process.env.TMPDIR || '/tmp') + '/gaffer-update.lock';
+      var st = fs.statSync(lock);
+      if (Date.now() - st.mtimeMs > 15 * 60 * 1000) return 0;
+      var pid = parseInt(String(fs.readFileSync(isWin ? lock : lock + '/pid', 'utf8')).trim(), 10);
+      if (!(pid > 0)) return 0;
+      process.kill(pid, 0); // throws when no such process
+      return pid;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // Poll the on-disk version.json and reload ONLY once its version moves.
+  // The updater writes that file last, so reloading earlier would load
+  // half-copied files and flag a false failure. After 180s without a change
+  // the banner offers "Force stop & retry", unless the updater still holds
+  // its lock: then it is alive and working (a slow npm install, say), a
+  // second updater would only exit busy, so wait one more window instead.
+  function waitForUpdatedVersion(startVersion, actionsEl) {
+    var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
+    var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
+    var waited = 0;
+    var extended = false;
+    var timer = setInterval(function () {
+      waited += 5000;
+      cs.evalScript(jsx, function (result) {
+        if (UpdateState.shouldReloadAfterUpdate(startVersion, result)) {
+          clearInterval(timer);
+          try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
+          location.reload(); // fresh panel + fresh daemon
+        } else if (waited >= 180000) {
+          if (!extended && runningUpdaterPid()) {
+            extended = true;
+            waited = 0;
+            updateTextEl.textContent = 'Still updating, this is taking longer than usual…';
+            return;
+          }
+          clearInterval(timer);
+          window.__gafferUpdating = false;
+          syncSettingsUpdateButton();
+          // Stays up, offering a self-serve retry, instead of hiding —
+          // a stuck update usually means something still holds the
+          // daemon port, and this kills it directly rather than making
+          // the user hand-run a PowerShell command over chat.
+          updateTextEl.textContent = 'Update did not complete';
+          if (actionsEl) actionsEl.style.display = '';
+          updateBtnEl.style.display = 'none';
+          forceStopUpdateBtnEl.style.display = '';
+          updateBannerEl.classList.add('visible');
+          showChatNotice('Update did not complete. The updater log has details: '
+            + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
+        }
+      });
+    }, 5000);
+  }
+
   function forceStopAndRetryUpdate() {
+    // Never start a second updater next to a live one: the scripts' lock
+    // makes the newcomer exit busy anyway, and before the lock existed two
+    // of them could interleave and corrupt the install. Wait for the one
+    // that is running to finish (or to be judged abandoned) instead.
+    if (runningUpdaterPid()) {
+      updateTextEl.textContent = 'An update is still running, waiting for it to finish…';
+      var actionsEl = updateBannerEl.querySelector('.actions');
+      if (actionsEl) actionsEl.style.display = 'none';
+      window.__gafferUpdating = true;
+      syncSettingsUpdateButton();
+      waitForUpdatedVersion(versionData.version, actionsEl);
+      return;
+    }
     updateTextEl.textContent = 'Stopping…';
     forceStopUpdateBtnEl.disabled = true;
     forceStopDaemonPort(function () {
@@ -2736,10 +2819,8 @@
     var daemonDir = extPath + '/daemon';
 
     function reloadAfterUpdate() {
-      // The updater needs ~30-60s (download + npm). Poll the on-disk
-      // version.json and reload ONLY once its version moves. The updater
-      // writes that file last, so reloading earlier would load half-copied
-      // files and flag a false failure.
+      // The updater needs ~30-60s (download + npm); waitForUpdatedVersion
+      // reloads the panel once the on-disk version.json moves.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
           target: availableUpdateVersion || null,
@@ -2751,35 +2832,7 @@
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
       window.__gafferUpdating = true; // pauses daemon auto-respawn
       syncSettingsUpdateButton(); // prevent a second update launch from Settings
-      var startVersion = versionData.version;
-      var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
-      var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
-      var waited = 0;
-      var timer = setInterval(function () {
-        waited += 5000;
-        cs.evalScript(jsx, function (result) {
-          if (UpdateState.shouldReloadAfterUpdate(startVersion, result)) {
-            clearInterval(timer);
-            try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
-            location.reload(); // fresh panel + fresh daemon
-          } else if (waited >= 180000) {
-            clearInterval(timer);
-            window.__gafferUpdating = false;
-            syncSettingsUpdateButton();
-            // Stays up, offering a self-serve retry, instead of hiding —
-            // a stuck update usually means something still holds the
-            // daemon port, and this kills it directly rather than making
-            // the user hand-run a PowerShell command over chat.
-            updateTextEl.textContent = 'Update did not complete';
-            if (actionsEl) actionsEl.style.display = '';
-            updateBtnEl.style.display = 'none';
-            forceStopUpdateBtnEl.style.display = '';
-            updateBannerEl.classList.add('visible');
-            showChatNotice('Update did not complete. The updater log has details: '
-              + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
-          }
-        });
-      }, 5000);
+      waitForUpdatedVersion(versionData.version, actionsEl);
     }
 
     function runViaExtendScript() {
