@@ -1,0 +1,63 @@
+name: CLI contract check
+
+# Gaffer's chat layer drives `claude -p --output-format stream-json` and reads
+# a handful of flags, event shapes and structured error fields from it
+# (panel/daemon/cli-contract.js). Claude Code ships several releases a week,
+# so this asks the LATEST npm release, once a week, whether it still speaks
+# that language: --version parses, --help lists every flag Gaffer passes, a
+# bad --resume and a signed-out turn still produce the structured shapes the
+# classifier keys on. Everything runs signed out with no API key, so a run
+# costs $0 in tokens; a mismatch fails the job and the maintainer gets the
+# email. Nothing is opened, posted or committed automatically.
+#
+# Schedule + manual dispatch only, never push/pull_request: this is about
+# upstream drift, not about changes in this repo.
+on:
+  schedule:
+    # Monday 08:00 UTC, early in the week and before the traffic snapshot.
+    - cron: '0 8 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Belt-and-suspenders: even though no push/pull_request trigger exists
+    # above, keep this job explicitly scoped to its own triggers only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The standalone CLI, latest release (package verified on npm; the
+      # desktop app bundles the same version line). No secrets, no API key.
+      - name: Install the latest Claude Code
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code@latest
+          claude --version
+
+      # A throwaway HOME and config dir make the run signed out and keep
+      # anything the CLI writes on first run off the real runner home.
+      - name: Run the contract check
+        run: |
+          set -euo pipefail
+          export HOME="$(mktemp -d)"
+          export CLAUDE_CONFIG_DIR="$(mktemp -d)"
+          node scripts/cli-contract-check.mjs --out "$RUNNER_TEMP/cli-contract-captures"
+
+      # Raw stdout/stderr of each probe, for comparing against
+      # panel/daemon/test/fixtures/cli when the check fails. Kept briefly.
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-contract-captures
+          path: ${{ runner.temp }}/cli-contract-captures
+          if-no-files-found: ignore
+          retention-days: 14
