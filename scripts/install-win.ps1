@@ -8,26 +8,55 @@ $panelDir = "$repoDir\panel"
 
 Write-Host "=== Gaffer Installer (Windows) ==="
 
-# 1. Check prerequisites
+# 1. Look for a runnable Claude. The panel chat works with either the Claude
+# desktop app's bundled Claude Code or a standalone CLI (the daemon finds
+# whichever is present at runtime, see panel\daemon\claude-binary.js), so a
+# missing Claude is a warning here, not a failed install.
 Write-Host "Checking prerequisites..."
 $claudeBin = $null
+$claudeKind = $null
 $candidates = @(
+    "$env:USERPROFILE\.local\bin\claude.exe",
     "$env:LOCALAPPDATA\Programs\claude-code\claude.exe",
     "$env:LOCALAPPDATA\Microsoft\WinGet\Links\claude.exe"
 )
 foreach ($c in $candidates) {
-    if (Test-Path $c) { $claudeBin = $c; break }
+    if (Test-Path $c -PathType Leaf) { $claudeBin = $c; break }
 }
 if (-not $claudeBin) {
-    $claudeBin = (Get-Command claude -ErrorAction SilentlyContinue).Source
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    # only a real .exe: the npm package's .cmd shims cannot be launched by the daemon
+    if ($cmd -and $cmd.Source -and ($cmd.Source -like "*.exe")) { $claudeBin = $cmd.Source }
+}
+if ($claudeBin) {
+    $claudeKind = "cli"
+} else {
+    # Desktop app copy: %APPDATA%\Claude\claude-code\<version>\<hash>\claude.exe
+    # (newest version folder first; the hash level is absent in older layouts).
+    $appRoot = "$env:APPDATA\Claude\claude-code"
+    if (Test-Path $appRoot -PathType Container) {
+        $versionDirs = Get-ChildItem -Path $appRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object -Descending -Property @{ Expression = {
+                $v = $null
+                if ([version]::TryParse($_.Name, [ref]$v)) { $v } else { [version]"0.0" }
+            } }
+        foreach ($vdir in $versionDirs) {
+            $exe = Get-ChildItem -Path $vdir.FullName -Recurse -Depth 3 -Filter "claude.exe" -File -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($exe) { $claudeBin = $exe.FullName; $claudeKind = "app"; break }
+        }
+    }
 }
 if (-not $claudeBin) {
-    Write-Host "ERROR: Claude Code CLI not found."
-    Write-Host "Install the native build first:  irm https://claude.ai/install.ps1 | iex"
-    Write-Host "(the npm package's shims cannot be launched by the Gaffer daemon)"
-    exit 1
+    Write-Host "WARNING: no Claude found. Gaffer chat needs the Claude desktop app or Claude Code:"
+    Write-Host "  Claude desktop app: https://claude.com/download"
+    Write-Host "  Claude Code (CLI):  https://claude.ai/code  (native build: irm https://claude.ai/install.ps1 | iex)"
+    Write-Host "  Installing the panel anyway; install one of them before opening Gaffer."
+} elseif ($claudeKind -eq "app") {
+    Write-Host "  Claude (desktop app): $claudeBin"
+} else {
+    Write-Host "  Claude CLI: $claudeBin"
 }
-Write-Host "  Claude CLI: $claudeBin"
 
 $nodeVersion = & node --version 2>$null
 if (-not $nodeVersion) {
@@ -97,9 +126,37 @@ foreach ($ver in @("11", "12")) {
     Set-ItemProperty -Path $key -Name "PlayerDebugMode" -Value 1 -Type DWord
 }
 
-# 6. Register MCP server
-Write-Host "Registering Gaffer MCP server..."
-& $claudeBin mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" 2>$null
+# 6. Register MCP server (only used by Claude Code outside AE; the panel chat
+# passes its own MCP config and does not need this). Skip when there is no
+# Claude, or when the desktop app copy does not run from the command line.
+# Native command failures must never abort the install, so they are caught.
+$registerMcp = $false
+if (-not $claudeBin) {
+    Write-Host "Skipping MCP server registration (no Claude found)."
+} elseif ($claudeKind -eq "app") {
+    $answers = $false
+    try {
+        $null = & $claudeBin --version 2>&1
+        $answers = ($LASTEXITCODE -eq 0)
+    } catch { $answers = $false }
+    if ($answers) { $registerMcp = $true }
+    else { Write-Host "Skipping MCP server registration (the desktop app's Claude Code did not answer --version)." }
+} else {
+    $registerMcp = $true
+}
+if ($registerMcp) {
+    Write-Host "Registering Gaffer MCP server..."
+    $registered = $false
+    try {
+        $null = & $claudeBin mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" 2>&1
+        $registered = ($LASTEXITCODE -eq 0)
+    } catch { $registered = $false }
+    if (-not $registered) {
+        Write-Host "WARNING: could not register the Gaffer MCP server with Claude Code. The panel still works;"
+        Write-Host "  to use Gaffer tools from Claude Code outside AE, run:"
+        Write-Host "  claude mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp"
+    }
+}
 
 Write-Host ""
 Write-Host "=== Installation complete ==="
