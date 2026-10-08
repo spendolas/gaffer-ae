@@ -248,7 +248,7 @@ export function healthCheckEnv(candidate, platform, env) {
   // correctly even when this runs (in a test) on a POSIX host.
   var parts = [(platform === 'win32' ? pathWin32 : pathPosix).dirname(candidate)];
   if (platform !== 'win32') {
-    parts.push('/opt/homebrew/bin', '/usr/local/bin', join(env.HOME || '', '.local', 'bin'));
+    parts.push('/opt/homebrew/bin', '/usr/local/bin', pathPosix.join(env.HOME || '', '.local', 'bin'));
   }
   if (env.PATH) parts.push(env.PATH);
   return Object.assign({}, env, { PATH: parts.join(platform === 'win32' ? ';' : ':') });
