@@ -107,6 +107,149 @@ test('flush() is a no-op on an empty buffer', async () => {
   assert.equal(server.lastBody, null);
 });
 
+// Anything that smells like a filesystem path, a home folder or an account.
+// Applied to the whole serialized payload: the endpoint is public and
+// unauthenticated, so the version string and a closed enum are all that may
+// leave the machine about the Claude binary.
+var PATH_LIKE = /\/(Users|Volumes|home|private|opt|usr)\/|[A-Za-z]:\\|AppData|\\\\Users\\\\|\.app\b|claude-code\/|@/;
+
+test('recordUsage stores only x.y.z and a closed enum for the Claude Code fields', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: false }));
+  clearBuffer();
+
+  telemetry.recordUsage({ model: 'haiku', cliVersion: '2.1.289 (Claude Code)', cliSource: 'desktop-app', inputTokens: 1 });
+  var b = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8')).byModel['haiku::haiku'];
+  assert.equal(b.cliVersion, '2.1.289');
+  assert.equal(b.cliSource, 'desktop-app');
+
+  // Garbage in: a path as the version, a path as the source. Neither is stored,
+  // and the earlier good values are kept (last-seen, like aeVersion).
+  telemetry.recordUsage({ model: 'haiku', cliVersion: '/Users/me/.local/bin/claude', cliSource: '/Users/me/claude.app', inputTokens: 1 });
+  b = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8')).byModel['haiku::haiku'];
+  assert.equal(b.cliVersion, '2.1.289');
+  assert.equal(b.cliSource, 'desktop-app');
+
+  // Nothing known at all: 'unknown', never undefined.
+  telemetry.recordUsage({ model: 'opus', inputTokens: 1 });
+  var o = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8')).byModel['opus::opus'];
+  assert.equal(o.cliVersion, 'unknown');
+  assert.equal(o.cliSource, 'unknown');
+});
+
+test('sanitizers: version regex and length cap, source enum, step mapping', () => {
+  assert.equal(telemetry.sanitizeCliVersion('2.1.293'), '2.1.293');
+  assert.equal(telemetry.sanitizeCliVersion('  2.1.293 (Claude Code)\n'), '2.1.293');
+  assert.equal(telemetry.sanitizeCliVersion('2.1.293-beta.1+d96fccce310b'), '2.1.293');
+  assert.equal(telemetry.sanitizeCliVersion('v2.1.293'), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion('2.1'), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion('unknown'), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion(null), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion({ toString: function () { return '2.1.1'; } }), 'unknown');
+  assert.equal(telemetry.sanitizeCliVersion('12345.1.1'), 'unknown', 'component length cap');
+  assert.ok(telemetry.sanitizeCliVersion('2.1.293' + new Array(500).join('x')).length <= 16);
+
+  ['desktop-app', 'standalone', 'config-pin', 'path', 'unknown'].forEach(function (s) {
+    assert.equal(telemetry.sanitizeCliSource(s), s);
+  });
+  assert.equal(telemetry.sanitizeCliSource('desktop app'), 'unknown');
+  assert.equal(telemetry.sanitizeCliSource(undefined), 'unknown');
+  assert.equal(telemetry.sanitizeCliSource(['path']), 'unknown');
+
+  assert.equal(telemetry.cliSourceFromStep('desktop app'), 'desktop-app');
+  assert.equal(telemetry.cliSourceFromStep('known location'), 'standalone');
+  assert.equal(telemetry.cliSourceFromStep('config'), 'config-pin');
+  assert.equal(telemetry.cliSourceFromStep('PATH'), 'path');
+  assert.equal(telemetry.cliSourceFromStep('login shell'), 'path');
+  assert.equal(telemetry.cliSourceFromStep('something new'), 'unknown');
+  assert.equal(telemetry.cliSourceFromStep(null), 'unknown');
+});
+
+test('recordTurnKind counts known kinds and text_fallback per day, drops the rest', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: false }));
+  clearBuffer();
+
+  telemetry.recordTurnKind('stale_session', 'structure');
+  telemetry.recordTurnKind('stale_session', 'text');
+  telemetry.recordTurnKind('too_long', 'structure');
+  telemetry.recordTurnKind('ok', 'structure');
+  telemetry.recordTurnKind('/Users/me/secret', 'structure');
+  telemetry.recordTurnKind(undefined, 'none');
+  telemetry.recordTurnKind('api_error', 'text');
+
+  var buffer = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8'));
+  assert.deepEqual(buffer.errorKinds, { stale_session: 2, too_long: 1, api_error: 1, text_fallback: 2 });
+  assert.equal(telemetry.isEnabled(), false);
+});
+
+test('recordTurnKind on a buffer written by an older daemon (no errorKinds) just adds the map', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: false }));
+  writeFileSync(BUFFER_PATH, JSON.stringify({ date: new Date().toISOString().slice(0, 10), byModel: { 'a::a': { turns: 1 } } }));
+  telemetry.recordTurnKind('auth', 'structure');
+  var buffer = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8'));
+  assert.deepEqual(buffer.errorKinds, { auth: 1 });
+  assert.equal(buffer.byModel['a::a'].turns, 1, 'existing data kept');
+});
+
+test('flush() payload carries cliVersion, cliSource and errorKinds and nothing path-like', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  clearBuffer();
+  // A fake turn as chat-handler records it: a result event's usage plus the
+  // version from the init event, then one classified failure.
+  telemetry.recordUsage({
+    model: 'haiku', requestedModel: 'haiku', aeVersion: '25.0',
+    cliVersion: '2.1.289', cliSource: 'desktop-app',
+    inputTokens: 10, outputTokens: 5, costUsd: 0.001,
+  });
+  telemetry.recordTurnKind('auth', 'structure');
+  // Poison the on-disk map directly: a free-form key must not get through.
+  var raw = JSON.parse(readFileSync(BUFFER_PATH, 'utf-8'));
+  raw.errorKinds['/Users/me'] = 3;
+  raw.errorKinds.too_long = 'not a number';
+  writeFileSync(BUFFER_PATH, JSON.stringify(raw));
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  var bucket = payload.byModel['haiku::haiku'];
+  assert.equal(bucket.cliVersion, '2.1.289');
+  assert.equal(bucket.cliSource, 'desktop-app');
+  assert.equal(bucket.aeVersion, '25.0');
+  assert.deepEqual(payload.errorKinds, { auth: 1 });
+  assert.equal(PATH_LIKE.test(server.lastBody), false, 'no path-like string anywhere in the payload: ' + server.lastBody);
+  assert.equal(existsSync(BUFFER_PATH), false, 'buffer cleared after confirmed send');
+});
+
+test('flush() while opted out sends nothing even with the new fields buffered', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: false }));
+  clearBuffer();
+  telemetry.recordUsage({ model: 'haiku', cliVersion: '2.1.289', cliSource: 'desktop-app', inputTokens: 1 });
+  telemetry.recordTurnKind('too_long', 'structure');
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, false);
+  assert.equal(server.lastBody, null, 'no HTTP request made while disabled');
+  assert.ok(existsSync(BUFFER_PATH), 'buffer preserved for later send');
+  clearBuffer();
+});
+
+test('flush() sends a day that only has errorKinds (a turn that died before any result event)', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  clearBuffer();
+  telemetry.recordTurnKind('unknown_error', 'none');
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  assert.deepEqual(payload.byModel, {});
+  assert.deepEqual(payload.errorKinds, { unknown_error: 1 });
+});
+
 test('getInstallId leaves a pre-existing installId untouched, generates one only if absent', async () => {
   writeFileSync(CONFIG_PATH, JSON.stringify({ installId: 'dev-machine' }));
   assert.equal(telemetry.getInstallId(), 'dev-machine');

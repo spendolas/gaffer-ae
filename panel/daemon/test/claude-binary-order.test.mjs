@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   resolveOrder, resolveClaude, checkCandidate, healthCheckEnv, findClaudeBinary,
-  resetClaudeLookupForTests, INSTALL_LINKS, formatNotFoundMessage,
+  resetClaudeLookupForTests, lastClaudeLookup, INSTALL_LINKS, formatNotFoundMessage,
 } from '../claude-binary.js';
 
 // The lookup order and the health check, driven by fake fs/exec so no real
@@ -287,6 +287,22 @@ test('two concurrent findClaudeBinary calls run the health check once and get th
   assert.equal(await findClaudeBinary(findOpts(deps)), APP[0]);
   assert.equal(deps.spawned.length, 1);
   resetClaudeLookupForTests();
+});
+
+test('lastClaudeLookup exposes the step and version of the cached hit, never the path', async () => {
+  resetClaudeLookupForTests();
+  assert.equal(lastClaudeLookup(), null, 'nothing before the first lookup');
+  var files = {}; files[APP[0]] = { version: '2.1.289' };
+  await findClaudeBinary(findOpts(fakeDeps(files)));
+  var info = lastClaudeLookup();
+  assert.deepEqual(info, { step: 'desktop app', version: '2.1.289 (Claude Code)' });
+  assert.equal(JSON.stringify(info).indexOf('/app/'), -1, 'no path in the lookup info');
+  resetClaudeLookupForTests();
+  var deps2 = fakeDeps({ '/usr/local/bin/claude': { version: '2.1.236' } });
+  await findClaudeBinary(findOpts(deps2));
+  assert.equal(lastClaudeLookup().step, 'known location');
+  resetClaudeLookupForTests();
+  assert.equal(lastClaudeLookup(), null, 'reset forgets it');
 });
 
 test('a failed lookup clears the in-flight slot so the next call tries again', async () => {

@@ -26,9 +26,25 @@
 // calendar date can legitimately produce more than one row (day-close,
 // a mid-day disconnect/crash, end-of-day), and sentAt is what lets a
 // later reader tell those apart (Key decision 5):
-//   { date, sentAt, installId, byModel: { "<model>::<requestedModel>": {
-//     turns, inputTokens, outputTokens, cacheReadTokens,
-//     cacheCreationTokens, costUsd } } }
+//   { date, sentAt, installId, gafferVersion, os,
+//     byModel: { "<model>::<requestedModel>": {
+//       turns, inputTokens, outputTokens, cacheReadTokens,
+//       cacheCreationTokens, costUsd, aeVersion, cliVersion, cliSource } },
+//     errorKinds: { stale_session, too_long, auth, model, api_error,
+//                   unknown_error, text_fallback } }   // counts, optional
+//
+// Unknown fields are harmless: this script reads named keys only, so a
+// daemon that sends more than the deployed copy knows about still gets its
+// rows appended (the extra keys are simply not written). That is how
+// gafferVersion/os/aeVersion (Gaffer 0.10.6) and cliVersion/cliSource/
+// errorKinds (0.11.3) were added daemon-side first.
+//
+// Deployed-copy maintenance when new fields land: paste the new version of
+// this file into the Apps Script editor and Deploy > Manage deployments >
+// edit > New version. The header row is only written on an EMPTY sheet, so
+// on an existing sheet type the new header cells in by hand, in the same
+// order as the appendRow below (new columns are always appended at the end
+// so older rows stay aligned).
 
 function doPost(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
@@ -38,6 +54,7 @@ function doPost(e) {
       'date', 'sentAt', 'installId', 'model', 'requestedModel', 'turns',
       'inputTokens', 'outputTokens', 'cacheReadTokens',
       'cacheCreationTokens', 'costUsd',
+      'gafferVersion', 'os', 'aeVersion', 'cliVersion', 'cliSource', 'errorKinds',
     ]);
   }
 
@@ -52,6 +69,12 @@ function doPost(e) {
   var sentAt = body.sentAt || '';
   var installId = body.installId || '';
   var byModel = body.byModel || {};
+  var gafferVersion = body.gafferVersion || '';
+  var os = body.os || '';
+  // Per-day failure counters are install-wide, not per model; stored once as
+  // a JSON string on each of the day's rows (empty when none were sent).
+  var errorKinds = body.errorKinds && typeof body.errorKinds === 'object'
+    ? JSON.stringify(body.errorKinds) : '';
 
   for (var key in byModel) {
     var parts = key.split('::');
@@ -70,6 +93,12 @@ function doPost(e) {
       m.cacheReadTokens || 0,
       m.cacheCreationTokens || 0,
       m.costUsd || 0,
+      gafferVersion,
+      os,
+      m.aeVersion || '',
+      m.cliVersion || '',
+      m.cliSource || '',
+      errorKinds,
     ]);
   }
 
