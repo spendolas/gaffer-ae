@@ -9,7 +9,10 @@
 # that install with GAFFER_UPDATE_ASSET pointing at -ReleaseZip, and checks
 # the result. A second case feeds it a broken download and a third a 404
 # URL (the branch real users take); both check that nothing in the install
-# changed.
+# changed. Cases 4 to 7 cover the single-updater lock: a second updater exits
+# busy while a live one holds the lock, an abandoned lock (dead pid, or older
+# than 15 minutes) is taken over, the lock is gone after every run, and the
+# dev-install refusal still ends the log with err:dev-install.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
 # while a Gaffer daemon is up (close After Effects first).
@@ -79,6 +82,26 @@ function Invoke-Update([string] $dir, [string] $asset) {
     return $LASTEXITCODE
 }
 
+# The lock update.ps1 holds for its run (same TEMP Invoke-Update points it at).
+$lockPath = "$scratch\tmp\gaffer-update.lock"
+$logPath = "$scratch\tmp\gaffer-update.log"
+function Get-LastLogLine {
+    if (-not (Test-Path -LiteralPath $logPath)) { return "" }
+    $lines = Get-Content -LiteralPath $logPath | Where-Object { $_ -ne "" }
+    # Start-Transcript appends its own footer after the script's last line.
+    $body = $lines | Where-Object { $_ -notmatch '^\*{10,}' -and $_ -notmatch '^(Windows PowerShell transcript end|End time:)' }
+    if ($body) { return [string] ($body | Select-Object -Last 1) }
+    return ""
+}
+# A long-lived process whose command line contains "update.ps1", which is
+# what the lock's liveness check looks for. Returns the process.
+function Start-FakeUpdater {
+    New-Item -ItemType Directory -Path "$scratch\fake" -Force | Out-Null
+    Set-Content -LiteralPath "$scratch\fake\update.ps1" -Value 'Start-Sleep -Seconds 300'
+    return Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$scratch\fake\update.ps1") -WindowStyle Hidden -PassThru
+}
+$fake = $null
+
 $realTemp = $env:TEMP
 try {
     # ---------- Case 1: a good release asset ----------
@@ -116,6 +139,7 @@ try {
     $wantOk = "ok:" + ((Get-Content -LiteralPath (Join-Path $expected "version.json") -Raw | ConvertFrom-Json).version)
     if ($log -match [regex]::Escape($wantOk)) { Pass "log contains $wantOk" } else { Fail "no $wantOk in the log" }
     if (Get-ChildItem -LiteralPath "$scratch\tmp" -Directory -Filter "gaffer-update-*" -ErrorAction SilentlyContinue) { Fail "temp dir not cleaned up" } else { Pass "temp dir cleaned up" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after success" } else { Pass "update lock released after success" }
 
     # ---------- Case 2: a broken download changes nothing ----------
     $broken = Join-Path $scratch "Application Data\broken\com.gaffer.panel"
@@ -126,6 +150,7 @@ try {
     $code = Invoke-Update $broken $notZip
     if ($code -ne 0) { Pass "update.ps1 exited non-zero on a broken download" } else { Fail "update.ps1 exited 0 on a broken download" }
     if ((Get-TreeHash $broken) -eq $beforeTree) { Pass "broken download left the install untouched" } else { Fail "broken download modified the install" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after a failed update" } else { Pass "update lock released after a failed update" }
 
     # ---------- Case 3: a 404 URL changes nothing (exercises the URL branch) ----------
     # Cases 1 and 2 hand update.ps1 a local file. Real users always hit the
@@ -149,7 +174,74 @@ try {
     $log404 = ""
     if (Test-Path -LiteralPath $logPath) { $log404 = Get-Content -LiteralPath $logPath -Raw }
     if ($log404 -match "\(404\)") { Pass "update.ps1 reached the download and got the server's 404" } else { Fail "update.ps1 did not reach the download (offline or URL branch broke); log: $logPath" }
+
+    # ---------- Case 4: a second updater exits busy while a live one holds the lock ----------
+    $busy = Join-Path $scratch "Application Data\busy\com.gaffer.panel"
+    New-TestInstall $busy
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    $beforeTree = Get-TreeHash $busy
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $busy $ReleaseZip
+    if ($code -eq 3) { Pass "second updater exited 3 while the lock was held" } else { Fail "second updater exited $code, expected 3" }
+    $last = Get-LastLogLine
+    if ($last -eq "busy:already-running") { Pass "log ends with busy:already-running" } else { Fail "last log line is not busy:already-running: $last" }
+    if ((Get-TreeHash $busy) -eq $beforeTree) { Pass "second updater left the install untouched" } else { Fail "second updater modified the install" }
+    $holder = ""
+    if (Test-Path -LiteralPath $lockPath) { $holder = (Get-Content -LiteralPath $lockPath -Raw).Trim() }
+    if ($holder -eq "$($fake.Id)") { Pass "live lock kept its holder's pid" } else { Fail "live lock was removed or rewritten (now: '$holder')" }
+    Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue
+    $fake.WaitForExit(5000) | Out-Null
+    $fake = $null
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 5: an abandoned lock (dead pid) is taken over ----------
+    $stale = Join-Path $scratch "Application Data\stale\com.gaffer.panel"
+    New-TestInstall $stale
+    $dead = Start-FakeUpdater
+    Stop-Process -Id $dead.Id -Force -ErrorAction SilentlyContinue
+    $dead.WaitForExit(5000) | Out-Null
+    Start-Sleep -Milliseconds 300
+    [System.IO.File]::WriteAllText($lockPath, "$($dead.Id)", [System.Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $stale $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the dead-pid lock and exited 0" } else { Fail "update.ps1 exited $code on a dead-pid lock (log: $logPath)" }
+    $logStale = ""
+    if (Test-Path -LiteralPath $logPath) { $logStale = Get-Content -LiteralPath $logPath -Raw }
+    if ($logStale -match [regex]::Escape("Taking over an abandoned update lock (pid $($dead.Id))")) { Pass "log records the takeover" } else { Fail "no takeover line in the log" }
+    $last = Get-LastLogLine
+    if ($last -eq $wantOk) { Pass "takeover run ends with $wantOk" } else { Fail "takeover run last log line: $last" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the takeover run" } else { Pass "lock released after the takeover run" }
+
+    # ---------- Case 6: a lock older than 15 minutes is taken over even with a live pid ----------
+    $oldLock = Join-Path $scratch "Application Data\old-lock\com.gaffer.panel"
+    New-TestInstall $oldLock
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-20)
+    $code = Invoke-Update $oldLock $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the 20 minute old lock and exited 0" } else { Fail "update.ps1 exited $code on a 20 minute old lock (log: $logPath)" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the old-lock run" } else { Pass "lock released after the old-lock run" }
+    Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue
+    $fake.WaitForExit(5000) | Out-Null
+    $fake = $null
+
+    # ---------- Case 7: the dev-install refusal still ends the log with err:dev-install ----------
+    $dev = Join-Path $scratch "dev-checkout\panel"
+    New-TestInstall $dev
+    New-Item -ItemType Directory -Path (Join-Path $scratch "dev-checkout\.git") -Force | Out-Null
+    $beforeTree = Get-TreeHash $dev
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $dev $ReleaseZip
+    if ($code -ne 0) { Pass "update.ps1 refused a dev install" } else { Fail "update.ps1 exited 0 on a dev install" }
+    $last = Get-LastLogLine
+    if ($last -eq "err:dev-install") { Pass "log ends with err:dev-install" } else { Fail "last log line is not err:dev-install: $last" }
+    if ((Get-TreeHash $dev) -eq $beforeTree) { Pass "dev install left untouched" } else { Fail "dev install was modified" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the dev-install refusal" } else { Pass "lock released after the dev-install refusal" }
 } finally {
+    if ($fake) { Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue }
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
