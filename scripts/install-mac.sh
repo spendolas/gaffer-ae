@@ -69,7 +69,7 @@ ln -sf "$PANEL_DIR" "$INSTALL_DIR"
 
 # 3. Install daemon dependencies
 echo "Installing daemon dependencies..."
-cd "$PANEL_DIR/daemon" && npm install --production 2>&1 | tail -3
+cd "$PANEL_DIR/daemon" && npm install --omit=dev 2>&1 | tail -3
 
 # 4. Set PlayerDebugMode
 echo "Setting PlayerDebugMode..."

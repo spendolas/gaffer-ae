@@ -135,7 +135,7 @@ Remove-Item -Recurse -Force $historyBackupDir -ErrorAction SilentlyContinue
 # daemon can never start (symlinked installs resolve to the same place)
 Write-Host "Installing daemon dependencies..."
 Push-Location "$installDir\daemon"
-& npm install --production
+& npm install --omit=dev
 Pop-Location
 
 # 5. Registry: PlayerDebugMode

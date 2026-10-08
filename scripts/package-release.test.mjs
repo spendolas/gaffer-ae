@@ -41,6 +41,26 @@ test('win zip has panel/ contents at its root', () => {
   assert.ok(!list.some((p) => p.startsWith('panel/')));
 });
 
+// The daemon's unit tests and fixtures are tracked under panel/ but are not
+// part of the product: no archive ships them.
+const isTestPath = (p) => /^(\.\/)?daemon\/(test|test-fixtures)(\/|$)/.test(p) || /\.test\.mjs$/.test(p);
+for (const name of ['gaffer-install-mac.tar.gz', 'gaffer-update-mac.tar.gz']) {
+  test(name + ' ships no daemon/test or daemon/test-fixtures paths', () => {
+    const list = execFileSync('tar', ['-tzf', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isTestPath), []);
+    assert.ok(list.includes('./daemon/index.js'));
+    assert.ok(list.includes('./daemon/safety.js'));
+  });
+}
+for (const name of ['gaffer-install-win.zip', 'gaffer-update-win.zip']) {
+  test(name + ' ships no daemon/test or daemon/test-fixtures paths', () => {
+    const list = execFileSync('unzip', ['-Z1', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isTestPath), []);
+    assert.ok(list.includes('daemon/index.js'));
+    assert.ok(list.includes('daemon/safety.js'));
+  });
+}
+
 test('packaged version.json has exactly version and commit', () => {
   const json = execFileSync('tar', ['-xzOf', join(out, 'gaffer-update-mac.tar.gz'), './version.json'], { encoding: 'utf8' });
   assert.deepEqual(JSON.parse(json), { version: '9.9.9', commit: 'deadbeefcafe' });
