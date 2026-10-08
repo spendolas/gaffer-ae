@@ -2,10 +2,10 @@
 
 ## v0.11.3 - 2026-10-08
 
-**Sturdier updates, a smaller download, and a heads-up when your Claude Code is newer than what Gaffer was tested with.**
+**Sturdier updates, a smaller download, and a heads-up when your Claude Code is outside the versions Gaffer was tested with.**
 
-- Updates are safer in rare situations. A second update can no longer start on top of one that is stuck, and a stuck one is stopped completely, including the programs it started, before a new update takes over. If your network sends downloads through a proxy that blocks the first download method, Windows now tries the system proxy instead of giving up.
-- The download is about 6 percent smaller, because test files no longer ship to your computer.
+- Updates are safer in rare situations: a stuck update is now stopped completely, including the programs it started, before a new one takes over, and an update started by hand is recognised too. If a network proxy blocks the first download method, Windows now tries the system proxy instead of giving up.
+- The download is about 6 to 9 percent smaller, because test files no longer ship to your computer.
 - If your Claude Code is much newer or older than the versions Gaffer was tested with, Gaffer now tells you once per session, in the chat. It never blocks anything.
 - If you share anonymous usage statistics, they now include the Claude Code version number and which kind of install it is. They never include file paths or anything about you. You can still turn the statistics off in settings.
 - Gaffer reports its real version to other tools that connect to it, and the log no longer shows a stray Windows message when Claude Code is not found.

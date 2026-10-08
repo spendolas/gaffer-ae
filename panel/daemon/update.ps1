@@ -32,12 +32,22 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # retry" after its 180s give-up, or a manual run next to the panel's) would
 # robocopy over each other and corrupt the install, so the whole run holds
 # $lockPath, a file created atomically (FileMode CreateNew) holding this PID.
-# A lock whose PID is dead or is not a daemon\update.ps1 is abandoned and
-# taken over; a lock older than 15 minutes whose holder is still an
-# update.ps1 is a stuck updater, which is stopped first (its whole process
-# tree, not just the shell), then taken over. A lock (or takeover marker)
-# whose write time lies in the future is a leftover from before the clock
-# moved backwards and counts as stale, never as fresh.
+# A lock whose PID is dead or is not a plausible updater (see
+# Get-LockHolderProcess) is abandoned and taken over; a lock older than 15
+# minutes whose holder is still a live updater is a stuck updater, which is
+# stopped first (its whole process tree, not just the shell), then taken
+# over. A lock under 30 seconds old with no readable pid belongs to an
+# updater between its CreateNew and its pid write, and counts as busy.
+#
+# Clock safety: every age is UTC now minus the file's UTC write time, never
+# local wall-clock (a DST fall-back would make a healthy lock read an hour
+# in the future). The clock can still step (w32time, a VM resume, a network
+# TEMP with its own clock), so a negative age up to 300 s is treated like
+# age 0. Only a lock (or takeover marker) dated more than 300 s in the
+# future is a leftover from before the clock moved backwards and counts as
+# stale instead of fresh, and that shortcut only ever applies to a lock with
+# no pid or a dead pid: a LIVE updater holder is never stopped on a negative
+# age alone, its lock is busy until it is really over 15 minutes old.
 #
 # Takeovers are serialized by a second CreateNew file, $takeoverPath: only
 # its holder may stop or remove a lock, and it re-reads the lock's pid inside
@@ -55,6 +65,8 @@ $lockPath = Join-Path $env:TEMP "gaffer-update.lock"
 $takeoverPath = "$lockPath.takeover"
 $script:haveLock = $false
 $script:haveTakeover = $false
+# A live holder whose lock is this old (seconds) is a stuck updater.
+$stuckAfter = 900
 # Test-only gates, set only by scripts\windows-tests\test-5-update-ps1.ps1
 # to make the takeover races deterministic. Each names a file: the script
 # writes "<file>.ready" when it reaches the gate, then waits (up to 60s)
@@ -64,6 +76,13 @@ $script:haveTakeover = $false
 #   GAFFER_UPDATE_TEST_MARKER_GATE  after judging the takeover marker stale,
 #                                   before renaming it away
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
+# GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
+# age so the harness can stage a stuck holder that really is older than its
+# lock (the pid-reuse guard below rejects a holder created after the lock,
+# so a backdated lock can no longer stand in for a long run). Digits only.
+if ("$env:GAFFER_UPDATE_TEST_STUCK_AFTER" -match '^\d+$') { $stuckAfter = [int] $env:GAFFER_UPDATE_TEST_STUCK_AFTER }
+# Seconds since the file was last written, UTC against UTC.
+function Get-FileAgeSeconds($item) { return ([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalSeconds }
 function Wait-TestGate([string] $gate) {
     if (-not $gate) { return }
     try { [System.IO.File]::WriteAllText("$gate.ready", "$PID") } catch {}
@@ -73,28 +92,58 @@ function Wait-TestGate([string] $gate) {
     }
 }
 
-# The Win32_Process of a live update.ps1 holder, or $null. The panel spawns
-# the script as daemon\update.ps1, its ExtendScript fallback as
-# daemon/update.ps1 (forward slash), so either separator counts. This very
-# process never counts as a holder (a lock carrying our own pid is a leftover
-# from a pid reuse). The process start time is not compared with the lock's
-# age: the path match already rules out the common pid-reuse cases.
-function Get-LockHolderProcess([string] $holder) {
+# The Win32_Process of a live, plausible updater holding the lock, or $null.
+# A process is a plausible holder when it is a PowerShell (powershell.exe or
+# pwsh.exe) that was created no later than 5 s after the lock was written.
+# The panel spawns the script as daemon\update.ps1, its ExtendScript
+# fallback as daemon/update.ps1, but a person who runs ".\update.ps1" inside
+# an interactive PowerShell leaves no script path in the process's command
+# line at all, so the command line cannot be required; a daemon[\/]update.ps1
+# path in it is accepted as a stronger form of the same evidence, under the
+# same creation-time condition. The creation time is what rules out pid
+# reuse: Windows hands a dead process's pid to a new one quickly, and that
+# new process was necessarily created AFTER the dead updater wrote the lock,
+# so it fails the test whatever its name. The 5 s slack covers the two
+# timestamps' granularity; the comparison is UTC against UTC.
+# This very process never counts as a holder (a lock carrying our own pid is
+# a leftover from a pid reuse).
+# When the process query itself fails (WMI down, a timeout), nothing can be
+# verified: if Get-Process still sees the pid, the lock is reported busy
+# (Unverified), never abandoned, since a wrong "abandoned" would start a
+# second updater next to a live one.
+function Get-LockHolderProcess([string] $holder, [DateTime] $lockWrittenUtc) {
     $holderPid = 0
     if (-not [int]::TryParse($holder, [ref] $holderPid) -or $holderPid -le 0) { return $null }
     if ($holderPid -eq $PID) { return $null }
     $proc = $null
-    try { $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -ErrorAction SilentlyContinue } catch {}
-    if (-not $proc -or -not ("$($proc.CommandLine)" -match "daemon[\\/]update\.ps1")) { return $null }
+    $queryFailed = $false
+    try {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -OperationTimeoutSec 15 -ErrorAction Stop
+    } catch {
+        $queryFailed = $true
+    }
+    if ($queryFailed) {
+        if (Get-Process -Id $holderPid -ErrorAction SilentlyContinue) {
+            return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $null; Unverified = $true }
+        }
+        return $null
+    }
+    if (-not $proc) { return $null }
+    $nameOk = ("$($proc.Name)" -match '^(powershell|pwsh)\.exe$')
+    $pathOk = ("$($proc.CommandLine)" -match "daemon[\\/]update\.ps1")
+    if (-not ($nameOk -or $pathOk)) { return $null }
+    if (-not $proc.CreationDate) { return $null }
+    $createdUtc = ([DateTime] $proc.CreationDate).ToUniversalTime()
+    if ($createdUtc -gt $lockWrittenUtc.ToUniversalTime().AddSeconds(5)) { return $null }
     return $proc
 }
 
 # The same process as $proc, right now: same pid, same creation time. $null
 # when it is gone or the pid now belongs to something else.
-function Test-SameProcess($proc) {
+function Test-SameProcess($proc, [DateTime] $lockWrittenUtc) {
     if (-not $proc) { return $false }
-    $now = Get-LockHolderProcess "$($proc.ProcessId)"
-    if (-not $now) { return $false }
+    $now = Get-LockHolderProcess "$($proc.ProcessId)" $lockWrittenUtc
+    if (-not $now -or $now.Unverified) { return $false }
     return ("$($now.CreationDate)" -eq "$($proc.CreationDate)")
 }
 
@@ -103,7 +152,7 @@ function Test-SameProcess($proc) {
 # reuses pids, so a ParentProcessId can point at a process that merely
 # inherited the pid of a long-gone parent, and taskkill /T follows those.
 function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {
-    $all = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
+    $all = @(Get-CimInstance Win32_Process -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
     $found = @{}
     $queue = New-Object System.Collections.Queue
     $queue.Enqueue(@{ Id = $rootPid; Created = $rootCreated })
@@ -120,16 +169,21 @@ function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {
 }
 
 # End the holder AND every process it started (its curl.exe, robocopy, npm,
-# and whatever those started); ending only the shell would orphan those. The
-# descendants come from Win32_Process (parent pid plus creation order, see
-# above), youngest first, then the holder; taskkill /T /F, which follows
-# stale parent pids, is only the fallback when that enumeration fails. A
-# forced stop gives the holder no chance to run its finally, so its lock
-# stays for the caller to take over; the closing pause lets the file system
-# settle before the lock is re-read.
+# and whatever those started); ending only the shell would orphan those.
+# The holder goes FIRST, so it cannot start anything after the descendants
+# are listed; the descendants are then enumerated from Win32_Process (parent
+# pid plus creation order, see above; an orphan keeps its ParentProcessId,
+# and the holder's own creation time was captured while it was alive) and
+# stopped in no particular order, with a second pass for anything a dying
+# child started meanwhile. taskkill /T /F, which follows stale parent pids,
+# is only the fallback when that enumeration fails. A forced stop gives the
+# holder no chance to run its finally, so its lock stays for the caller to
+# take over; the closing pause lets the file system settle before the lock
+# is re-read.
 function Stop-LockHolder($proc) {
     $holderPid = [int] $proc.ProcessId
     Write-Host "Stopping an update that has run for over 15 minutes (pid $holderPid)"
+    Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
     # A flag, not a null test on the array: in PowerShell an empty array
     # compared with $null yields an empty (falsy) result, and a holder with
     # no descendants left would wrongly take the taskkill path.
@@ -139,7 +193,10 @@ function Stop-LockHolder($proc) {
     if ($listed) {
         Write-Host "  stopping the stuck update and its $($kids.Count) descendant process(es)"
         foreach ($k in $kids) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
-        Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+        # Anything a child started between the listing and its stop.
+        $more = @()
+        try { $more = @(Get-DescendantProcessIds $holderPid $proc.CreationDate) } catch {}
+        foreach ($k in $more) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
     } else {
         Write-Host "  could not list the stuck update's processes, using taskkill /T"
         $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
@@ -186,18 +243,28 @@ function New-PidFile([string] $path) {
 
 # Serialize takeovers. $false when another live updater is mid-takeover, or
 # when another updater cleared the same stale marker first. A stale marker
-# (60 seconds or older, or dated in the future) is cleared by renaming it to
-# a name only this process uses: the rename is atomic, so of several
-# updaters that all judged it stale exactly one succeeds. The renamed file's
-# own age is checked once more: had a fresh marker slipped in between the
-# age check and the rename, the rename would have stolen a live updater's
-# mutex, so a young one is put back and this updater yields.
-function Test-MarkerStale([double] $age) { return ($age -ge 60 -or $age -lt 0) }
+# (60 seconds or older, or dated over 300 s in the future) is cleared by
+# renaming it to a name only this process uses: the rename is atomic, so of
+# several updaters that all judged it stale exactly one succeeds. The
+# renamed file's own age is checked once more: had a fresh marker slipped
+# in between the age check and the rename, the rename would have stolen a
+# live updater's mutex, so a young one is put back and this updater yields.
+#
+# Residual risk, left as is: the put-back is not atomic. While the renamed
+# fresh marker is away (between this updater's Move-Item and its move
+# back), a third updater can create a marker of its own; the put-back then
+# sees a marker in place, discards the renamed one, and two updaters believe
+# they hold the mutex. It takes three updaters racing within milliseconds,
+# and the lock takeover inside the mutex still re-reads the lock's pid and
+# only removes the lock it judged stale, so harm also needs those two to
+# interleave within the few instructions between that re-read and the
+# removal.
+function Test-MarkerStale([double] $age) { return ($age -ge 60 -or $age -lt -300) }
 function Enter-TakeoverMutex {
     if (New-PidFile $takeoverPath) { $script:haveTakeover = $true; return $true }
     $item = Get-Item -LiteralPath $takeoverPath -ErrorAction SilentlyContinue
     if (-not $item) { return $false }
-    $age = ((Get-Date) - $item.LastWriteTime).TotalSeconds
+    $age = Get-FileAgeSeconds $item
     if (-not (Test-MarkerStale $age)) { return $false }
     Wait-TestGate $env:GAFFER_UPDATE_TEST_MARKER_GATE
     $stale = "$takeoverPath.stale.$PID"
@@ -208,7 +275,7 @@ function Enter-TakeoverMutex {
         return $false
     }
     $moved = Get-Item -LiteralPath $stale -ErrorAction SilentlyContinue
-    if ($moved) { $age = ((Get-Date) - $moved.LastWriteTime).TotalSeconds }
+    if ($moved) { $age = Get-FileAgeSeconds $moved }
     if (-not (Test-MarkerStale $age)) {
         Write-Host "The takeover marker was renewed by another update meanwhile, putting it back."
         if (-not (Test-Path -LiteralPath $takeoverPath)) {
@@ -218,7 +285,7 @@ function Enter-TakeoverMutex {
         }
         return $false
     }
-    if ($age -lt 0) {
+    if ($age -lt -300) {
         Write-Host "Removing a takeover marker dated in the future (the clock moved back since it was left)"
     } else {
         Write-Host "Removing a takeover marker left by a crashed updater ($([int] $age) s old)"
@@ -251,15 +318,36 @@ while (-not $script:haveLock) {
         continue
     }
     $holder = Read-LockHolder
-    $proc = Get-LockHolderProcess $holder
-    # Older than 15 minutes, or dated in the future (clock moved backwards).
-    $lockAge = ((Get-Date) - $lockItem.LastWriteTime).TotalSeconds
-    $lockIsOld = ($lockAge -ge 900 -or $lockAge -lt 0)
+    $lockWrittenUtc = $lockItem.LastWriteTimeUtc
+    $lockAge = Get-FileAgeSeconds $lockItem
+    # No readable pid in a lock under 30 s old (up to 300 s of clock skew
+    # tolerated): an updater between its CreateNew and its pid write.
+    $holderPid = 0
+    $holderParses = ([int]::TryParse($holder, [ref] $holderPid) -and $holderPid -gt 0)
+    if (-not $holderParses -and $lockAge -ge -300 -and $lockAge -lt 30) {
+        Write-Host "Another update is starting up (its lock is seconds old), leaving it to finish."
+        Write-Output "busy:already-running"
+        Stop-Transcript
+        exit 3
+    }
+    $proc = Get-LockHolderProcess $holder $lockWrittenUtc
+    if ($proc -and $proc.Unverified) {
+        Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."
+        Write-Output "busy:already-running"
+        Stop-Transcript
+        exit 3
+    }
+    # A live updater holder is busy unless its lock is really old; a lock
+    # dated in the future is never "old", so it is busy as well.
+    $lockIsOld = ($lockAge -ge $stuckAfter)
     if ($proc -and -not $lockIsOld) {
         Write-Host "Another update is already running (pid $holder), leaving it to finish."
         Write-Output "busy:already-running"
         Stop-Transcript
         exit 3
+    }
+    if (-not $proc -and $holderParses -and (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
+        Write-Host "The lock's pid $holder belongs to a process that is not the update that wrote the lock (another program, or a process started after the lock was written: pid reused)."
     }
     if ($tries -gt 3) {
         Write-Host "ERROR: could not take the update lock at $lockPath"
@@ -291,7 +379,7 @@ while (-not $script:haveLock) {
         # Re-read the holder itself inside the mutex: stop it only if it is
         # still the same live updater (same pid, same creation time), never
         # a process that took its pid meanwhile.
-        if (Test-SameProcess $proc) {
+        if (Test-SameProcess $proc $lockWrittenUtc) {
             Stop-LockHolder $proc
             $nowHolder = Read-LockHolder
             if ((Test-Path -LiteralPath $lockPath) -and $nowHolder -ne $holder) {

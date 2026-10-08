@@ -18,7 +18,7 @@ echo "=== Update started: $(date) ==="
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
-#   err:<code>              failed (err:dev-install, err:lock) or a bare ERROR line
+#   err:<code>              failed (err:dev-install, err:lock, err:download) or a bare ERROR line
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -30,9 +30,17 @@ echo "=== Update started: $(date) ==="
 # older than 15 minutes whose holder is still an update.sh is a stuck updater,
 # which is stopped first (the whole process tree, not just its shell), then
 # taken over. A lock younger than 30 seconds with no pid yet belongs to an
-# updater between its mkdir and its pid write, and counts as busy. A lock (or
-# takeover marker) whose mtime lies in the future is a leftover from before
-# the clock moved backwards and counts as stale, never as young.
+# updater between its mkdir and its pid write, and counts as busy.
+#
+# Clock safety: an age is wall-clock now minus the lock's mtime, and the
+# clock can step (NTP, a VM resume, a network TMPDIR with its own clock), so
+# a healthy lock can read a few seconds or minutes into the future. A
+# negative age up to 300 s is treated like age 0. Only a lock (or takeover
+# marker) dated more than 300 s in the future is a leftover from before the
+# clock moved backwards and counts as stale instead of young, and that
+# shortcut only ever applies to a lock with no pid or a dead pid: a LIVE
+# updater holder is never stopped on a negative age alone, its lock is busy
+# until it is really over 15 minutes old.
 #
 # Takeovers are serialized by a second mkdir mutex, $TAKEOVER_DIR: only its
 # holder may stop or remove a lock, and it re-reads the lock's pid inside the
@@ -50,6 +58,8 @@ LOCK_DIR="${TMPDIR:-/tmp}/gaffer-update.lock"
 TAKEOVER_DIR="$LOCK_DIR.takeover"
 HAVE_LOCK=""
 HAVE_TAKEOVER=""
+# A live holder whose lock is this old (seconds) is a stuck updater.
+STUCK_AFTER=900
 # Test-only gates, set only by scripts/test-update-sh.sh to make the takeover
 # races deterministic. Each names a file: the script touches "<file>.ready"
 # when it reaches the gate, then waits (up to 60s) until <file> exists.
@@ -58,6 +68,14 @@ HAVE_TAKEOVER=""
 #   GAFFER_UPDATE_TEST_MARKER_GATE  after judging the takeover marker stale,
 #                                   before renaming it away
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
+# GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
+# age so the harness can stage a stuck holder that really is older than its
+# lock (the pid-reuse guard below rejects a holder younger than the lock, so
+# a backdated lock can no longer stand in for a long run). Digits only.
+case "${GAFFER_UPDATE_TEST_STUCK_AFTER:-}" in
+  ''|*[!0-9]*) ;;
+  *) STUCK_AFTER="$GAFFER_UPDATE_TEST_STUCK_AFTER" ;;
+esac
 test_gate() {
   local gate="$1" i
   [ -n "$gate" ] || return 0
@@ -68,37 +86,63 @@ test_gate() {
   done
   return 0
 }
-# True when the pid is alive, is not this very process, and its command line
-# runs an update.sh: the panel spawns the script as daemon/update.sh, a
-# person may run "cd daemon; bash update.sh". The name must stand alone (a
-# leading start, space or slash, a trailing space or end), so my-update.sh
-# or update.sh.bak do not count. The pid's start time is not compared with
-# the lock's age: ps etime parsing differs across macOS versions and the
-# name match already rules out the common pid-reuse cases.
-lock_holder_is_updater() {
-  local pid="$1"
-  [ -n "$pid" ] || return 1
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$pid" != "$$" ] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  ps -o command= -p "$pid" 2>/dev/null | grep -Eq '(^|[[:space:]/])update\.sh([[:space:]]|$)'
-}
 dir_age_seconds() {
   local mtime now
   mtime="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
   now="$(date +%s)"
   echo $((now - mtime))
 }
-# Older than 15 minutes, or dated in the future (clock moved backwards).
+# ps etime ("mm:ss", "hh:mm:ss" or "dd-hh:mm:ss") as whole seconds. Fails on
+# anything else, so the caller can skip the age comparison.
+etime_seconds() {
+  local et="$1" days=0 a b c
+  et="${et//[[:space:]]/}"
+  case "$et" in *-*) days="${et%%-*}"; et="${et#*-}" ;; esac
+  IFS=: read -r a b c <<< "$et"
+  if [ -z "$c" ]; then c="$b"; b="$a"; a=0; fi
+  case "$days$a$b$c" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] || return 1
+  echo $(( 10#$days * 86400 + 10#$a * 3600 + 10#$b * 60 + 10#$c ))
+}
+# True when the pid is alive, is not this very process, its command line
+# runs an update.sh, and it already existed when the lock was written.
+# The panel spawns the script as daemon/update.sh, a person may run
+# "cd daemon; bash update.sh". The name must stand alone (a leading start,
+# space or slash, a trailing space or end), so my-update.sh or update.sh.bak
+# do not count. Pid-reuse guard: a process that took over a dead updater's
+# pid was started AFTER that updater wrote the lock, so its age (ps etime)
+# must be at least the lock's age, less 5 s of slack for the two clocks and
+# the whole-second etime. The guard is skipped when the lock's age is
+# negative (the clock stepped, nothing to compare against) or etime cannot
+# be parsed; the name match alone decides then.
+HOLDER_PID_REUSED=""
+lock_holder_is_updater() {
+  local pid="$1" lock_age proc_age
+  HOLDER_PID_REUSED=""
+  [ -n "$pid" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" != "$$" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -Eq '(^|[[:space:]/])update\.sh([[:space:]]|$)' || return 1
+  lock_age="$(dir_age_seconds "$LOCK_DIR")"
+  if [ "$lock_age" -ge 0 ] && proc_age="$(etime_seconds "$(ps -o etime= -p "$pid" 2>/dev/null)")"; then
+    if [ "$proc_age" -lt $((lock_age - 5)) ]; then HOLDER_PID_REUSED=1; return 1; fi
+  fi
+  return 0
+}
+# A live holder's lock older than the stuck age. A negative age never
+# counts here: a live holder is busy, however the clock reads.
 lock_is_old() {
   local age
   age="$(dir_age_seconds "$LOCK_DIR")"
-  [ "$age" -ge 900 ] || [ "$age" -lt 0 ]
+  [ "$age" -ge "$STUCK_AFTER" ]
 }
+# Under 30 s old, up to 300 s of clock skew tolerated; beyond that a future
+# date is a leftover from before the clock moved back, and not young.
 lock_is_young() {
   local age
   age="$(dir_age_seconds "$LOCK_DIR")"
-  [ "$age" -ge 0 ] && [ "$age" -lt 30 ]
+  [ "$age" -ge -300 ] && [ "$age" -lt 30 ]
 }
 # Every process below the holder, any depth, from one ps snapshot: each
 # process is walked up its parent chain and printed when that chain reaches
@@ -117,10 +161,14 @@ descendant_pids() {
 }
 # Signal the holder and everything it started. The panel spawns update.sh
 # detached, so the holder normally leads its own process group and the whole
-# group gets the signal; otherwise every descendant (its curl, rsync or npm,
-# and whatever those started) is signalled one by one, then the holder.
-# Killing only the shell would leave those running, and a bash waiting on a
-# foreground child does not even act on SIGTERM until that child exits.
+# group gets the signal in one call (a child forked meanwhile is in the
+# group too); otherwise the holder is frozen with SIGSTOP first, so it
+# cannot start anything between the snapshot and the signal, then every
+# descendant (its curl, rsync or npm, and whatever those started) is
+# signalled one by one, then the holder, which is then resumed so it acts
+# on the signal (a stopped process only acts on SIGKILL). Killing only the
+# shell would leave those running, and a bash waiting on a foreground child
+# does not even act on SIGTERM until that child exits.
 signal_holder_tree() {
   local pid="$1" sig="$2" pgid kids n
   pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
@@ -128,6 +176,7 @@ signal_holder_tree() {
     echo "Sending $sig to the stuck update's process group (pgid $pgid)"
     kill "-$sig" -- "-$pid" 2>/dev/null || true
   else
+    kill -STOP "$pid" 2>/dev/null || true
     kids="$(descendant_pids "$pid")"
     n=0
     for child in $kids; do
@@ -136,6 +185,7 @@ signal_holder_tree() {
     done
     echo "Sending $sig to the stuck update (pid $pid) and its $n descendant process(es) one by one"
     kill "-$sig" "$pid" 2>/dev/null || true
+    kill -CONT "$pid" 2>/dev/null || true
   fi
 }
 # TERM first, a short wait, then KILL. kill -0 keeps answering for a zombie
@@ -158,13 +208,23 @@ stop_lock_holder() {
 }
 # Serialize takeovers. Returns 1 when another live updater is mid-takeover,
 # or when another updater cleared the same stale marker first. A stale
-# marker (60 seconds or older, or dated in the future) is cleared by
-# renaming it to a name only this process uses: the rename is atomic, so of
-# several updaters that all judged it stale exactly one succeeds. The renamed
-# directory's own age is checked once more: had a fresh marker slipped in
-# between the age check and the rename, the rename would have stolen a live
-# updater's mutex, so a young one is put back and this updater yields.
-marker_is_stale() { [ "$1" -ge 60 ] || [ "$1" -lt 0 ]; }
+# marker (60 seconds or older, or dated over 300 s in the future) is cleared
+# by renaming it to a name only this process uses: the rename is atomic, so
+# of several updaters that all judged it stale exactly one succeeds. The
+# renamed directory's own age is checked once more: had a fresh marker
+# slipped in between the age check and the rename, the rename would have
+# stolen a live updater's mutex, so a young one is put back and this updater
+# yields.
+#
+# Residual risk, left as is: the put-back is not atomic. While the renamed
+# fresh marker is away (between this updater's mv and its mv back), a third
+# updater can mkdir a marker of its own; the put-back then sees a marker in
+# place, discards the renamed one, and two updaters believe they hold the
+# mutex. It takes three updaters racing within milliseconds, and the lock
+# takeover inside the mutex still re-reads the lock's pid and only removes
+# the lock it judged stale, so harm also needs those two to interleave
+# within the few instructions between that re-read and the rename.
+marker_is_stale() { [ "$1" -ge 60 ] || [ "$1" -lt -300 ]; }
 take_takeover_mutex() {
   local age stale
   if mkdir "$TAKEOVER_DIR" 2>/dev/null; then HAVE_TAKEOVER=1; return 0; fi
@@ -183,7 +243,7 @@ take_takeover_mutex() {
     if [ ! -e "$TAKEOVER_DIR" ]; then mv "$stale" "$TAKEOVER_DIR" 2>/dev/null || rm -rf "$stale"; else rm -rf "$stale"; fi
     return 1
   fi
-  if [ "$age" -lt 0 ]; then
+  if [ "$age" -lt -300 ]; then
     echo "Removing a takeover marker dated in the future (the clock moved back since it was left)"
   else
     echo "Removing a takeover marker left by a crashed updater ($age s old)"
@@ -214,10 +274,15 @@ acquire_lock() {
       echo "busy:already-running"
       exit 3
     fi
+    # A live updater holder is busy unless its lock is really old; a lock
+    # dated in the future is never "old", so it is busy as well.
     if lock_holder_is_updater "$holder" && ! lock_is_old; then
       echo "Another update is already running (pid $holder), leaving it to finish."
       echo "busy:already-running"
       exit 3
+    fi
+    if [ -n "$HOLDER_PID_REUSED" ]; then
+      echo "The lock's pid $holder now belongs to a process started after the lock was written (pid reused), not to the update that wrote it."
     fi
     tries=$((tries + 1))
     if [ "$tries" -gt 3 ]; then
@@ -345,11 +410,21 @@ fi
 # answer (404 on a missing asset) is final: curl does not retry it.
 mkdir -p "$EXTRACT_DIR"
 echo "Downloading $ASSET_SOURCE"
-case "$ASSET_SOURCE" in
-  http://*|https://*) curl -fsSL --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" ;;
-  *) cp "$ASSET_SOURCE" "$TMP_DIR/$ASSET_NAME" ;;
-esac
-tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR"
+# Wrapped so a curl or tar failure (which under set -e would end the script
+# with curl's own message as the last log line) still ends the log with an
+# ERROR line and err:download, the contract the panel and a reader rely on.
+download_and_extract() {
+  case "$ASSET_SOURCE" in
+    http://*|https://*) curl -fsSL --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" || return 1 ;;
+    *) cp "$ASSET_SOURCE" "$TMP_DIR/$ASSET_NAME" || return 1 ;;
+  esac
+  tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" || return 1
+}
+if ! download_and_extract; then
+  echo "ERROR: download or extract failed"
+  echo "err:download"
+  exit 1
+fi
 if [ ! -f "$EXTRACT_DIR/version.json" ] || [ ! -f "$EXTRACT_DIR/daemon/index.js" ]; then
   echo "ERROR: downloaded archive is not a Gaffer release (missing version.json or daemon/index.js)"
   exit 1
