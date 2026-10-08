@@ -68,3 +68,21 @@ test('CLAUDE.md Releasing describes the workflow, not hand-stamped commits', () 
   assert.ok(!claudeMd.includes('install/update from the `main` tarball'), 'CLAUDE.md no longer says users get code from the main tarball');
   assert.ok(claudeMd.includes('install and update from GitHub Release assets'));
 });
+
+test('README asks for Node 20+ everywhere (the MCP SDK loads @hono/node-server, which needs node >=20)', () => {
+  assert.ok(!/Node(\.js)? 18\+|must be 18|requires Node 18/.test(readme), 'README still mentions Node 18');
+  assert.ok(readme.includes('Node.js 20+'));
+  assert.ok(readme.includes('must be 20 or higher'));
+  assert.ok(readme.includes('requires Node 20+'));
+  const pkg = JSON.parse(read('../panel/daemon/package.json'));
+  assert.equal(pkg.engines && pkg.engines.node, '>=20');
+});
+
+test('CHANGELOG v0.11.2 carries the plain-language security notice and no stale download claim', () => {
+  const notes = extractNotes(changelog, '0.11.2');
+  assert.ok(notes, 'no "## v0.11.2" heading');
+  assert.ok(notes.includes('**Security:** in versions before v0.11.2, Gaffer\'s background service accepted connections from other devices on your network and from web pages open in your browser, not only from the After Effects panel.'));
+  assert.ok(notes.includes('close the Gaffer panel when you are on a network you do not trust.'));
+  assert.ok(!notes.includes('gives up after about two minutes'), 'updater bullet still claims a two minute give-up');
+  assert.ok(!DASHES.test(notes), 'no em or en dashes in the v0.11.2 entry');
+});

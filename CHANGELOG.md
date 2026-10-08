@@ -10,7 +10,10 @@
 - Chat problems such as being signed out, a model that is not available on your plan, or a conversation that has grown too long now show as proper error messages. Before, some of them could appear as a strange reply in the chat.
 - Fixed a bug where a normal answer that happened to mention "context" and "length" could reset your conversation.
 - The chat no longer ends with an empty bubble when Claude stops unexpectedly. You see what went wrong instead.
-- Only one updater can run at a time. If an update is slow and you press "Force stop & retry", Gaffer now waits for the running update instead of starting a second one over it, which could leave a broken install. A stuck download also gives up after about two minutes instead of ten.
+- **Security:** in versions before v0.11.2, Gaffer's background service accepted connections from other devices on your network and from web pages open in your browser, not only from the After Effects panel. Such a connection could send requests to Gaffer's chat, which can change your After Effects project and run actions on your computer. It now only listens on your own computer and refuses connections from web pages. Please update. Until you do, close the Gaffer panel when you are on a network you do not trust.
+- Updated the libraries the background service is built on to versions without known security problems.
+- The Mac and Windows installer scripts no longer stop when only the Claude desktop app is installed. They finish installing the panel and tell you where to get Claude if neither is found.
+- Only one updater can run at a time. If an update is slow and you press "Force stop & retry", Gaffer now waits for the running update instead of starting a second one over it, which could leave a broken install. A download that stalls is now noticed within about twenty seconds and retried, instead of hanging for up to ten minutes.
 
 ## v0.11.1 - 2026-10-07
 

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node index.js",
     "//test": "Auto-discovery (no path arg). Do NOT pass 'test/': Node 22+ treats a bare directory arg to --test as a module entry and fails with MODULE_NOT_FOUND on Windows; a glob would break Node 20. No path works on both.",

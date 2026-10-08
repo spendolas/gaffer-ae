@@ -9,9 +9,10 @@
 # that install with GAFFER_UPDATE_ASSET pointing at -ReleaseZip, and checks
 # the result. A second case feeds it a broken download and a third a 404
 # URL (the branch real users take); both check that nothing in the install
-# changed. Cases 4 to 7 cover the single-updater lock: a second updater exits
-# busy while a live one holds the lock, an abandoned lock (dead pid, or older
-# than 15 minutes) is taken over, the lock is gone after every run, and the
+# changed. Cases 4 to 8 cover the single-updater lock: a second updater exits
+# busy while a live one holds the lock, an abandoned lock (dead pid, or a
+# file with no pid in it) is taken over, a live holder older than 15 minutes
+# is stopped and taken over, the lock is gone after every run, and the
 # dev-install refusal still ends the log with err:dev-install.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
@@ -221,14 +222,34 @@ try {
     Start-Sleep -Seconds 1
     [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
     (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-20)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $code = Invoke-Update $oldLock $ReleaseZip
     if ($code -eq 0) { Pass "update.ps1 took over the 20 minute old lock and exited 0" } else { Fail "update.ps1 exited $code on a 20 minute old lock (log: $logPath)" }
     if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the old-lock run" } else { Pass "lock released after the old-lock run" }
+    $logOld = ""
+    if (Test-Path -LiteralPath $logPath) { $logOld = Get-Content -LiteralPath $logPath -Raw }
+    if ($logOld -match [regex]::Escape("Stopping an update that has run for over 15 minutes (pid $($fake.Id))")) { Pass "log records stopping the stuck holder" } else { Fail "no stop line for the stuck holder in the log" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "stuck holder (pid $($fake.Id)) is still alive after the takeover" } else { Pass "stuck holder was stopped before the takeover" }
     Stop-Process -Id $fake.Id -Force -ErrorAction SilentlyContinue
     $fake.WaitForExit(5000) | Out-Null
     $fake = $null
 
-    # ---------- Case 7: the dev-install refusal still ends the log with err:dev-install ----------
+    # ---------- Case 7: a lock file with no pid in it is abandoned ----------
+    # Also the regression case for the lock acquisition itself: with the
+    # lock file present, the CreateNew failure must land in the catch, not
+    # end the script (a leftover file would then block every later update).
+    $noPid = Join-Path $scratch "Application Data\no-pid\com.gaffer.panel"
+    New-TestInstall $noPid
+    [System.IO.File]::WriteAllText($lockPath, "not-a-pid", [System.Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $noPid $ReleaseZip
+    if ($code -eq 0) { Pass "update.ps1 took over the pid-less lock and exited 0" } else { Fail "update.ps1 exited $code on a pid-less lock (log: $logPath)" }
+    $logNoPid = ""
+    if (Test-Path -LiteralPath $logPath) { $logNoPid = Get-Content -LiteralPath $logPath -Raw }
+    if ($logNoPid -match [regex]::Escape("Taking over an abandoned update lock (pid not-a-pid)")) { Pass "log records the pid-less takeover" } else { Fail "no pid-less takeover line in the log" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the pid-less takeover" } else { Pass "lock released after the pid-less takeover" }
+
+    # ---------- Case 8: the dev-install refusal still ends the log with err:dev-install ----------
     $dev = Join-Path $scratch "dev-checkout\panel"
     New-TestInstall $dev
     New-Item -ItemType Directory -Path (Join-Path $scratch "dev-checkout\.git") -Force | Out-Null

@@ -14,7 +14,7 @@ Claude will handle the rest. Then restart After Effects and open **Window > Exte
 
 - After Effects 2022+
 - Claude: either the [Claude desktop app](https://claude.com/download) (it bundles Claude Code, no separate install needed) or the standalone [Claude Code](https://claude.ai/code) CLI. On Windows use the desktop app or the native installer, not `npm install -g` (the daemon can't launch npm's script shims)
-- Node.js 18+ ([install](https://nodejs.org))
+- Node.js 20+ ([install](https://nodejs.org))
 - No git required
 
 ---
@@ -39,7 +39,7 @@ Before you begin, read these rules. They apply to every step below.
 
 1. **Check prerequisites.** Run these checks and report the results to the user before proceeding:
 
-   - `node --version` — must be 18 or higher
+   - `node --version` — must be 20 or higher
    - Claude: either the Claude desktop app is installed (step 6 shows where its bundled Claude Code lives) or `claude --version` works in a terminal. At least one must be present. Gaffer itself does not need the standalone CLI. Sign-in is NOT required at install time: the Gaffer panel has its own Sign in button, so do not stop if the desktop app's copy reports "Not logged in" or the CLI prompts for login. Only a missing Claude is a blocker.
    - Confirm with the user that After Effects 2022 or later is installed
 
@@ -184,7 +184,7 @@ Before you begin, read these rules. They apply to every step below.
 - **Panel shows "Disconnected":** Daemon failed to start. Check `/tmp/gaffer-daemon.log` (macOS) or `%TEMP%\gaffer-daemon.log` (Windows). Usually a missing `npm install`.
 - **MCP tools not available in a terminal Claude Code session:** Run the step 7 registration again (`<claude binary> mcp add ...`, where the binary is the standalone `claude` if you have one, otherwise the desktop app's copy from step 6; `claude` alone may not be on PATH). Verify with `<claude binary> mcp list`. The panel chat does not need this registration.
 - **MCP tools show as disconnected in `mcp list`:** Most common cause: the Gaffer panel is not open in After Effects. Open AE, then open Window > Extensions > Gaffer, then re-run `mcp list` with the same binary. If the panel is open and it still shows disconnected, check the panel's connection indicator. If the panel also shows disconnected, the daemon failed to start, see "Panel shows Disconnected" above.
-- **Install says my Node version is too old:** Gaffer requires Node 18+. Check with `node --version`. If you manage Node with nvm or fnm, switch to a supported version before re-running the install. Otherwise install from [nodejs.org](https://nodejs.org).
+- **Install says my Node version is too old:** Gaffer requires Node 20+. Check with `node --version`. If you manage Node with nvm or fnm, switch to a supported version before re-running the install. Otherwise install from [nodejs.org](https://nodejs.org).
 - **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` or `node` aren't on your shell's PATH, the check fails even if they're installed. Open a fresh terminal, run `which node` and `which claude` (macOS) or `where.exe node` and `where.exe claude` (Windows) to confirm. Fix PATH before re-running.
 - **`claude` errors or asks me to log in:** Gaffer doesn't install authentication, but it does not need you to be signed in at install time either. Finish the install, open the panel and use its Sign in button. If you prefer, run `claude` once manually and complete the login flow instead.
 - **Broken after reinstall:** If you chose "reinstall" and it's still broken, manually remove the extensions directory (path in step 2), then re-run the install fresh. Your per-install settings and anonymous install identity live outside that directory (`~/Library/Application Support/Gaffer/config.json` on macOS, `%APPDATA%\Gaffer\config.json` on Windows) and survive the deletion; only remove that folder too if you want a completely clean slate.

@@ -20,9 +20,9 @@ var INIT = {
 
 // Raw node:http, not fetch: undici drops a caller-supplied Host header, and the
 // DNS-rebinding tests must actually send a foreign one.
-function post(headers) {
+function post(headers, rawBody) {
   return new Promise((resolve, reject) => {
-    var body = JSON.stringify(INIT);
+    var body = rawBody !== undefined ? rawBody : JSON.stringify(INIT);
     var req = http.request({
       host: '127.0.0.1', port: port, path: '/mcp', method: 'POST',
       headers: Object.assign({
@@ -69,6 +69,20 @@ test('a browser Origin is refused with 403', async () => {
   var res = await post({ origin: 'https://evil.example' });
   assert.equal(res.status, 403);
   assert.match(JSON.parse(res.text).error.message, /Browser origins/);
+});
+
+test('the Host and Origin checks run before the body parser (a refused request is never parsed)', async () => {
+  // With express.json() first, this unparseable body would answer 400 from
+  // the parser before the policy ever saw the foreign Host or the Origin.
+  var byHost = await post({ host: 'evil.example:' + port }, '{not json');
+  assert.equal(byHost.status, 403);
+  assert.match(JSON.parse(byHost.text).error.message, /Invalid Host/);
+  var byOrigin = await post({ origin: 'https://evil.example' }, '{not json');
+  assert.equal(byOrigin.status, 403);
+  assert.match(JSON.parse(byOrigin.text).error.message, /Browser origins/);
+  // And the parser still does its job for an allowed request.
+  var allowed = await post({}, '{not json');
+  assert.equal(allowed.status, 400);
 });
 
 test('GET without a session still gets the regular 400, not a rebinding error', async () => {
