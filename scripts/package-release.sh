@@ -27,6 +27,10 @@ rm -f "$OUT_DIR"/gaffer-install-mac.tar.gz "$OUT_DIR"/gaffer-install-win.zip \
 
 # panel/ contents at the archive root, tracked files only
 git archive HEAD:panel | tar -x -C "$STAGE"
+# Test-only trees ship with the source but nothing at runtime loads them
+# (dev-reload.js skips them by name; update.sh/update.ps1 sync with delete so
+# an existing install loses its old copies on the next update).
+rm -rf "$STAGE/daemon/test" "$STAGE/daemon/test-fixtures"
 jq -n --arg v "$VERSION" --arg c "$COMMIT" '{version: $v, commit: $c}' > "$STAGE/version.json"
 
 tar -czf "$OUT_DIR/gaffer-install-mac.tar.gz" -C "$STAGE" .

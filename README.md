@@ -81,11 +81,11 @@ Before you begin, read these rules. They apply to every step below.
 4. **Install daemon dependencies:**
    ```bash
    # macOS
-   cd "$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel/daemon" && npm install --production
+   cd "$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel/daemon" && npm install --omit=dev
    
    # Windows
    Push-Location "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel\daemon"
-   npm install --production
+   npm install --omit=dev
    Pop-Location
    ```
 

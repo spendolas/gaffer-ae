@@ -437,7 +437,7 @@ done
 [ -z "${NODE:-}" ] && NODE="$(which node 2>/dev/null)"
 if [ -n "${NODE:-}" ]; then
   NPM_DIR="$(dirname "$NODE")"
-  PATH="$NPM_DIR:$PATH" npm install --production
+  PATH="$NPM_DIR:$PATH" npm install --omit=dev
 fi
 
 # Stop any daemon that respawned from the half-copied tree during the update

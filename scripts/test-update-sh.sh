@@ -197,9 +197,13 @@ else
   fail "user data changed:"; (cd "$INSTALL" && shasum -c "$SCRATCH/user-data.sha") || true
 fi
 
-for junk in gaffer.tar.gz gaffer.zip gaffer-update-mac.tar.gz extract version.json.tmp stale-file-from-old-release.txt; do
+# daemon/test and daemon/test-fixtures shipped with releases up to v0.11.2 and
+# are absent from the asset now: rsync --delete must remove them while the
+# excluded daemon/node_modules survives.
+for junk in gaffer.tar.gz gaffer.zip gaffer-update-mac.tar.gz extract version.json.tmp stale-file-from-old-release.txt daemon/test daemon/test-fixtures; do
   if [ -e "$INSTALL/$junk" ]; then fail "$junk left in the panel dir"; else pass "no $junk in the panel dir"; fi
 done
+if [ -d "$INSTALL/daemon/node_modules" ]; then pass "daemon/node_modules kept through the sync"; else fail "daemon/node_modules was removed by the sync"; fi
 
 if tar -xzOf "$ASSET" ./main.js | cmp -s - "$INSTALL/main.js" && [ -f "$INSTALL/daemon/index.js" ]; then
   pass "release files landed (main.js matches the asset)"

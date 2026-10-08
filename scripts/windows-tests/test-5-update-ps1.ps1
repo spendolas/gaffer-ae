@@ -234,7 +234,9 @@ try {
         if ((Test-Path -LiteralPath $p) -and ((Get-FileHash -LiteralPath $p).Hash -eq $before[$f])) { Pass "$f preserved" } else { Fail "$f lost or changed" }
     }
 
-    foreach ($junk in @("gaffer.zip", "gaffer-update-win.zip", "extract", "version.json.tmp", "stale-file-from-old-release.txt")) {
+    # daemon\test and daemon\test-fixtures shipped with releases up to v0.11.2
+    # and are absent from the asset now: robocopy /PURGE must remove them.
+    foreach ($junk in @("gaffer.zip", "gaffer-update-win.zip", "extract", "version.json.tmp", "stale-file-from-old-release.txt", "daemon\test", "daemon\test-fixtures")) {
         if (Test-Path -LiteralPath (Join-Path $install $junk)) { Fail "$junk left in the panel dir" } else { Pass "no $junk in the panel dir" }
     }
 

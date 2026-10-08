@@ -230,3 +230,17 @@ test('install-win.ps1 runs claude through a Continue-preference wrapper and name
   assert.ok(installWin.includes('Found the npm install of Claude Code, but Gaffer needs the native build or the Claude desktop app: irm https://claude.ai/install.ps1 | iex, or https://claude.com/download'));
   assert.ok(installWin.includes('($cmd.Source -like "*.cmd") -or ($cmd.Source -like "*.ps1")'));
 });
+
+test('every npm install uses --omit=dev; npm 10 (Node 20) deprecated --production', () => {
+  const readme = read('../README.md');
+  for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin], ['README.md', readme]]) {
+    assert.ok(!/--production\b/.test(text), name + ' still passes --production');
+  }
+  for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin]]) {
+    assert.match(text, /npm(\.cmd|Cmd)?[^\n]* install --omit=dev/, name + ' installs with --omit=dev');
+  }
+  // The flag needs npm 7+; the daemon's Node floor (20, which ships npm 10) guarantees it.
+  const pkg = JSON.parse(read('../panel/daemon/package.json'));
+  assert.equal(pkg.engines.node, '>=20');
+  assert.match(readme, /Node 20\+/);
+});

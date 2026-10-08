@@ -31,6 +31,23 @@ import { register as registerGetProjectSettings } from './tools/getProjectSettin
 import { register as registerRunJSXLoop } from './tools/runJSXLoop.js';
 import { preflight, guardEnabled } from './instrument.js';
 import { wrapInSafety } from './safety.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// The Gaffer version the MCP handshake reports as serverInfo.version: the
+// panel's version.json next to this daemon folder (stamped by the release
+// build). Any problem reading it yields 'unknown'; this must never throw at
+// startup. Exported for the unit test.
+export function readGafferVersion(versionJsonPath) {
+  try {
+    var p = versionJsonPath || fileURLToPath(new URL('../version.json', import.meta.url));
+    var v = JSON.parse(readFileSync(p, 'utf-8')).version;
+    return typeof v === 'string' && v.trim() ? v.trim() : 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+var GAFFER_VERSION = readGafferVersion();
 
 // Compact, opt-out telemetry for the loop guard: log only when there is a loop,
 // a parse problem, or a rejection, so it stays quiet for ordinary calls.
@@ -82,7 +99,7 @@ export function startMcpServer(port, queue, ctx) {
 
   function createServer() {
     var server = new McpServer(
-      { name: 'gaffer', version: '0.1.0' },
+      { name: 'gaffer', version: GAFFER_VERSION },
       { capabilities: { logging: {} } }
     );
 

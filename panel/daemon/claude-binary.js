@@ -327,10 +327,14 @@ function pathLookup(platform, env, deps, diag) {
     var augmented = platform === 'win32'
       ? env.PATH || ''
       : ['/opt/homebrew/bin', '/usr/local/bin', join(env.HOME || '', '.local', 'bin'), env.PATH || ''].filter(Boolean).join(':');
+    // stderr captured, never inherited: `where` prints "INFO: Could not find
+    // files for the given pattern(s)." when nothing matches, which would
+    // otherwise land in the daemon log on every lookup.
     var lines = deps.execSync(cmd, {
       encoding: 'utf-8',
       windowsHide: true,
       timeout: PATH_LOOKUP_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: Object.assign({}, env, { PATH: augmented }),
     }).trim().split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
     diag.pathLines = lines;
@@ -348,6 +352,7 @@ function loginShellLookup(env, deps) {
       encoding: 'utf-8',
       timeout: 5000,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     }).trim().split('\n')[0].trim();
     return /^\//.test(line) ? [line] : [];
   } catch (e) { return []; }

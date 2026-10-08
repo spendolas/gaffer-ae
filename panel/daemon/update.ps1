@@ -582,7 +582,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     }
     Write-Host "  npm: $npmCmd"
     Push-Location $daemonDir
-    try { & $npmCmd install --production } catch {}
+    try { & $npmCmd install --omit=dev } catch {}
     $npmExit = $LASTEXITCODE
     Pop-Location
     if ($npmExit -ne 0) {

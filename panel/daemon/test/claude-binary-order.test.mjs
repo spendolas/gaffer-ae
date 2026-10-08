@@ -350,3 +350,27 @@ test('install links and the not-found message tail', () => {
   assert.match(msg, /\/cfg\/config\.json/);
   assert.doesNotMatch(msg, /[\u2013\u2014]/, 'no em or en dashes');
 });
+
+// `where claude` prints "INFO: Could not find files for the given pattern(s)."
+// on stderr when nothing matches; with inherited stderr that line lands in the
+// daemon log on every lookup. Both shell-outs must capture stderr instead.
+test('PATH and login-shell lookups run with stderr captured, never inherited', async () => {
+  var deps = fakeDeps({}, {});
+  var seen = {};
+  var realExecSync = deps.execSync;
+  deps.execSync = function (cmd, o) {
+    if (/^which/.test(cmd)) seen.which = o;
+    if (/^where/.test(cmd)) seen.where = o;
+    if (/command -v claude/.test(cmd)) seen.shell = o;
+    return realExecSync(cmd, o);
+  };
+  assert.equal(await resolveClaude(opts({}, deps)), null);
+  var winEnv = { APPDATA: '/nope', USERPROFILE: 'C:\\U', LOCALAPPDATA: 'C:\\L', PATH: 'C:\\Windows' };
+  assert.equal(await resolveClaude({ platform: 'win32', env: winEnv, config: {}, desktopCandidates: [], deps: deps }), null);
+  ['which', 'where', 'shell'].forEach(function (k) {
+    assert.ok(seen[k], k + ' lookup ran');
+    assert.deepEqual(seen[k].stdio, ['ignore', 'pipe', 'pipe'], k + ': stderr is piped, not inherited');
+    assert.equal(seen[k].windowsHide, true, k + ': windowsHide kept');
+    assert.equal(seen[k].timeout, 5000, k + ': 5 s timeout kept');
+  });
+});
