@@ -4,6 +4,37 @@ import { randomUUID } from 'node:crypto';
 const TIMEOUT_MS = 60000;
 const UNKNOWN_VERSION = 'unknown';
 
+// The panel dials ws://127.0.0.1:<port> (panel/main.js WS_URL), so the bridge
+// binds that one address: never 0.0.0.0 (the ws default when no host is given,
+// which exposed the socket to the LAN) and no ::1 listener either, since no
+// client in the repo uses "localhost" for this port.
+const BIND_HOST = '127.0.0.1';
+
+/**
+ * Decide whether a WebSocket upgrade may become a panel connection.
+ * Pure function over the request headers so it can be unit-tested.
+ *
+ *  - Host must name this loopback listener (DNS-rebinding defense: a page on
+ *    attacker.example whose DNS points at 127.0.0.1 still sends its own host).
+ *  - A browser web page always sends an http(s) Origin; the CEP panel sends
+ *    a file-ish origin, "null", or nothing. Only the web-page form is refused,
+ *    everything else is allowed so no CEP/Chromium quirk can lock the panel out.
+ *
+ * Returns { ok: true } or { ok: false, reason }.
+ */
+export function checkPanelHandshake(headers, port) {
+  var host = headers && headers.host;
+  var allowedHosts = ['127.0.0.1:' + port, 'localhost:' + port, '[::1]:' + port];
+  if (!host || allowedHosts.indexOf(String(host).toLowerCase()) === -1) {
+    return { ok: false, reason: 'Host header not a local address: ' + (host || '(missing)') };
+  }
+  var origin = headers.origin;
+  if (origin && /^https?:\/\//i.test(String(origin))) {
+    return { ok: false, reason: 'browser origin refused: ' + origin };
+  }
+  return { ok: true };
+}
+
 /**
  * WebSocket server that bridges daemon ↔ Gaffer Panels in AE.
  * Multiple panels can connect (one per AE instance), keyed by aeVersion.
@@ -31,12 +62,26 @@ export class PanelBridge {
 
   start() {
     return new Promise((resolve, reject) => {
-      this.wss = new WebSocketServer({ port: this.port });
+      var self = this;
+      this.wss = new WebSocketServer({
+        host: BIND_HOST,
+        port: this.port,
+        // ws calls the two-argument form asynchronously and lets us pick the
+        // HTTP status for the abort (the one-argument form always answers 401).
+        verifyClient: function (info, done) {
+          var verdict = checkPanelHandshake(info.req.headers, self.port);
+          if (verdict.ok) { done(true); return; }
+          console.log('Gaffer: refused panel connection, ' + verdict.reason);
+          done(false, 403, 'Forbidden');
+        },
+      });
       this.wss.once('error', reject);
       this.wss.once('listening', () => {
         this.wss.removeListener('error', reject);
         this._setupConnectionHandler();
-        console.log(`Gaffer: panel bridge on ws://127.0.0.1:${this.port}`);
+        var addr = this.wss.address();
+        this.port = addr.port; // resolves an ephemeral port: 0 request (tests)
+        console.log('Gaffer: panel bridge on ws://' + addr.address + ':' + addr.port);
         resolve();
       });
     });

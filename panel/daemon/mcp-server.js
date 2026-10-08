@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { hostHeaderValidation } from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -40,6 +41,21 @@ function logGuard(tool, telemetry, action) {
   }
 }
 
+// A browser web page always sends an http(s) Origin on cross-site requests;
+// MCP clients send none. Exported so the policy can be unit-tested.
+export function rejectBrowserOrigin(req, res, next) {
+  var origin = req.headers.origin;
+  if (origin && /^https?:\/\//i.test(String(origin))) {
+    res.status(403).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Browser origins are not allowed: ' + origin },
+      id: null,
+    });
+    return;
+  }
+  next();
+}
+
 /**
  * Creates and starts the MCP HTTP server.
  * Each HTTP session gets its own McpServer instance, but all share
@@ -49,6 +65,16 @@ export function startMcpServer(port, queue, ctx) {
   ctx = ctx || {};
   var app = express();
   app.use(express.json());
+
+  // DNS-rebinding protection. The server only binds 127.0.0.1, so the only
+  // way a remote page reaches it is a browser whose DNS resolved some other
+  // hostname to loopback: that request carries the foreign Host and an
+  // http(s) Origin. The SDK middleware checks the Host hostname (port-agnostic:
+  // 127.0.0.1, localhost, [::1]); the second check refuses any web-page Origin,
+  // since no legitimate client (Claude Code, Claude Hub, the daemon's own chat
+  // spawn) is a browser page and none sends one.
+  app.use(hostHeaderValidation(['127.0.0.1', 'localhost', '[::1]']));
+  app.use(rejectBrowserOrigin);
 
   // Map of active transports by session ID
   var transports = {};
@@ -173,7 +199,9 @@ export function startMcpServer(port, queue, ctx) {
 
   return new Promise((resolve, reject) => {
     var server = app.listen(port, '127.0.0.1', () => {
-      console.log(`Gaffer: MCP on http://127.0.0.1:${port}/mcp`);
+      var addr = server.address();
+      console.log('Gaffer: MCP on http://' + addr.address + ':' + addr.port + '/mcp');
+      app.httpServer = server; // lets a test instance (port 0) read its port and close
       resolve(app);
     });
     server.on('error', reject);
