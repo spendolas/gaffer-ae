@@ -94,13 +94,17 @@ test('download timeouts in both updater scripts fit inside the panel give-up', (
   assert.ok(winCurl, 'update.ps1 curl.exe line lost its --max-time / --retry / --retry-max-time');
   assert.ok(Number(winCurl[3]) <= 120, 'curl.exe --retry-max-time exceeds 120s');
   // The system-proxy fallback (HttpWebRequest) only starts when curl gave up
-  // within 90s and has its own 150s budget: 90 + 150 stays under the
-  // curl-only worst case of 270s.
+  // within 90s and has its own 150s budget, checked BEFORE each body read:
+  // a read may block for ReadWriteTimeout, so the last one may only start
+  // while that much budget remains. 90 + 150 stays under the curl-only
+  // worst case of 270s.
   assert.ok(/\$curlSeconds -ge 90/.test(ps1), 'update.ps1 lost the 90s cut-off for starting the fallback');
-  const budget = ps1.match(/TotalSeconds -ge (\d+)\) \{ throw "download exceeded its/);
-  assert.ok(budget, 'update.ps1 fallback lost its hard total budget');
-  assert.ok(90 + Number(budget[1]) <= 270, 'fallback worst case exceeds the curl-only worst case');
-  assert.ok(/\$req\.ReadWriteTimeout = \d+/.test(ps1), 'update.ps1 fallback lost its per-read stall bound');
+  const readCutoff = ps1.match(/TotalSeconds -gt (\d+)\) \{ throw "download exceeded its (\d+)s budget"/);
+  assert.ok(readCutoff, 'update.ps1 fallback lost its hard total budget');
+  const readTimeout = ps1.match(/\$req\.ReadWriteTimeout = (\d+)/);
+  assert.ok(readTimeout, 'update.ps1 fallback lost its per-read stall bound');
+  assert.equal(Number(readCutoff[1]) + Number(readTimeout[1]) / 1000, Number(readCutoff[2]), 'the last read may start only while one read timeout of the budget remains');
+  assert.ok(90 + Number(readCutoff[2]) <= 270, 'fallback worst case exceeds the curl-only worst case');
   assert.ok(/\$elapsed -ge 110/.test(ps1), 'update.ps1 has no total download deadline');
   assert.ok(main.includes('waited >= 180000'), 'panel give-up moved; re-check the script timeouts against it');
 });
