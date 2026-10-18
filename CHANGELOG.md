@@ -4,7 +4,7 @@
 
 **Sturdier updates, a smaller download, and a heads-up when your Claude Code is outside the versions Gaffer was tested with.**
 
-- Updates are safer in rare situations: a stuck update is now stopped completely, including the programs it started, before a new one takes over, and an update started by hand is recognised too. If a network proxy blocks the first download method, Windows now tries the system proxy instead of giving up.
+- Updates are safer in rare situations: a stuck update is now stopped completely, including the programs it started, before a new one takes over, an update started by hand is recognised too (and is never force-stopped together with your PowerShell window), and a healthy update is no longer stopped after the clock changes. If a network proxy blocks the first download method, Windows now tries the system proxy instead of giving up.
 - The download is about 6 to 9 percent smaller, because test files no longer ship to your computer.
 - Gaffer tells you once per session when your Claude Code is a new minor version or older than the versions it was tested with. It never blocks anything.
 - If you share anonymous usage statistics, they now include the Claude Code version number and which kind of install it is. They never include file paths or anything about you. You can still turn the statistics off in settings.

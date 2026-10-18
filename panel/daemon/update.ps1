@@ -24,7 +24,8 @@ Write-Host "=== Update started: $(Get-Date) ==="
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
-#   err:<code>              failed (err:dev-install, err:lock) or an ERROR line
+#   err:<code>              failed (err:dev-install, err:lock, err:download,
+#                           err:sync, err:npm) after an ERROR line
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -36,8 +37,16 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # Get-LockHolderProcess) is abandoned and taken over; a lock older than 15
 # minutes whose holder is still a live updater is a stuck updater, which is
 # stopped first (its whole process tree, not just the shell), then taken
-# over. A lock under 30 seconds old with no readable pid belongs to an
-# updater between its CreateNew and its pid write, and counts as busy.
+# over, but ONLY when the holder's command line names update.ps1: a holder
+# recognised by its process name alone may be a person's whole PowerShell
+# window (an update run as ".\update.ps1" inside it carries that window's
+# pid), and stopping it would take VS Code, After Effects or anything else
+# started from that window down with it. Such a holder is busy while its
+# lock is young and, once the lock is past the stuck age, is reported with
+# err:lock and left alone; the same goes for a holder that is an ancestor of
+# this very process. A lock under 30 seconds old with no readable pid
+# belongs to an updater between its CreateNew and its pid write, and counts
+# as busy.
 #
 # Clock safety: every age is UTC now minus the file's UTC write time, never
 # local wall-clock (a DST fall-back would make a healthy lock read an hour
@@ -79,8 +88,16 @@ $stuckAfter = 900
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder created after the lock,
-# so a backdated lock can no longer stand in for a long run). Digits only.
-if ("$env:GAFFER_UPDATE_TEST_STUCK_AFTER" -match '^\d+$') { $stuckAfter = [int] $env:GAFFER_UPDATE_TEST_STUCK_AFTER }
+# so a backdated lock can no longer stand in for a long run). Honoured only
+# next to GAFFER_UPDATE_ASSET (the harness sets both, the panel sets
+# neither), digits only, 1 to 86400; TryParse so a huge value cannot throw.
+# GAFFER_UPDATE_TEST_FAIL_LIST (same gate, any value) makes the first
+# descendant listing fail so the harness can exercise the taskkill path.
+$stuckOverride = 0
+if ($env:GAFFER_UPDATE_ASSET -and "$env:GAFFER_UPDATE_TEST_STUCK_AFTER" -match '^\d+$' -and
+    [int]::TryParse($env:GAFFER_UPDATE_TEST_STUCK_AFTER, [ref] $stuckOverride) -and
+    $stuckOverride -ge 1 -and $stuckOverride -le 86400) { $stuckAfter = $stuckOverride }
+$script:testFailList = [bool] ($env:GAFFER_UPDATE_ASSET -and $env:GAFFER_UPDATE_TEST_FAIL_LIST)
 # Seconds since the file was last written, UTC against UTC.
 function Get-FileAgeSeconds($item) { return ([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalSeconds }
 function Wait-TestGate([string] $gate) {
@@ -98,13 +115,18 @@ function Wait-TestGate([string] $gate) {
 # The panel spawns the script as daemon\update.ps1, its ExtendScript
 # fallback as daemon/update.ps1, but a person who runs ".\update.ps1" inside
 # an interactive PowerShell leaves no script path in the process's command
-# line at all, so the command line cannot be required; a daemon[\/]update.ps1
-# path in it is accepted as a stronger form of the same evidence, under the
-# same creation-time condition. The creation time is what rules out pid
-# reuse: Windows hands a dead process's pid to a new one quickly, and that
-# new process was necessarily created AFTER the dead updater wrote the lock,
-# so it fails the test whatever its name. The 5 s slack covers the two
+# line at all, so the command line cannot be required. Whether the command
+# line names update.ps1 is recorded separately (Stoppable): only such a
+# holder is ever stopped as stuck, a name-only holder may be the person's
+# whole PowerShell window. The creation time is what rules out pid reuse:
+# Windows hands a dead process's pid to a new one quickly, and that new
+# process was necessarily created AFTER the dead updater wrote the lock, so
+# it fails the test whatever its name. The 5 s slack covers the two
 # timestamps' granularity; the comparison is UTC against UTC.
+# A lock written more than 5 s in the FUTURE means the clock moved since it
+# was written and the creation-time comparison means nothing: any live
+# process with that pid is then a holder (busy), and never Stoppable; only
+# the dead-pid and no-pid shortcuts take such a lock over.
 # This very process never counts as a holder (a lock carrying our own pid is
 # a leftover from a pid reuse).
 # When the process query itself fails (WMI down, a timeout), nothing can be
@@ -124,34 +146,73 @@ function Get-LockHolderProcess([string] $holder, [DateTime] $lockWrittenUtc) {
     }
     if ($queryFailed) {
         if (Get-Process -Id $holderPid -ErrorAction SilentlyContinue) {
-            return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $null; Unverified = $true }
+            return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $null; Unverified = $true; Stoppable = $false }
         }
         return $null
     }
     if (-not $proc) { return $null }
+    $lockUtc = $lockWrittenUtc.ToUniversalTime()
+    $lockAhead = (($lockUtc - [DateTime]::UtcNow).TotalSeconds -gt 5)
     $nameOk = ("$($proc.Name)" -match '^(powershell|pwsh)\.exe$')
-    $pathOk = ("$($proc.CommandLine)" -match "daemon[\\/]update\.ps1")
-    if (-not ($nameOk -or $pathOk)) { return $null }
+    $scriptOk = ("$($proc.CommandLine)" -match '(^|[\\/\s"''])update\.ps1')
+    if ($lockAhead) {
+        return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $proc.CreationDate; Unverified = $false; Stoppable = $false }
+    }
+    if (-not ($nameOk -or $scriptOk)) { return $null }
     if (-not $proc.CreationDate) { return $null }
     $createdUtc = ([DateTime] $proc.CreationDate).ToUniversalTime()
-    if ($createdUtc -gt $lockWrittenUtc.ToUniversalTime().AddSeconds(5)) { return $null }
-    return $proc
+    if ($createdUtc -gt $lockUtc.AddSeconds(5)) { return $null }
+    return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $proc.CreationDate; Unverified = $false; Stoppable = $scriptOk }
 }
 
-# The same process as $proc, right now: same pid, same creation time. $null
-# when it is gone or the pid now belongs to something else.
-function Test-SameProcess($proc, [DateTime] $lockWrittenUtc) {
-    if (-not $proc) { return $false }
+# The holder $proc, re-read right now: "same" (same pid, same creation
+# time), "gone" (exited, or the pid now belongs to something else) or
+# "unverified" (the process query failed while the pid is alive; nothing
+# may be concluded, least of all "gone").
+function Get-LockHolderState($proc, [DateTime] $lockWrittenUtc) {
+    if (-not $proc) { return "gone" }
     $now = Get-LockHolderProcess "$($proc.ProcessId)" $lockWrittenUtc
-    if (-not $now -or $now.Unverified) { return $false }
-    return ("$($now.CreationDate)" -eq "$($proc.CreationDate)")
+    if (-not $now) { return "gone" }
+    if ($now.Unverified) { return "unverified" }
+    if ("$($now.CreationDate)" -eq "$($proc.CreationDate)") { return "same" }
+    return "gone"
 }
 
-# Every process below the holder, any depth, from one Win32_Process snapshot.
-# A child is only followed when it was created after its parent: Windows
-# reuses pids, so a ParentProcessId can point at a process that merely
-# inherited the pid of a long-gone parent, and taskkill /T follows those.
-function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {
+# The pids above this process: its parent, the parent's parent and so on,
+# from Win32_Process. The walk follows a parent only while it was created
+# before its child (a ParentProcessId can point at a process that merely
+# inherited a long-gone parent's pid). Throws when the query fails, so the
+# caller treats the holder as busy rather than guessing.
+function Get-AncestorProcessIds {
+    $all = @(Get-CimInstance Win32_Process -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
+    $byId = @{}
+    foreach ($p in $all) { $byId[[int] $p.ProcessId] = $p }
+    $chain = @()
+    $cur = $byId[[int] $PID]
+    for ($i = 0; $i -lt 64 -and $cur; $i++) {
+        $parentId = [int] $cur.ParentProcessId
+        if ($parentId -le 0 -or $parentId -eq [int] $cur.ProcessId -or $chain -contains $parentId) { break }
+        $parent = $byId[$parentId]
+        if (-not $parent) { break }
+        if ($cur.CreationDate -and $parent.CreationDate -and $parent.CreationDate -gt $cur.CreationDate) { break }
+        $chain += $parentId
+        $cur = $parent
+    }
+    return @($chain)
+}
+
+# Every process below the holder, any depth, from one Win32_Process
+# snapshot, as {ProcessId, CreationDate} objects. A child is only followed
+# when it was created after its parent: Windows reuses pids, so a
+# ParentProcessId can point at a process that merely inherited the pid of a
+# long-gone parent, and taskkill /T follows those. With $createdBefore set,
+# only processes created up to that instant count: after the holder has
+# been stopped, its pid can go to a new process whose children would
+# otherwise appear as the holder's. $protect lists pids never to return
+# (this updater's own parent chain). GAFFER_UPDATE_TEST_FAIL_LIST (harness
+# only) makes the first call fail.
+function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, [int[]] $protect) {
+    if ($script:testFailList) { $script:testFailList = $false; throw "GAFFER_UPDATE_TEST_FAIL_LIST" }
     $all = @(Get-CimInstance Win32_Process -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
     $found = @{}
     $queue = New-Object System.Collections.Queue
@@ -159,50 +220,60 @@ function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {
     while ($queue.Count -gt 0) {
         $cur = $queue.Dequeue()
         foreach ($p in $all) {
-            if ($p.ParentProcessId -ne $cur.Id -or $p.ProcessId -eq $rootPid -or $found.ContainsKey($p.ProcessId)) { continue }
+            if ($p.ParentProcessId -ne $cur.Id -or $p.ProcessId -eq $rootPid -or $p.ProcessId -eq $PID -or $found.ContainsKey($p.ProcessId)) { continue }
+            if ($protect -and ($protect -contains [int] $p.ProcessId)) { continue }
             if ($cur.Created -and $p.CreationDate -and $p.CreationDate -lt $cur.Created) { continue }
-            $found[$p.ProcessId] = $true
+            # Residual risk, left for a later release: two clocks are compared
+            # here (Win32_Process CreationDate against this process's UtcNow),
+            # and CreationDate arrives as local time, so for the one hour of a
+            # DST fall-back a child's time can read an hour off.
+            if ($createdBefore -and $p.CreationDate -and ([DateTime] $p.CreationDate).ToUniversalTime() -gt $createdBefore) { continue }
+            $found[$p.ProcessId] = [pscustomobject] @{ ProcessId = [int] $p.ProcessId; CreationDate = $p.CreationDate }
             $queue.Enqueue(@{ Id = $p.ProcessId; Created = $p.CreationDate })
         }
     }
-    return @($found.Keys)
+    return @($found.Values)
 }
 
 # End the holder AND every process it started (its curl.exe, robocopy, npm,
 # and whatever those started); ending only the shell would orphan those.
-# The holder goes FIRST, so it cannot start anything after the descendants
-# are listed; the descendants are then enumerated from Win32_Process (parent
-# pid plus creation order, see above; an orphan keeps its ParentProcessId,
-# and the holder's own creation time was captured while it was alive) and
-# stopped in no particular order, with a second pass for anything a dying
-# child started meanwhile. taskkill /T /F, which follows stale parent pids,
-# is only the fallback when that enumeration fails. A forced stop gives the
-# holder no chance to run its finally, so its lock stays for the caller to
-# take over; the closing pause lets the file system settle before the lock
-# is re-read.
-function Stop-LockHolder($proc) {
+# Order: (1) while the holder is still alive, list its descendants from
+# Win32_Process (parent pid plus creation order, see above); (2) if that
+# listing failed, taskkill /T /F the holder right now, while it is alive,
+# since taskkill needs the live tree, and skip the rest; (3) otherwise note
+# the instant, stop the holder, list its descendants once more accepting
+# only processes created before that instant (an orphan keeps its
+# ParentProcessId, and a new process that inherits the holder's pid cannot
+# have children older than the stop), then stop the union, youngest first.
+# A forced stop gives the holder no chance to run its finally, so its lock
+# stays for the caller to take over; the closing pause lets the file system
+# settle before the lock is re-read. $protect lists pids never to stop.
+function Stop-LockHolder($proc, [int[]] $protect) {
     $holderPid = [int] $proc.ProcessId
     Write-Host "Stopping an update that has run for over 15 minutes (pid $holderPid)"
-    Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
     # A flag, not a null test on the array: in PowerShell an empty array
     # compared with $null yields an empty (falsy) result, and a holder with
-    # no descendants left would wrongly take the taskkill path.
+    # no descendants would wrongly take the taskkill path.
     $listed = $false
     $kids = @()
-    try { $kids = @(Get-DescendantProcessIds $holderPid $proc.CreationDate); $listed = $true } catch { $listed = $false }
-    if ($listed) {
-        Write-Host "  stopping the stuck update and its $($kids.Count) descendant process(es)"
-        foreach ($k in $kids) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
-        # Anything a child started between the listing and its stop.
-        $more = @()
-        try { $more = @(Get-DescendantProcessIds $holderPid $proc.CreationDate) } catch {}
-        foreach ($k in $more) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
-    } else {
+    try { $kids = @(Get-DescendantProcessIds $holderPid $proc.CreationDate $null $protect); $listed = $true } catch { $listed = $false }
+    if (-not $listed) {
         Write-Host "  could not list the stuck update's processes, using taskkill /T"
         $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
         $ErrorActionPreference = "Continue"
         & $taskkill /PID $holderPid /T /F 2>&1 | Out-Null
         $ErrorActionPreference = "Stop"
+    } else {
+        $stopAt = [DateTime]::UtcNow
+        Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+        # Anything a child started between the first listing and the stop.
+        $more = @()
+        try { $more = @(Get-DescendantProcessIds $holderPid $proc.CreationDate $stopAt $protect) } catch {}
+        $tree = @{}
+        foreach ($k in ($kids + $more)) { $tree[$k.ProcessId] = $k }
+        $order = @($tree.Values | Sort-Object -Property CreationDate -Descending)
+        Write-Host "  stopping the stuck update and its $($order.Count) descendant process(es)"
+        foreach ($k in $order) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
     }
     for ($i = 0; $i -lt 20; $i++) {
         if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { break }
@@ -346,6 +417,32 @@ while (-not $script:haveLock) {
         Stop-Transcript
         exit 3
     }
+    # A live holder past the stuck age. Two kinds are never stopped, and
+    # since nothing else can free their lock, this run ends with err:lock:
+    # a holder on this process's own parent chain (stopping it would stop
+    # this updater too), and a holder recognised by its process name only
+    # (a person's PowerShell window, see Get-LockHolderProcess).
+    $ancestors = @()
+    if ($proc) {
+        try { $ancestors = @(Get-AncestorProcessIds) } catch {
+            Write-Host "Could not inspect this process's own parent chain, leaving the update holding the lock (pid $holder) to finish."
+            Write-Output "busy:already-running"
+            Stop-Transcript
+            exit 3
+        }
+        if ($ancestors -contains [int] $proc.ProcessId) {
+            Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."
+            Write-Output "err:lock"
+            Stop-Transcript
+            exit 1
+        }
+        if (-not $proc.Stoppable) {
+            Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."
+            Write-Output "err:lock"
+            Stop-Transcript
+            exit 1
+        }
+    }
     if (-not $proc -and $holderParses -and (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
         Write-Host "The lock's pid $holder belongs to a process that is not the update that wrote the lock (another program, or a process started after the lock was written: pid reused)."
     }
@@ -378,9 +475,18 @@ while (-not $script:haveLock) {
     if ($proc) {
         # Re-read the holder itself inside the mutex: stop it only if it is
         # still the same live updater (same pid, same creation time), never
-        # a process that took its pid meanwhile.
-        if (Test-SameProcess $proc $lockWrittenUtc) {
-            Stop-LockHolder $proc
+        # a process that took its pid meanwhile. A re-read that could not
+        # inspect the process proves nothing, least of all that it is gone.
+        $state = Get-LockHolderState $proc $lockWrittenUtc
+        if ($state -eq "unverified") {
+            Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."
+            Exit-TakeoverMutex
+            Write-Output "busy:already-running"
+            Stop-Transcript
+            exit 3
+        }
+        if ($state -eq "same") {
+            Stop-LockHolder $proc $ancestors
             $nowHolder = Read-LockHolder
             if ((Test-Path -LiteralPath $lockPath) -and $nowHolder -ne $holder) {
                 $label = $nowHolder
@@ -414,10 +520,13 @@ try {
 . "$PSScriptRoot\stop-daemon.ps1"
 
 # Every failure after this point goes through here: log, clean up, exit 1.
+# $code, when given, ends the log with err:<code> after the ERROR line (the
+# last-line contract above); the exit code stays 1 either way.
 # The panel dir is untouched until the robocopy step, and version.json is
 # only replaced at the very end.
-function Exit-Update([string] $message) {
+function Exit-Update([string] $message, [string] $code = "") {
     Write-Host "ERROR: $message"
+    if ($code) { Write-Output "err:$code" }
     if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
     Stop-Transcript
     exit 1
@@ -583,7 +692,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         }
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
     } catch {
-        Exit-Update "download or extract failed: $($_.Exception.Message)"
+        Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
     }
     if (-not (Test-Path "$extractDir\version.json") -or -not (Test-Path "$extractDir\daemon\index.js")) {
         Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\index.js)"
@@ -637,7 +746,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         /XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json `
         /XD node_modules dist .gaffer-icons | Out-Null
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
-    if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" }
+    if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync" }
 
     # Restore chat history
     if ($backup -and (Test-Path $backup)) {
@@ -674,7 +783,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     $npmExit = $LASTEXITCODE
     Pop-Location
     if ($npmExit -ne 0) {
-        Exit-Update "npm install failed (exit $npmExit)"
+        Exit-Update "npm install failed (exit $npmExit)" "npm"
     }
 
     # Stop any daemon that respawned mid-update (panel reloads on version.json

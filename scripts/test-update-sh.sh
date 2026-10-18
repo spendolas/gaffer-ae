@@ -30,7 +30,9 @@
 # re-read inside the mutex and leaves the winner's lock alone), an updater
 # whose lock was replaced under it leaves the replacement alone on exit, the
 # lock is gone after success and after a failure, a broken download ends the
-# log with err:download, and the dev-install refusal still ends the log with
+# log with err:download, an unwritable panel dir ends it with err:sync, the
+# stuck-age knob is ignored without GAFFER_UPDATE_ASSET, at 0 and at a huge
+# value (no crash), and the dev-install refusal still ends the log with
 # err:dev-install. The races are made deterministic with the script's
 # GAFFER_UPDATE_TEST_*_GATE files, never with sleeps.
 #
@@ -251,6 +253,24 @@ if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after a failed update"
 if [ "$(tail -n1 "$LOG")" = "err:download" ]; then pass "broken download ends the log with err:download"; else fail "broken download last log line: $(tail -n1 "$LOG")"; fi
 if grep -q "^ERROR: download or extract failed" "$LOG"; then pass "broken download logs an ERROR line"; else fail "no ERROR line for the broken download"; fi
 
+# ---------- Case 2b: a failing rsync ends the log with err:sync ----------
+# The panel dir is made unwritable, so rsync can neither delete the stale
+# file nor create new ones; under plain set -e rsync's own complaint would
+# be the last log line.
+SYNC_INSTALL="$SCRATCH/Application Support/sync-fail/com.gaffer.panel"
+new_install "$SYNC_INSTALL"
+: > "$LOG"
+chmod a-w "$SYNC_INSTALL"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$SYNC_INSTALL/daemon/update.sh"
+SYNC_EXIT=$?
+set -e
+chmod u+w "$SYNC_INSTALL"
+if [ "$SYNC_EXIT" -eq 1 ]; then pass "update.sh exited 1 when rsync failed"; else fail "update.sh exited $SYNC_EXIT when rsync failed, expected 1"; fi
+if [ "$(tail -n1 "$LOG")" = "err:sync" ]; then pass "failed rsync ends the log with err:sync"; else fail "failed rsync last log line: $(tail -n1 "$LOG")"; fi
+if grep -q "^ERROR: replacing the panel files failed (rsync)" "$LOG"; then pass "failed rsync logs an ERROR line"; else fail "no ERROR line for the failed rsync"; fi
+if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after the failed rsync"; else pass "update lock released after the failed rsync"; fi
+
 # ---------- Case 3: a second updater exits busy while a live one holds the lock ----------
 BUSY_INSTALL="$SCRATCH/Application Support/busy/com.gaffer.panel"
 new_install "$BUSY_INSTALL"
@@ -404,6 +424,38 @@ FAKE_GRANDCHILD="$(fake_updater_grandchild)"
 if [ -n "$FAKE_CHILD" ] && ! kill -0 "$FAKE_CHILD" 2>/dev/null; then pass "stuck holder's child (pid $FAKE_CHILD) was stopped too"; else fail "stuck holder's child (pid ${FAKE_CHILD:-unknown}) is still alive after the takeover"; kill "$FAKE_CHILD" 2>/dev/null || true; fi
 if [ -n "$FAKE_GRANDCHILD" ] && ! kill -0 "$FAKE_GRANDCHILD" 2>/dev/null; then pass "stuck holder's grandchild (pid $FAKE_GRANDCHILD) was stopped too"; else fail "stuck holder's grandchild (pid ${FAKE_GRANDCHILD:-unknown}) is still alive after the takeover"; kill "$FAKE_GRANDCHILD" 2>/dev/null || true; fi
 stop_fake_updater "$FAKE_PID"
+
+# ---------- Case 5g: the stuck-age knob is ignored unless the harness really set it ----------
+# Same staging as case 5 (live holder, lock aged past 3 s), but the knob
+# must NOT bite: without GAFFER_UPDATE_ASSET (a stray variable in a real
+# environment), at 0, and at a value too big for an integer. Each run must
+# exit busy with the holder alive. Were the first honoured, it would stop
+# the holder and then download the real latest release into this scratch
+# install; a wrong result here changes nothing outside $SCRATCH.
+KNOB_INSTALL="$SCRATCH/Application Support/knob/com.gaffer.panel"
+new_install "$KNOB_INSTALL"
+FAKE_PID="$(start_fake_updater)"
+trap 'pkill -P "$FAKE_PID" 2>/dev/null || true; kill "$FAKE_PID" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
+mkdir -p "$LOCK_DIR" && echo "$FAKE_PID" > "$LOCK_DIR/pid"
+age_lock_past_stuck
+for knob in "no-asset:$STUCK_AFTER" "asset:0" "asset:99999999999999999999999"; do
+  value="${knob#*:}"
+  : > "$LOG"
+  set +e
+  if [ "${knob%%:*}" = "no-asset" ]; then
+    PATH="$UPDATE_PATH" GAFFER_UPDATE_TEST_STUCK_AFTER="$value" bash "$KNOB_INSTALL/daemon/update.sh"
+  else
+    PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_UPDATE_TEST_STUCK_AFTER="$value" bash "$KNOB_INSTALL/daemon/update.sh"
+  fi
+  KNOB_EXIT=$?
+  set -e
+  if [ "$KNOB_EXIT" -eq 3 ]; then pass "knob $knob: updater exited 3 (busy), the knob was ignored"; else fail "knob $knob: updater exited $KNOB_EXIT, expected 3 (log: $(tail -n3 "$LOG" | tr '\n' '|'))"; fi
+  if [ "$(tail -n1 "$LOG")" = "busy:already-running" ]; then pass "knob $knob: log ends with busy:already-running"; else fail "knob $knob: last log line: $(tail -n1 "$LOG")"; fi
+  if kill -0 "$FAKE_PID" 2>/dev/null; then pass "knob $knob: the live holder (pid $FAKE_PID) was left alone"; else fail "knob $knob: the live holder was stopped"; fi
+done
+if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$FAKE_PID" ]; then pass "knob runs left the live lock in place"; else fail "knob runs removed or rewrote the live lock"; fi
+stop_fake_updater "$FAKE_PID"
+rm -rf "$LOCK_DIR"
 
 # ---------- Case 5e: a stuck holder that leads its own process group is stopped as a group ----------
 # The panel spawns update.sh detached, so this is the shape real stuck
