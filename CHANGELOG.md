@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.11.3 - 2026-10-08
+## v0.11.3 - 2026-10-18
 
 **Sturdier updates, a smaller download, and a heads-up when your Claude Code is outside the versions Gaffer was tested with.**
 
