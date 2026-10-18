@@ -18,7 +18,7 @@ echo "=== Update started: $(date) ==="
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
-#   err:<code>              failed (err:dev-install, err:lock, err:download) or a bare ERROR line
+#   err:<code>              failed (err:dev-install, err:lock, err:download, err:sync, err:npm) or a bare ERROR line
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -71,10 +71,17 @@ STUCK_AFTER=900
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder younger than the lock, so
-# a backdated lock can no longer stand in for a long run). Digits only.
+# a backdated lock can no longer stand in for a long run). Honoured only
+# next to GAFFER_UPDATE_ASSET (the harness sets both, the panel sets
+# neither), digits only, 1 to 86400 (at most 5 digits, so the comparison
+# never sees a number too big for the shell).
 case "${GAFFER_UPDATE_TEST_STUCK_AFTER:-}" in
   ''|*[!0-9]*) ;;
-  *) STUCK_AFTER="$GAFFER_UPDATE_TEST_STUCK_AFTER" ;;
+  *)
+    if [ -n "${GAFFER_UPDATE_ASSET:-}" ] && [ "${#GAFFER_UPDATE_TEST_STUCK_AFTER}" -le 5 ] \
+       && [ "$((10#$GAFFER_UPDATE_TEST_STUCK_AFTER))" -ge 1 ] && [ "$((10#$GAFFER_UPDATE_TEST_STUCK_AFTER))" -le 86400 ]; then
+      STUCK_AFTER="$((10#$GAFFER_UPDATE_TEST_STUCK_AFTER))"
+    fi ;;
 esac
 test_gate() {
   local gate="$1" i
@@ -86,9 +93,13 @@ test_gate() {
   done
   return 0
 }
+# Fails (prints nothing) when the path cannot be stat'ed: a lock that
+# vanished mid-check must not read as mtime 0, a huge age and a false
+# "pid reused". Callers decide what a missing age means for them.
 dir_age_seconds() {
   local mtime now
-  mtime="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
+  mtime="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)" || return 1
+  case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
   now="$(date +%s)"
   echo $((now - mtime))
 }
@@ -113,8 +124,9 @@ etime_seconds() {
 # pid was started AFTER that updater wrote the lock, so its age (ps etime)
 # must be at least the lock's age, less 5 s of slack for the two clocks and
 # the whole-second etime. The guard is skipped when the lock's age is
-# negative (the clock stepped, nothing to compare against) or etime cannot
-# be parsed; the name match alone decides then.
+# negative (the clock stepped, nothing to compare against), the lock cannot
+# be stat'ed (it vanished meanwhile) or etime cannot be parsed; the name
+# match alone decides then.
 HOLDER_PID_REUSED=""
 lock_holder_is_updater() {
   local pid="$1" lock_age proc_age
@@ -124,24 +136,26 @@ lock_holder_is_updater() {
   [ "$pid" != "$$" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   ps -o command= -p "$pid" 2>/dev/null | grep -Eq '(^|[[:space:]/])update\.sh([[:space:]]|$)' || return 1
-  lock_age="$(dir_age_seconds "$LOCK_DIR")"
-  if [ "$lock_age" -ge 0 ] && proc_age="$(etime_seconds "$(ps -o etime= -p "$pid" 2>/dev/null)")"; then
+  if lock_age="$(dir_age_seconds "$LOCK_DIR")" && [ "$lock_age" -ge 0 ] && proc_age="$(etime_seconds "$(ps -o etime= -p "$pid" 2>/dev/null)")"; then
     if [ "$proc_age" -lt $((lock_age - 5)) ]; then HOLDER_PID_REUSED=1; return 1; fi
   fi
   return 0
 }
 # A live holder's lock older than the stuck age. A negative age never
-# counts here: a live holder is busy, however the clock reads.
+# counts here: a live holder is busy, however the clock reads; so is a
+# lock whose age cannot be read.
 lock_is_old() {
   local age
-  age="$(dir_age_seconds "$LOCK_DIR")"
+  age="$(dir_age_seconds "$LOCK_DIR")" || return 1
   [ "$age" -ge "$STUCK_AFTER" ]
 }
 # Under 30 s old, up to 300 s of clock skew tolerated; beyond that a future
-# date is a leftover from before the clock moved back, and not young.
+# date is a leftover from before the clock moved back, and not young. A
+# lock whose age cannot be read is not young either (the takeover path
+# then finds it gone and retries).
 lock_is_young() {
   local age
-  age="$(dir_age_seconds "$LOCK_DIR")"
+  age="$(dir_age_seconds "$LOCK_DIR")" || return 1
   [ "$age" -ge -300 ] && [ "$age" -lt 30 ]
 }
 # Every process below the holder, any depth, from one ps snapshot: each
@@ -229,7 +243,7 @@ take_takeover_mutex() {
   local age stale
   if mkdir "$TAKEOVER_DIR" 2>/dev/null; then HAVE_TAKEOVER=1; return 0; fi
   [ -d "$TAKEOVER_DIR" ] || return 1
-  age="$(dir_age_seconds "$TAKEOVER_DIR")"
+  age="$(dir_age_seconds "$TAKEOVER_DIR")" || return 1
   marker_is_stale "$age" || return 1
   test_gate "${GAFFER_UPDATE_TEST_MARKER_GATE:-}"
   stale="$TAKEOVER_DIR.stale.$$"
@@ -237,7 +251,7 @@ take_takeover_mutex() {
     echo "Another update cleared the stale takeover marker first, leaving it to finish."
     return 1
   fi
-  age="$(dir_age_seconds "$stale")"
+  age="$(dir_age_seconds "$stale")" || age=0
   if ! marker_is_stale "$age"; then
     echo "The takeover marker was renewed by another update meanwhile, putting it back."
     if [ ! -e "$TAKEOVER_DIR" ]; then mv "$stale" "$TAKEOVER_DIR" 2>/dev/null || rm -rf "$stale"; else rm -rf "$stale"; fi
@@ -477,16 +491,25 @@ stop_daemon
 # from --delete. Stays non --inplace so this running script is never
 # overwritten in place.
 echo "Replacing files..."
-rsync -a --delete \
-  --exclude 'chat-history.json' \
-  --exclude 'chat-history-*.json' \
-  --exclude '.gaffer-config.json' \
-  --exclude 'daemon/node_modules' \
-  --exclude 'daemon/dist' \
-  --exclude '/version.json' \
-  --exclude '/.gaffer-usage-buffer.json' \
-  --exclude '/.gaffer-icons' \
-  "$EXTRACT_DIR/" "$PANEL_DIR/"
+# Wrapped like download_and_extract: under set -e a failing rsync would end
+# the script with rsync's own message as the last log line.
+sync_files() {
+  rsync -a --delete \
+    --exclude 'chat-history.json' \
+    --exclude 'chat-history-*.json' \
+    --exclude '.gaffer-config.json' \
+    --exclude 'daemon/node_modules' \
+    --exclude 'daemon/dist' \
+    --exclude '/version.json' \
+    --exclude '/.gaffer-usage-buffer.json' \
+    --exclude '/.gaffer-icons' \
+    "$EXTRACT_DIR/" "$PANEL_DIR/" || return 1
+}
+if ! sync_files; then
+  echo "ERROR: replacing the panel files failed (rsync)"
+  echo "err:sync"
+  exit 1
+fi
 
 # Restore chat history
 if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
@@ -510,9 +533,18 @@ for n in /usr/local/bin/node /opt/homebrew/bin/node /usr/bin/node; do
   [ -x "$n" ] && NODE="$n" && break
 done
 [ -z "${NODE:-}" ] && NODE="$(which node 2>/dev/null)"
-if [ -n "${NODE:-}" ]; then
-  NPM_DIR="$(dirname "$NODE")"
-  PATH="$NPM_DIR:$PATH" npm install --omit=dev
+# Wrapped like download_and_extract, so a failing npm ends the log with an
+# ERROR line and err:npm rather than npm's own last line.
+install_deps() {
+  local npm_dir
+  [ -n "${NODE:-}" ] || return 0
+  npm_dir="$(dirname "$NODE")"
+  PATH="$npm_dir:$PATH" npm install --omit=dev || return 1
+}
+if ! install_deps; then
+  echo "ERROR: installing the daemon dependencies failed (npm install)"
+  echo "err:npm"
+  exit 1
 fi
 
 # Stop any daemon that respawned from the half-copied tree during the update

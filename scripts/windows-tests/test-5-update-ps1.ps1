@@ -32,8 +32,16 @@
 # that vanished just before the stop is not signalled, an updater whose lock
 # was replaced under it leaves the replacement alone on exit, the lock is
 # gone after every run, and the dev-install refusal still ends the log with
-# err:dev-install. The races are made deterministic with update.ps1's
-# GAFFER_UPDATE_TEST_*_GATE files, never with sleeps.
+# err:dev-install. Cases 6e to 6h cover the stop's limits: a holder
+# recognised by its process name only (a person's PowerShell window, no
+# update.ps1 in its command line) past the stuck age is never stopped and
+# the run ends with err:lock, a failed descendant listing goes through
+# taskkill /T while the holder is alive and still ends the whole tree, a
+# holder that is this updater's own parent is refused with err:lock, and
+# the stuck-age knob is ignored without GAFFER_UPDATE_ASSET, at 0 and at a
+# huge value. A broken download ends the log with err:download. The races
+# are made deterministic with update.ps1's GAFFER_UPDATE_TEST_*_GATE files,
+# never with sleeps.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
 # while a Gaffer daemon is up (close After Effects first). To run next to a
@@ -111,9 +119,11 @@ function Get-TreeHash([string] $dir) {
 }
 
 # $extraEnv holds env vars only this one run should see (the stuck-age
-# override); they are set for the run and removed right after.
-function Invoke-Update([string] $dir, [string] $asset, [hashtable] $extraEnv = @{}) {
-    $env:GAFFER_UPDATE_ASSET = $asset
+# override); they are set for the run and removed right after. -NoAsset
+# runs update.ps1 the way the panel does, without GAFFER_UPDATE_ASSET (the
+# real download URL), for the cases that must end before any download.
+function Invoke-Update([string] $dir, [string] $asset, [hashtable] $extraEnv = @{}, [switch] $NoAsset) {
+    if ($NoAsset) { Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue } else { $env:GAFFER_UPDATE_ASSET = $asset }
     $env:TEMP = "$scratch\tmp"
     foreach ($k in $extraEnv.Keys) { Set-Item -Path "Env:\$k" -Value $extraEnv[$k] }
     try {
@@ -195,6 +205,11 @@ function Stop-FakeUpdater($p) {
     $p.WaitForExit(5000) | Out-Null
 }
 $fake = $null
+# Cases 6e and 6g: a plain PowerShell standing in for a person's window, and
+# a wrapper that runs the updater as its child; both are stopped on the way
+# out if a case aborted before stopping them.
+$window = $null
+$wrapper = $null
 
 # Start update.ps1 in $dir detached, its stdout (Write-Host lines included)
 # captured in $outFile so each racer's output can be judged on its own (two
@@ -291,6 +306,11 @@ try {
     if ($code -ne 0) { Pass "update.ps1 exited non-zero on a broken download" } else { Fail "update.ps1 exited 0 on a broken download" }
     if ((Get-TreeHash $broken) -eq $beforeTree) { Pass "broken download left the install untouched" } else { Fail "broken download modified the install" }
     if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after a failed update" } else { Pass "update lock released after a failed update" }
+    # The panel and a reader rely on the last line: err:download after the ERROR line, like Mac.
+    $last = Get-LastLogLine
+    if ($last -eq "err:download") { Pass "broken download ends the log with err:download" } else { Fail "broken download last log line: $last" }
+    $logBroken = Get-Content -LiteralPath $logPath -Raw
+    if ($logBroken -match "ERROR: download or extract failed") { Pass "broken download logs an ERROR line" } else { Fail "no ERROR line for the broken download" }
 
     # ---------- Case 3: a 404 URL changes nothing (exercises the URL branch) ----------
     # Cases 1 and 2 hand update.ps1 a local file. Real users always hit the
@@ -314,6 +334,8 @@ try {
     $log404 = ""
     if (Test-Path -LiteralPath $logPath) { $log404 = Get-Content -LiteralPath $logPath -Raw }
     if ($log404 -match "\(404\)") { Pass "update.ps1 reached the download and got the server's 404" } else { Fail "update.ps1 did not reach the download (offline or URL branch broke); log: $logPath" }
+    $last = Get-LastLogLine
+    if ($last -eq "err:download") { Pass "404 run ends the log with err:download" } else { Fail "404 run last log line: $last" }
     # A 404 is final: curl.exe must not hand it to the system proxy path.
     if ($log404 -notmatch "trying the system proxy path") { Pass "404 from curl.exe did not fall back to the system proxy path" } else { Fail "404 from curl.exe fell back to the system proxy path" }
 
@@ -634,6 +656,132 @@ try {
     Stop-FakeUpdater $fake
     $fake = $null
 
+    # ---------- Case 6e: a hand-run holder (process name only) past the stuck age is never stopped ----------
+    # An update run as ".\update.ps1" inside an open PowerShell carries that
+    # window's pid and leaves no update.ps1 in its command line. Past the
+    # stuck age it must not be force-stopped (that would end the person's
+    # terminal and everything started from it): the run reports it, ends
+    # with err:lock, touches nothing and leaves the lock in place.
+    $handRun = Join-Path $scratch "Application Data\hand-run\com.gaffer.panel"
+    New-TestInstall $handRun
+    $window = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 300") -WindowStyle Hidden -PassThru
+    Start-Sleep -Seconds 1
+    $windowCmd = ""
+    try { $windowCmd = "$((Get-CimInstance Win32_Process -Filter "ProcessId = $($window.Id)").CommandLine)" } catch {}
+    if ($windowCmd -notmatch "update\.ps1" -and $windowCmd -match "powershell") { Pass "hand-run holder's command line names no update.ps1" } else { Fail "hand-run holder's command line is: $windowCmd" }
+    [System.IO.File]::WriteAllText($lockPath, "$($window.Id)", [System.Text.Encoding]::ASCII)
+    Wait-LockPastStuck
+    $beforeTree = Get-TreeHash $handRun
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $handRun $ReleaseZip @{ GAFFER_UPDATE_TEST_STUCK_AFTER = "$stuckAfter" }
+    if ($code -eq 1) { Pass "updater exited 1 against a stuck hand-run holder" } else { Fail "updater exited $code against a stuck hand-run holder, expected 1" }
+    $last = Get-LastLogLine
+    if ($last -eq "err:lock") { Pass "stuck hand-run holder run ends with err:lock" } else { Fail "stuck hand-run holder run last log line: $last" }
+    $logHand = ""
+    if (Test-Path -LiteralPath $logPath) { $logHand = Get-Content -LiteralPath $logPath -Raw }
+    if ($logHand -match [regex]::Escape("An update started by hand in PowerShell (pid $($window.Id)) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it.")) { Pass "log explains the hand-run holder" } else { Fail "no hand-run explanation in the log" }
+    if ($logHand -notmatch "Stopping an update") { Pass "no stop was attempted on the hand-run holder" } else { Fail "a stop was attempted on the hand-run holder" }
+    if (Get-Process -Id $window.Id -ErrorAction SilentlyContinue) { Pass "hand-run holder (pid $($window.Id)) is still alive" } else { Fail "hand-run holder was killed" }
+    if ((Read-Lock) -eq "$($window.Id)") { Pass "hand-run holder's lock was left in place" } else { Fail "hand-run holder's lock was removed or rewritten (now: '$(Read-Lock)')" }
+    if ((Get-TreeHash $handRun) -eq $beforeTree) { Pass "hand-run holder run left the install untouched" } else { Fail "hand-run holder run modified the install" }
+    Stop-Process -Id $window.Id -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 6f: a failed descendant listing goes through taskkill /T while the holder is alive ----------
+    # GAFFER_UPDATE_TEST_FAIL_LIST makes the first listing fail; taskkill /T
+    # needs the live tree (it follows parent pids), so it must run before
+    # the holder is stopped, and the whole tree must still be gone after.
+    $failList = Join-Path $scratch "Application Data\fail-list\com.gaffer.panel"
+    New-TestInstall $failList
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    Wait-LockPastStuck
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    $code = Invoke-Update $failList $ReleaseZip @{ GAFFER_UPDATE_TEST_STUCK_AFTER = "$stuckAfter"; GAFFER_UPDATE_TEST_FAIL_LIST = "1" }
+    if ($code -eq 0) { Pass "update.ps1 took over the stuck holder's lock through the taskkill path and exited 0" } else { Fail "update.ps1 exited $code on the taskkill path (log: $logPath)" }
+    $logFail = ""
+    if (Test-Path -LiteralPath $logPath) { $logFail = Get-Content -LiteralPath $logPath -Raw }
+    if ($logFail -match "could not list the stuck update's processes, using taskkill /T") { Pass "the failed listing was logged and taskkill /T ran" } else { Fail "no taskkill fallback line in the log" }
+    if ($logFail -notmatch "descendant process\(es\)") { Pass "no Win32_Process stop ran after the failed listing" } else { Fail "a Win32_Process stop ran next to the taskkill path" }
+    if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "stuck holder (pid $($fake.Id)) survived the taskkill path" } else { Pass "taskkill path stopped the stuck holder" }
+    $childId = Get-FakeUpdaterChildId
+    $grandchildId = Get-FakeUpdaterGrandchildId
+    if ($childId -gt 0 -and -not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) { Pass "taskkill path stopped the holder's child (pid $childId)" } else { Fail "holder's child (pid $childId) survived the taskkill path" }
+    if ($grandchildId -gt 0 -and -not (Get-Process -Id $grandchildId -ErrorAction SilentlyContinue)) { Pass "taskkill path stopped the holder's grandchild (pid $grandchildId)" } else { Fail "holder's grandchild (pid $grandchildId) survived the taskkill path" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "lock left behind after the taskkill-path run" } else { Pass "lock released after the taskkill-path run" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+
+    # ---------- Case 6g: a holder on this updater's own parent chain is refused ----------
+    # A wrapper PowerShell whose command line names update.ps1 (so it would
+    # otherwise be stoppable) holds the lock and runs the updater as its
+    # child. The updater must recognise its own parent and refuse with
+    # err:lock instead of stopping it (which would stop the updater too).
+    $parentCase = Join-Path $scratch "Application Data\parent-holder\com.gaffer.panel"
+    New-TestInstall $parentCase
+    New-Item -ItemType Directory -Path "$scratch\wrap\daemon" -Force | Out-Null
+    $wrapGo = "$scratch\wrap\go"
+    $wrapOut = "$scratch\wrap\updater.out"
+    Remove-Item -LiteralPath $wrapGo, $wrapOut -Force -ErrorAction SilentlyContinue
+    $wrapBody = @(
+        "for (`$i = 0; `$i -lt 600; `$i++) { if (Test-Path -LiteralPath '$wrapGo') { break }; Start-Sleep -Milliseconds 100 }",
+        "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$parentCase\daemon\update.ps1' *> '$wrapOut'",
+        'exit $LASTEXITCODE'
+    )
+    Set-Content -LiteralPath "$scratch\wrap\daemon\update.ps1" -Value ($wrapBody -join "`r`n")
+    $env:GAFFER_UPDATE_ASSET = $ReleaseZip
+    $env:TEMP = "$scratch\tmp"
+    $env:GAFFER_UPDATE_TEST_STUCK_AFTER = "$stuckAfter"
+    try {
+        $wrapper = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$scratch\wrap\daemon\update.ps1") -WindowStyle Hidden -PassThru
+        $null = $wrapper.Handle
+    } finally { Remove-Item Env:\GAFFER_UPDATE_TEST_STUCK_AFTER -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($wrapper.Id)", [System.Text.Encoding]::ASCII)
+    Wait-LockPastStuck
+    $beforeTree = Get-TreeHash $parentCase
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($wrapGo, "go")
+    $codeW = Wait-Updater $wrapper
+    $outW = Read-Out $wrapOut
+    if ($codeW -eq 1) { Pass "updater exited 1 when its own parent held the lock (the parent lived to report it)" } else { Fail "updater run under its lock-holding parent exited $($codeW), expected 1: $outW" }
+    if ($outW -match [regex]::Escape("This update was started from the terminal that holds the lock. Close that window and try again.")) { Pass "log explains the parent-chain refusal" } else { Fail "no parent-chain refusal line: $outW" }
+    $last = Get-LastLogLine
+    if ($last -eq "err:lock") { Pass "parent-chain refusal ends with err:lock" } else { Fail "parent-chain refusal last log line: $last" }
+    if ($outW -notmatch "Stopping an update") { Pass "no stop was attempted on the updater's own parent" } else { Fail "a stop was attempted on the updater's own parent" }
+    if ((Read-Lock) -eq "$($wrapper.Id)") { Pass "the parent's lock was left in place" } else { Fail "the parent's lock was removed or rewritten (now: '$(Read-Lock)')" }
+    if ((Get-TreeHash $parentCase) -eq $beforeTree) { Pass "parent-chain refusal left the install untouched" } else { Fail "parent-chain refusal modified the install" }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+    # ---------- Case 6h: the stuck-age knob is ignored unless the harness really set it ----------
+    # Same staging as case 6 (live script-named holder, lock aged past 3 s),
+    # but the knob must NOT bite: without GAFFER_UPDATE_ASSET (a stray
+    # variable in a real environment), at 0, and at a value too big for an
+    # integer (which must not throw). Each run exits busy, holder alive.
+    $knob = Join-Path $scratch "Application Data\knob\com.gaffer.panel"
+    New-TestInstall $knob
+    $fake = Start-FakeUpdater
+    Start-Sleep -Seconds 1
+    [System.IO.File]::WriteAllText($lockPath, "$($fake.Id)", [System.Text.Encoding]::ASCII)
+    Wait-LockPastStuck
+    foreach ($case in @(@{ Name = "no-asset:$stuckAfter"; Value = "$stuckAfter"; NoAsset = $true }, @{ Name = "asset:0"; Value = "0"; NoAsset = $false }, @{ Name = "asset:huge"; Value = "99999999999999999999999"; NoAsset = $false })) {
+        Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+        if ($case.NoAsset) {
+            $code = Invoke-Update $knob $ReleaseZip @{ GAFFER_UPDATE_TEST_STUCK_AFTER = $case.Value } -NoAsset
+        } else {
+            $code = Invoke-Update $knob $ReleaseZip @{ GAFFER_UPDATE_TEST_STUCK_AFTER = $case.Value }
+        }
+        if ($code -eq 3) { Pass "knob $($case.Name): updater exited 3 (busy), the knob was ignored" } else { Fail "knob $($case.Name): updater exited $code, expected 3 (log: $logPath)" }
+        $last = Get-LastLogLine
+        if ($last -eq "busy:already-running") { Pass "knob $($case.Name): log ends with busy:already-running" } else { Fail "knob $($case.Name): last log line: $last" }
+        if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Pass "knob $($case.Name): the live holder (pid $($fake.Id)) was left alone" } else { Fail "knob $($case.Name): the live holder was stopped" }
+    }
+    if ((Read-Lock) -eq "$($fake.Id)") { Pass "knob runs left the live lock in place" } else { Fail "knob runs removed or rewrote the live lock" }
+    Stop-FakeUpdater $fake
+    $fake = $null
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
     # ---------- Case 6b: a stuck holder that vanished just before the stop is not signalled ----------
     # The updater reads the live holder, stops at its gate; the holder exits
     # meanwhile; the re-read inside the mutex must find it gone and skip the
@@ -765,10 +913,11 @@ try {
     Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
 } finally {
     if ($fake) { Stop-FakeUpdater $fake }
+    foreach ($p in @($window, $wrapper)) { if ($p -and (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue
-    foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
+    foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE", "GAFFER_UPDATE_TEST_STUCK_AFTER", "GAFFER_UPDATE_TEST_FAIL_LIST")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 }
 

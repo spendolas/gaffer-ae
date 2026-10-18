@@ -8,8 +8,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+// Runs a snippet of update.sh (a function or a case block, cut out by its
+// first and last line) under bash with the given environment, and returns
+// {status, stdout}. Lets the pure shell pieces be checked for behavior, not
+// just text, on any platform with bash.
+function runShSnippet(text, first, last, body, env) {
+  const start = text.indexOf(first);
+  const end = text.indexOf(last, start);
+  assert.ok(start !== -1 && end !== -1, 'snippet not found: ' + first);
+  const snippet = text.slice(start, end + last.length);
+  const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + snippet + '\n' + body], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
+}
 const sh = read('../panel/daemon/update.sh');
 const ps1 = read('../panel/daemon/update.ps1');
 const mainJs = read('../panel/main.js');
@@ -44,13 +57,14 @@ test('update.sh never stops a live holder on a negative age, tolerates 300 s of 
   assert.ok(old.includes('[ "$age" -ge "$STUCK_AFTER" ]'), 'old means older than the stuck age');
   assert.ok(!old.includes('-lt 0'), 'a negative age never makes a lock old (a live holder stays busy)');
   assert.ok(sh.includes('STUCK_AFTER=900'), 'the stuck age is 15 minutes');
-  assert.ok(sh.includes('*) STUCK_AFTER="$GAFFER_UPDATE_TEST_STUCK_AFTER" ;;'), 'the harness may lower it (digits only)');
+  assert.ok(sh.includes('if [ -n "${GAFFER_UPDATE_ASSET:-}" ] && [ "${#GAFFER_UPDATE_TEST_STUCK_AFTER}" -le 5 ]'), 'the harness may lower it, only next to GAFFER_UPDATE_ASSET and with at most 5 digits');
+  assert.ok(sh.includes('STUCK_AFTER="$((10#$GAFFER_UPDATE_TEST_STUCK_AFTER))"'), 'the override is read as decimal');
   assert.ok(sh.includes('marker_is_stale() { [ "$1" -ge 60 ] || [ "$1" -lt -300 ]; }'), 'a marker is stale past 60 s or more than 300 s in the future');
   assert.ok(sh.includes('if [ "$age" -lt -300 ]; then\n    echo "Removing a takeover marker dated in the future'), 'the future-dated log line follows the same tolerance');
   assert.ok(!/\[ "\$age" -lt 0 \]/.test(sh), 'no bare negative-age rule is left');
   const holder = sh.split('lock_holder_is_updater() {')[1].split('\n}\n')[0];
   assert.ok(holder.includes('etime_seconds "$(ps -o etime= -p "$pid" 2>/dev/null)"'), 'process age comes from ps etime');
-  assert.ok(holder.includes('if [ "$lock_age" -ge 0 ]'), 'the age comparison is skipped for a lock dated in the future');
+  assert.ok(holder.includes('if lock_age="$(dir_age_seconds "$LOCK_DIR")" && [ "$lock_age" -ge 0 ]'), 'the age comparison is skipped for a lock dated in the future or one that cannot be stat\'ed');
   assert.ok(holder.includes('if [ "$proc_age" -lt $((lock_age - 5)) ]; then HOLDER_PID_REUSED=1; return 1; fi'), 'a process younger than the lock (less 5 s) is a reused pid, not the holder');
   assert.ok(holder.indexOf("grep -Eq '(^|[[:space:]/])update\\.sh([[:space:]]|$)' || return 1") < holder.indexOf('etime_seconds'), 'the name match still comes first');
   assert.ok(sh.includes('(pid reused), not to the update that wrote it.'), 'a reused pid is logged before the takeover');
@@ -59,6 +73,51 @@ test('update.sh never stops a live holder on a negative age, tolerates 300 s of 
   assert.ok(et.includes('case "$et" in *-*) days="${et%%-*}"; et="${et#*-}" ;; esac'), 'dd-hh:mm:ss');
   assert.ok(et.includes('if [ -z "$c" ]; then c="$b"; b="$a"; a=0; fi'), 'mm:ss');
   assert.ok(et.includes('10#$days * 86400 + 10#$a * 3600 + 10#$b * 60 + 10#$c'), 'leading zeros are decimal, not octal');
+});
+
+test('update.sh honours the stuck-age knob only next to GAFFER_UPDATE_ASSET, for 1 to 86400, and never crashes on a huge value (run under bash)', () => {
+  const run = (env) => runShSnippet(sh, 'case "${GAFFER_UPDATE_TEST_STUCK_AFTER:-}" in', '\nesac', 'echo "$STUCK_AFTER"', { STUCK_AFTER: '900', ...env });
+  assert.equal(run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '3' }).stdout, '3', 'harness setting honoured');
+  assert.equal(run({ GAFFER_UPDATE_TEST_STUCK_AFTER: '3' }).stdout, '900', 'a stray knob without GAFFER_UPDATE_ASSET is ignored');
+  assert.equal(run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '0' }).stdout, '900', 'zero is ignored');
+  assert.equal(run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '86401' }).stdout, '900', 'over a day is ignored');
+  const huge = run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '99999999999999999999999999' });
+  assert.equal(huge.status, 0, 'a huge value does not crash: ' + huge.stderr);
+  assert.equal(huge.stdout, '900', 'a huge value is ignored');
+  assert.equal(run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '3x' }).stdout, '900', 'non-digits are ignored');
+  assert.equal(run({ GAFFER_UPDATE_ASSET: '/x.tgz', GAFFER_UPDATE_TEST_STUCK_AFTER: '007' }).stdout, '7', 'leading zeros are decimal');
+});
+
+test('update.sh dir_age_seconds fails, rather than reporting a huge age, when the path cannot be stat\'ed (run under bash)', () => {
+  const missing = runShSnippet(sh, 'dir_age_seconds() {', '\n}', 'if dir_age_seconds /nonexistent/gaffer-lock; then echo "ok:$?"; else echo "fail:$?"; fi', {});
+  assert.equal(missing.stdout, 'fail:1', 'a missing path is a failure, not age 0 or a huge age');
+  const present = runShSnippet(sh, 'dir_age_seconds() {', '\n}', 'dir_age_seconds /', {});
+  assert.equal(present.status, 0);
+  assert.match(present.stdout, /^-?\d+$/, 'an existing path yields a whole number of seconds');
+  assert.ok(sh.includes('if lock_age="$(dir_age_seconds "$LOCK_DIR")" && [ "$lock_age" -ge 0 ]'), 'the pid-reuse guard is skipped when the lock cannot be stat\'ed');
+  assert.ok(sh.includes('age="$(dir_age_seconds "$LOCK_DIR")" || return 1\n  [ "$age" -ge "$STUCK_AFTER" ]'), 'an unreadable lock age is never old');
+  assert.ok(sh.includes('age="$(dir_age_seconds "$LOCK_DIR")" || return 1\n  [ "$age" -ge -300 ] && [ "$age" -lt 30 ]'), 'an unreadable lock age is never young');
+  assert.ok(sh.includes('age="$(dir_age_seconds "$TAKEOVER_DIR")" || return 1'), 'an unreadable marker age yields');
+  assert.ok(!sh.includes('|| echo 0)"'), 'no mtime 0 fallback is left');
+});
+
+test('update.sh ends a failed rsync or npm step with an ERROR line and err:sync / err:npm, exit code unchanged', () => {
+  assert.ok(sh.includes('sync_files() {'));
+  const sync = sh.split('sync_files() {')[1].split('\n}\n')[0];
+  assert.ok(sync.includes('"$EXTRACT_DIR/" "$PANEL_DIR/" || return 1'), 'rsync failure returns, not set -e exit');
+  assert.ok(sh.includes('if ! sync_files; then\n  echo "ERROR: replacing the panel files failed (rsync)"\n  echo "err:sync"\n  exit 1\nfi'));
+  assert.ok(sh.includes('install_deps() {'));
+  const deps = sh.split('install_deps() {')[1].split('\n}\n')[0];
+  assert.ok(deps.includes('[ -n "${NODE:-}" ] || return 0'), 'no node still means skip, not fail');
+  assert.ok(deps.includes('npm install --omit=dev || return 1'), 'npm failure returns');
+  assert.ok(sh.includes('if ! install_deps; then\n  echo "ERROR: installing the daemon dependencies failed (npm install)"\n  echo "err:npm"\n  exit 1\nfi'));
+  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:sync, err:npm'), 'the contract comment names the codes');
+  assert.ok(ps1.includes('err:download,\n#                           err:sync, err:npm) after an ERROR line'), 'the Windows contract comment names the same codes');
+  assert.ok(ps1.includes('function Exit-Update([string] $message, [string] $code = "") {'));
+  assert.ok(ps1.includes('if ($code) { Write-Output "err:$code" }'), 'the code line follows the ERROR line');
+  assert.ok(ps1.includes('Exit-Update "download or extract failed: $($_.Exception.Message)" "download"'), 'a failed download ends with err:download like Mac');
+  assert.ok(ps1.includes('Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync"'));
+  assert.ok(ps1.includes('Exit-Update "npm install failed (exit $npmExit)" "npm"'));
 });
 
 test('update.sh freezes a non-leader holder before snapshotting its descendants and resumes it after the signal', () => {
@@ -163,11 +222,45 @@ test('update.ps1 serializes takeovers with a CreateNew marker and re-checks the 
   assert.ok(inside.includes('$nowHolder = Read-LockHolder'), 'pid is re-read inside the mutex');
   assert.ok(inside.includes('if ($nowHolder -ne $holder) {'), 'only the lock judged stale is removed');
   assert.ok(inside.includes('The abandoned lock now belongs to pid $label, rechecking.'), 'the re-read rejection is logged so the harness can tell the path');
-  assert.ok(inside.includes('if (Test-SameProcess $proc $lockWrittenUtc) {\n            Stop-LockHolder $proc'), 'the holder (pid and creation time) is re-read inside the mutex right before it is stopped');
+  assert.ok(inside.includes('$state = Get-LockHolderState $proc $lockWrittenUtc'), 'the holder (pid and creation time) is re-read inside the mutex');
+  assert.ok(inside.includes('if ($state -eq "same") {\n            Stop-LockHolder $proc $ancestors'), 'only the same live updater is stopped, never its pid\'s new owner, never this updater\'s own parent chain');
+  assert.ok(inside.includes('if ($state -eq "unverified") {\n            Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."\n            Exit-TakeoverMutex\n            Write-Output "busy:already-running"'), 'an Unverified re-read inside the mutex releases the mutex and exits busy, it never takes over');
+  assert.ok(inside.indexOf('$state -eq "unverified"') < inside.indexOf('$state -eq "same"'), 'unverified is handled before the stop');
   assert.ok(inside.includes('is already gone, not stopping it.'), 'a holder that vanished at the gate is logged, not signalled');
   assert.ok(inside.indexOf('Stop-LockHolder $proc') < inside.indexOf('Remove-Item -LiteralPath $lockPath'), 'the holder is stopped inside the mutex, before the removal');
   assert.ok(inside.includes('if (New-PidFile $lockPath) { $script:haveLock = $true }'), 'the taker creates its lock while still holding the mutex');
-  assert.ok(ps1.includes('return ("$($now.CreationDate)" -eq "$($proc.CreationDate)")'), 'same pid is not enough, the creation time must match too');
+  const state = ps1.split('function Get-LockHolderState($proc, [DateTime] $lockWrittenUtc) {')[1].split('\n}\n')[0];
+  assert.ok(state.includes('if ($now.Unverified) { return "unverified" }'), 'an unverified re-read is reported as such, not as gone');
+  assert.ok(state.includes('if ("$($now.CreationDate)" -eq "$($proc.CreationDate)") { return "same" }'), 'same pid is not enough, the creation time must match too');
+  assert.ok(!ps1.includes('Test-SameProcess'), 'the boolean re-read (which read unverified as gone) is gone');
+});
+
+test('update.ps1 never stops a hand-run holder or its own parent chain, and ends such a stuck lock with err:lock', () => {
+  const fn = ps1.split('function Get-LockHolderProcess([string] $holder, [DateTime] $lockWrittenUtc) {')[1].split('\n}\n')[0];
+  assert.ok(fn.includes("$scriptOk = (\"$($proc.CommandLine)\" -match '(^|[\\\\/\\s\"''])update\\.ps1')"), 'whether the command line names update.ps1 is recorded separately');
+  assert.ok(fn.includes('return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $proc.CreationDate; Unverified = $false; Stoppable = $scriptOk }'), 'only a script-named holder is Stoppable');
+  assert.ok(fn.includes('if (-not ($nameOk -or $scriptOk)) { return $null }'), 'a name-only holder still counts as a holder (busy)');
+  assert.ok(!fn.includes('$pathOk'), 'the old path-only flag is gone');
+  // The regex matches what the panel, its ExtendScript fallback and a "-File update.ps1" produce, and not a bare powershell.exe.
+  const re = /(^|[\\/\s"'])update\.ps1/;
+  for (const cmd of ['powershell -File C:\\x\\daemon\\update.ps1', 'powershell -File C:/x/daemon/update.ps1', 'powershell -File update.ps1', 'powershell -File "C:\\Program Files\\x\\update.ps1"', "pwsh -File 'C:\\x\\update.ps1'"]) assert.ok(re.test(cmd), 'should match: ' + cmd);
+  for (const cmd of ['"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"', 'powershell -NoProfile -Command Start-Sleep -Seconds 300', 'powershell -File my-update.ps1', 'powershell -File daemon\\update.sh']) assert.ok(!re.test(cmd), 'should not match: ' + cmd);
+  const loop = ps1.split('$lockIsOld = ($lockAge -ge $stuckAfter)')[1].split('Wait-TestGate $env:GAFFER_UPDATE_TEST_GATE')[0];
+  assert.ok(loop.includes('try { $ancestors = @(Get-AncestorProcessIds) } catch {'), 'this updater\'s own parent chain is built from Win32_Process');
+  assert.ok(loop.includes('if ($ancestors -contains [int] $proc.ProcessId) {\n            Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."\n            Write-Output "err:lock"'), 'a holder on the parent chain is refused with err:lock');
+  assert.ok(loop.includes('if (-not $proc.Stoppable) {\n            Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."\n            Write-Output "err:lock"'), 'a name-only holder past the stuck age is refused with err:lock, never stopped');
+  assert.ok(loop.indexOf('$ancestors -contains') < loop.indexOf('-not $proc.Stoppable'), 'the parent-chain refusal comes first');
+  assert.ok(ps1.includes('Stop-LockHolder $proc $ancestors'), 'the parent chain is passed to the stop as protected pids');
+  const desc = ps1.split('function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, [int[]] $protect) {')[1].split('\n}\n')[0];
+  assert.ok(desc.includes('if ($protect -and ($protect -contains [int] $p.ProcessId)) { continue }'), 'protected pids are never listed as descendants');
+  assert.ok(desc.includes('-or $p.ProcessId -eq $PID -or'), 'this very process is never listed as a descendant');
+  const anc = ps1.split('function Get-AncestorProcessIds {')[1].split('\n}\n')[0];
+  assert.ok(anc.includes('if ($cur.CreationDate -and $parent.CreationDate -and $parent.CreationDate -gt $cur.CreationDate) { break }'), 'a parent younger than its child is a reused pid, the walk stops');
+  assert.ok(anc.includes('Get-CimInstance Win32_Process -OperationTimeoutSec 15 -ErrorAction Stop'), 'a failed query throws, so the caller exits busy instead of guessing');
+  assert.ok(loop.includes('Could not inspect this process\'s own parent chain'), 'a failed ancestor query means busy');
+  assert.ok(ps1.includes('$lockAhead = (($lockUtc - [DateTime]::UtcNow).TotalSeconds -gt 5)'), 'a lock written over 5 s in the future is flagged');
+  assert.ok(fn.includes('if ($lockAhead) {\n        return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $proc.CreationDate; Unverified = $false; Stoppable = $false }\n    }'), 'any live pid under a future-dated lock is a busy, never-stoppable holder');
+  assert.ok(fn.indexOf('if ($lockAhead)') < fn.indexOf('if (-not ($nameOk -or $scriptOk))'), 'the future-dated rule comes before the name test');
 });
 
 test('update.ps1 clears a stale takeover marker by atomic rename and treats future-dated locks as stale', () => {
@@ -186,17 +279,26 @@ test('update.ps1 clears a stale takeover marker by atomic rename and treats futu
 });
 
 test('update.ps1 stops a stuck holder through Win32_Process descendants, taskkill /T only as fallback, and opens its try/finally right after the lock', () => {
-  assert.ok(ps1.includes('function Get-DescendantProcessIds([int] $rootPid, $rootCreated) {'));
+  assert.ok(ps1.includes('function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, [int[]] $protect) {'));
   assert.ok(ps1.includes('if ($cur.Created -and $p.CreationDate -and $p.CreationDate -lt $cur.Created) { continue }'), 'a child older than its parent is a stale parent pid, not a descendant');
   assert.ok(ps1.includes('$queue.Enqueue(@{ Id = $p.ProcessId; Created = $p.CreationDate })'), 'descendants are followed to any depth');
-  const stop = ps1.split('function Stop-LockHolder($proc) {')[1].split('\n}\n')[0];
-  assert.ok(stop.includes('foreach ($k in $kids) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }'), 'descendants are stopped one by one');
-  assert.ok(stop.indexOf('Stop-Process -Id $holderPid -Force') < stop.indexOf('Get-DescendantProcessIds $holderPid'), 'the holder first, so nothing new is started after the snapshot, then its descendants');
-  assert.ok(stop.includes('$more = @()'), 'a second pass catches what a dying child started meanwhile');
-  assert.ok(!ps1.includes('youngest first'), 'the stale "youngest first" comment is gone (a hashtable has no order)');
-  assert.ok(stop.includes('& $taskkill /PID $holderPid /T /F'), 'taskkill /T /F stays as the fallback');
-  assert.ok(stop.indexOf('} else {') < stop.indexOf('& $taskkill'), 'taskkill runs only when the enumeration failed');
+  assert.ok(ps1.includes('if ($createdBefore -and $p.CreationDate -and ([DateTime] $p.CreationDate).ToUniversalTime() -gt $createdBefore) { continue }'), 'after the stop only processes created before it count (a recycled pid\'s new children never do)');
+  const stop = ps1.split('function Stop-LockHolder($proc, [int[]] $protect) {')[1].split('\n}\n')[0];
+  const firstList = stop.indexOf('Get-DescendantProcessIds $holderPid $proc.CreationDate $null $protect');
+  const taskkill = stop.indexOf('& $taskkill /PID $holderPid /T /F');
+  const stopAt = stop.indexOf('$stopAt = [DateTime]::UtcNow');
+  const stopHolder = stop.indexOf('Stop-Process -Id $holderPid -Force');
+  const secondList = stop.indexOf('Get-DescendantProcessIds $holderPid $proc.CreationDate $stopAt $protect');
+  assert.ok(firstList !== -1 && taskkill !== -1 && stopAt !== -1 && stopHolder !== -1 && secondList !== -1);
+  assert.ok(firstList < taskkill && taskkill < stopAt && stopAt < stopHolder && stopHolder < secondList, 'order: list while alive, taskkill (alive) on a failed listing, else note the instant, stop the holder, re-list once with the instant');
+  assert.ok(stop.includes('if (-not $listed) {\n        Write-Host "  could not list the stuck update\'s processes, using taskkill /T"'), 'taskkill runs only when the enumeration failed, and before anything is stopped');
+  assert.ok(stop.includes('$order = @($tree.Values | Sort-Object -Property CreationDate -Descending)'), 'the union of both passes is stopped youngest first');
+  assert.ok(stop.includes('foreach ($k in $order) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }'), 'descendants are stopped one by one');
+  assert.ok(stop.includes('$more = @()'), 'a second pass catches what a child started between the listing and the stop');
   assert.ok(stop.includes('descendant process(es)'), 'the enumeration is logged');
+  assert.ok(ps1.includes('if ($script:testFailList) { $script:testFailList = $false; throw "GAFFER_UPDATE_TEST_FAIL_LIST" }'), 'the harness can make the first listing fail');
+  assert.ok(ps1.includes('$script:testFailList = [bool] ($env:GAFFER_UPDATE_ASSET -and $env:GAFFER_UPDATE_TEST_FAIL_LIST)'), 'that knob is gated like the stuck-age knob');
+  assert.ok(ps1.includes('Residual risk, left for a later release: two clocks are compared'), 'the deferred clock risks are noted next to the reuse guard');
   const tryAt = ps1.indexOf('\ntry {');
   const dotSource = ps1.indexOf('. "$PSScriptRoot\\stop-daemon.ps1"');
   const lockLoopEnd = ps1.lastIndexOf('$script:haveLock = $true');
@@ -217,7 +319,8 @@ test('update.ps1 computes every age in UTC and tolerates 300 s of skew', () => {
   assert.ok(ps1.includes('if ($age -lt -300) {\n        Write-Host "Removing a takeover marker dated in the future'), 'the future-dated log line follows the same tolerance');
   assert.ok(!/\$lockAge -lt 0\b/.test(ps1) && !/\$age -lt 0\)/.test(ps1), 'no bare negative-age rule is left');
   assert.ok(ps1.includes('$stuckAfter = 900'), 'the stuck age is 15 minutes');
-  assert.ok(ps1.includes("if (\"$env:GAFFER_UPDATE_TEST_STUCK_AFTER\" -match '^\\d+$') { $stuckAfter = [int] $env:GAFFER_UPDATE_TEST_STUCK_AFTER }"), 'the harness may lower it (digits only)');
+  assert.ok(ps1.includes("if ($env:GAFFER_UPDATE_ASSET -and \"$env:GAFFER_UPDATE_TEST_STUCK_AFTER\" -match '^\\d+$' -and\n    [int]::TryParse($env:GAFFER_UPDATE_TEST_STUCK_AFTER, [ref] $stuckOverride) -and\n    $stuckOverride -ge 1 -and $stuckOverride -le 86400) { $stuckAfter = $stuckOverride }"), 'the harness may lower it: only next to GAFFER_UPDATE_ASSET, digits only, 1 to 86400, TryParse so a huge value cannot throw');
+  assert.ok(!ps1.includes('[int] $env:GAFFER_UPDATE_TEST_STUCK_AFTER'), 'no bare [int] cast of the knob (a huge value would throw before the try)');
 });
 
 test('update.ps1 treats a seconds-old lock with no readable pid as busy', () => {
@@ -230,26 +333,25 @@ test('update.ps1 recognises a holder by process name and creation time, keeps th
   const fn = ps1.split('function Get-LockHolderProcess([string] $holder, [DateTime] $lockWrittenUtc) {')[1].split('\n}\n')[0];
   assert.ok(fn.includes('Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -OperationTimeoutSec 15 -ErrorAction Stop'), 'the holder query has a timeout and surfaces failures');
   assert.ok(fn.includes('$queryFailed = $true'));
-  assert.ok(fn.includes('if (Get-Process -Id $holderPid -ErrorAction SilentlyContinue) {\n            return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $null; Unverified = $true }'), 'a failed query with a live pid is Unverified, not $null');
+  assert.ok(fn.includes('if (Get-Process -Id $holderPid -ErrorAction SilentlyContinue) {\n            return [pscustomobject] @{ ProcessId = $holderPid; CreationDate = $null; Unverified = $true; Stoppable = $false }'), 'a failed query with a live pid is Unverified, not $null');
   assert.ok(fn.includes("$nameOk = (\"$($proc.Name)\" -match '^(powershell|pwsh)\\.exe$')"), 'a powershell.exe or pwsh.exe counts (a hand-run .\\update.ps1 has no script path in its command line)');
-  assert.ok(fn.includes('$pathOk = ("$($proc.CommandLine)" -match "daemon[\\\\/]update\\.ps1")'), 'the daemon path match is still accepted');
-  assert.ok(fn.includes('if (-not ($nameOk -or $pathOk)) { return $null }'));
+  assert.ok(fn.includes('if (-not ($nameOk -or $scriptOk)) { return $null }'));
   assert.ok(fn.includes('$createdUtc = ([DateTime] $proc.CreationDate).ToUniversalTime()'));
-  assert.ok(fn.includes('if ($createdUtc -gt $lockWrittenUtc.ToUniversalTime().AddSeconds(5)) { return $null }'), 'created after the lock was written (plus 5 s) is a reused pid, whatever the name or path');
-  assert.ok(fn.indexOf('if (-not ($nameOk -or $pathOk))') < fn.indexOf('$createdUtc'), 'the creation-time condition applies to both forms');
+  assert.ok(fn.includes('if ($createdUtc -gt $lockUtc.AddSeconds(5)) { return $null }'), 'created after the lock was written (plus 5 s) is a reused pid, whatever the name or path');
+  assert.ok(fn.indexOf('if (-not ($nameOk -or $scriptOk))') < fn.indexOf('$createdUtc'), 'the creation-time condition applies to both forms');
   assert.ok(ps1.includes('if ($proc -and $proc.Unverified) {\n        Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."\n        Write-Output "busy:already-running"'), 'Unverified means busy');
-  assert.ok(ps1.includes('if (-not $now -or $now.Unverified) { return $false }'), 'an Unverified re-read never stops anything');
+  assert.ok(fn.includes('Unverified = $true; Stoppable = $false'), 'an Unverified holder is never stoppable');
   assert.ok(ps1.includes('pid reused).'), 'a live non-holder pid is logged before the takeover');
   for (const line of ps1.split('\n').filter((l) => l.includes('Get-CimInstance'))) {
     assert.ok(line.includes('-OperationTimeoutSec 15'), 'every WMI/CIM call has a 15 s timeout: ' + line.trim());
   }
 });
 
-test('update.ps1 never treats its own pid as a holder and matches the daemon path with either slash', () => {
+test('update.ps1 never treats its own pid as a holder and matches the script name with either slash', () => {
   assert.ok(ps1.includes('if ($holderPid -eq $PID) { return $null }'));
-  assert.ok(ps1.includes('"$($proc.CommandLine)" -match "daemon[\\\\/]update\\.ps1"'), 'holder match accepts daemon\\update.ps1 and daemon/update.ps1');
   assert.ok(!ps1.includes('-like "*daemon\\update.ps1*"'), 'the backslash-only wildcard match is gone');
-  const re = /daemon[\\/]update\.ps1/;
+  assert.ok(!ps1.includes('daemon[\\\\/]update\\.ps1'), 'the daemon-folder-only match is gone (a "-File update.ps1" names the script too)');
+  const re = /(^|[\\/\s"'])update\.ps1/;
   assert.ok(re.test('powershell -File C:\\x\\daemon\\update.ps1'));
   assert.ok(re.test('powershell -File C:/x/daemon/update.ps1'));
   assert.ok(!re.test('powershell -File C:/x/daemon/update.sh'));
@@ -320,7 +422,7 @@ test('the v0.11.3 changelog entry states the measured size saving, the tested-ve
   const entry = changelog.split('## v0.11.3')[1].split('\n## ')[0];
   assert.ok(entry.includes('outside the versions Gaffer was tested with.**'), 'headline matches the bullet (outside, not only newer)');
   assert.ok(entry.includes('about 6 to 9 percent smaller'), 'Mac 6.5 percent, Windows 8.7 percent measured');
-  assert.ok(entry.includes('Updates are safer in rare situations: a stuck update is now stopped completely, including the programs it started, before a new one takes over, and an update started by hand is recognised too. If a network proxy blocks the first download method, Windows now tries the system proxy instead of giving up.'));
+  assert.ok(entry.includes('Updates are safer in rare situations: a stuck update is now stopped completely, including the programs it started, before a new one takes over, an update started by hand is recognised too (and is never force-stopped together with your PowerShell window), and a healthy update is no longer stopped after the clock changes. If a network proxy blocks the first download method, Windows now tries the system proxy instead of giving up.'));
   assert.ok(!/[\u2013\u2014]/.test(entry), 'no em or en dashes in the entry');
   for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1]]) {
     assert.ok(!/[\u2013\u2014]/.test(text), name + ' has no em or en dashes (log lines are user-facing)');
