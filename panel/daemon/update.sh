@@ -98,7 +98,7 @@ test_gate() {
 # "pid reused". Callers decide what a missing age means for them.
 dir_age_seconds() {
   local mtime now
-  mtime="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)" || return 1
+  mtime="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null)" || return 1
   case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
   now="$(date +%s)"
   echo $((now - mtime))
