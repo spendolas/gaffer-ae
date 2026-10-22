@@ -39,8 +39,10 @@
 # Runtime cases (zero-dependency install, spec sections 6 to 8): the release
 # asset is repacked with FAKE runtime pins (a tiny shell script stands in for
 # the Node binary) and fetch-runtime.sh's GAFFER_FETCH_TEST seams serve it
-# from file:// folders, so no case touches nodejs.org, codesign or sysctl and
-# the harness runs on Linux CI too. Covered: an old-layout install (v0.10.8,
+# from file:// folders, so no case touches nodejs.org, codesign or sysctl
+# (the new cases avoid macOS-only tools, but CI does not run this harness;
+# it is run by hand, on macOS so far). Two installs have accented folder
+# names, like real paths can. Covered: an old-layout install (v0.10.8,
 # node_modules, no runtime) gets its runtime provisioned and node_modules
 # removed by the sync; runtime unchanged (no download attempted, the binary's
 # hash and mtime unchanged through rsync --delete); runtime changed (new
@@ -49,7 +51,9 @@
 # swap renames is recovered by the next run; runtime.old restored at start
 # (and a damaged one is not); an archive without daemon/daemon.mjs (pre-bundle
 # layout) is refused; the shipped v0.11.3 updater still accepts the new
-# archive (index.js shim, npm with no dependencies).
+# archive (index.js shim, npm with no dependencies; a missing v0.11.3 tag
+# or npm is a FAILURE unless GAFFER_TEST_ALLOW_NO_TAG=1, so ALL PASS never
+# hides that case; scripts/updater-scripts.test.mjs checks the same in CI).
 # GAFFER_TEST_REAL_RUNTIME=1 (off by default, macOS only, about 54 MB) adds
 # one integration case that provisions the REAL pinned runtime from
 # nodejs.org with the signature check on.
@@ -367,6 +371,10 @@ if grep -q "^ERROR: download or extract failed" "$LOG"; then pass "broken downlo
 # The panel dir is made unwritable, so rsync can neither delete the stale
 # file nor create new ones; under plain set -e rsync's own complaint would
 # be the last log line.
+# Root ignores directory permissions, so the case cannot fail rsync there.
+if [ "$(id -u)" = "0" ]; then
+  echo "SKIP: case 2b (running as root, chmod a-w does not stop rsync)"
+else
 SYNC_INSTALL="$SCRATCH/Application Support/sync-fail/com.gaffer.panel"
 new_install "$SYNC_INSTALL"
 : > "$LOG"
@@ -380,11 +388,12 @@ if [ "$SYNC_EXIT" -eq 1 ]; then pass "update.sh exited 1 when rsync failed"; els
 if [ "$(tail -n1 "$LOG")" = "err:sync" ]; then pass "failed rsync ends the log with err:sync"; else fail "failed rsync last log line: $(tail -n1 "$LOG")"; fi
 if grep -q "^ERROR: replacing the panel files failed (rsync)" "$LOG"; then pass "failed rsync logs an ERROR line"; else fail "no ERROR line for the failed rsync"; fi
 if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after the failed rsync"; else pass "update lock released after the failed rsync"; fi
+fi
 
 # ---------- Case R1: runtime unchanged, no download, the binary untouched by rsync --delete ----------
 # The installed runtime matches the archive's pins. The download bases point
 # nowhere, so any download attempt would fail the run with err:runtime.
-RT_SAME="$SCRATCH/Application Support/rt-same/com.gaffer.panel"
+RT_SAME="$SCRATCH/Application Support/rt-sàme/com.gaffer.panel"
 new_install "$RT_SAME"
 seed_runtime "$RT_SAME" "$RT_V1"
 RT_SHA_BEFORE="$(file_sha "$RT_SAME/daemon/runtime/node")"
@@ -433,7 +442,7 @@ NEWER="$(find "$RT_NEWPIN" -type f -newer "$RT_NEWPIN/version.json" | head -5)"
 if [ -z "$NEWER" ]; then pass "runtime changed: version.json still written last"; else fail "runtime changed: files written after version.json: $NEWER"; fi
 
 # ---------- Case R3: a failed stage ends with err:runtime and leaves the install untouched ----------
-RT_FAIL="$SCRATCH/Application Support/rt-fail/com.gaffer.panel"
+RT_FAIL="$SCRATCH/Application Support/rt-fàil/com.gaffer.panel"
 new_install "$RT_FAIL"
 seed_runtime "$RT_FAIL" "$RT_V1"
 BEFORE="$(full_tree_hash "$RT_FAIL")"
@@ -1007,7 +1016,11 @@ if git -C "$REPO_ROOT" rev-parse -q --verify "$OLD_UPDATER_REF^{commit}" >/dev/n
     fail "after v0.11.3: the new updater did not finish the migration (log: $(tail -n5 "$LOG" | tr '\n' '|'))"
   fi
 else
-  echo "SKIP: v0.11.3 updater case (tag $OLD_UPDATER_REF or npm not available)"
+  if [ "${GAFFER_TEST_ALLOW_NO_TAG:-}" = "1" ]; then
+    echo "SKIP: v0.11.3 updater case (tag $OLD_UPDATER_REF or npm not available, GAFFER_TEST_ALLOW_NO_TAG=1)"
+  else
+    fail "v0.11.3 updater case could not run: tag $OLD_UPDATER_REF or npm missing (fetch tags, or set GAFFER_TEST_ALLOW_NO_TAG=1 to skip it knowingly)"
+  fi
 fi
 
 # ---------- Case INT: real runtime from nodejs.org (opt-in) ----------
