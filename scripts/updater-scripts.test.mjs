@@ -673,10 +673,12 @@ test('the Windows field harness for the runtime step covers the spec 8 flows and
   assert.deepEqual([...t6raw.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'UTF-8 BOM');
   assert.ok(![...t6raw.subarray(3)].some((b) => b > 127), 'ASCII only');
   const t6 = t6raw.subarray(3).toString('utf8');
-  for (const c of ['Case 1: runtime unchanged', 'Case 2: runtime changed', 'Case 2b: runtime changed while a node.exe runs', 'Case 3: stage failure', 'Case 3b: an archive without fetch-runtime.ps1', 'Case 4a: killed between the two renames', 'Case 4b: a current runtime.old']) {
+  for (const c of ['Case 1: runtime unchanged', 'Case 2: runtime changed', 'Case 2b: runtime changed while a node.exe runs', 'Case 3: stage failure', 'Case 3b: an archive without fetch-runtime.ps1', 'Case 4a: killed between the two renames', 'Case 4b: a current runtime.old', 'Case 4c: the restore of runtime.old fails']) {
     assert.ok(t6.includes(c), 'missing ' + c);
   }
   assert.ok(t6.includes('$env:GAFFER_UPDATE_TEST_SWAP_GATE = $gate'), 'the harness uses the swap gate the updater offers');
+  assert.ok(t6.includes('(Get-LastLogLine) -eq "err:runtime-swap") { Pass "4c:'), 'case 4c expects err:runtime-swap');
+  assert.ok(t6.includes('[System.IO.FileShare]::Read)') && t6.includes('} finally { $held.Dispose() }'), 'case 4c blocks the restore with an open file and always releases it');
   assert.ok(t6.includes('old daemon\\node_modules removed by the sync'));
   assert.ok(t6.includes('Write-Host "ALL PASS"; exit 0'));
   assert.ok(!/&&|\|\|/.test(t6.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'no PS 7 chain operators');
@@ -871,6 +873,20 @@ test('update.sh documents that GAFFER_UPDATE_ASSET also enables the GAFFER_FETCH
 test('update.ps1: a failed move of runtime.new into place ends with err:runtime-swap', () => {
   assert.ok(ps1Body.includes('Exit-Update "could not move the new runtime into place: $reason" "runtime-swap"'));
   assert.ok(ps1.includes('err:runtime-swap'), 'the contract comment names err:runtime-swap');
+});
+
+test('update.ps1: a failed restore of runtime.old at the start ends with err:runtime-swap, before anything is fetched (like update.sh)', () => {
+  const recover = ps1Body.indexOf('if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {');
+  const download = ps1Body.indexOf('Get-ReleaseAsset $assetSource $zipPath');
+  const block = ps1Body.slice(recover, download);
+  assert.ok(block.includes('[System.IO.Directory]::Move($runtimeOld, $runtimeDir)\n                Write-Host "Restored daemon\\runtime from runtime.old'), 'the restore');
+  assert.ok(block.includes('} catch {\n                Exit-Update "could not restore daemon\\runtime from runtime.old (an earlier update stopped between its two renames): $($_.Exception.Message)" "runtime-swap"\n            }'),
+    'a failed restore ends err:runtime-swap through Exit-Update (ERROR line, err: line, exit 1, lock released by the finally)');
+  assert.ok(!block.includes('Could not restore daemon\\runtime from runtime.old:'), 'no log-and-continue');
+  assert.ok(ps1Body.indexOf('function Exit-Update(') < recover, 'Exit-Update is defined before the recovery');
+  const exitFn = ps1Body.slice(ps1Body.indexOf('function Exit-Update('), ps1Body.indexOf('\n}\n', ps1Body.indexOf('function Exit-Update(')));
+  assert.ok(exitFn.includes('if ($code) { Write-Output "err:$code" }') && exitFn.includes('exit 1'), 'Exit-Update prints err:<code> and exits 1, as update.sh does');
+  assert.ok(/#[^\n]*restoring an interrupted\n#[^\n]*swap's runtime\.old failed/.test(ps1), 'the header contract names the recovery failure');
 });
 
 test('update.sh swap_runtime failing mid-swap really ends the run with err:runtime-swap (run under bash)', () => {
