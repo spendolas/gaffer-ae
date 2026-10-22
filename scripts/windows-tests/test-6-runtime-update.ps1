@@ -37,6 +37,10 @@
 #   4b the same state with a CURRENT runtime.old and unreachable sources: the
 #      next update restores it and finds it current (no download), the
 #      runtime is byte-identical to before.
+#   4c the same state, but the restore cannot rename runtime.old back (this
+#      script holds a file inside it open without delete sharing, which
+#      blocks a directory rename): err:runtime-swap, exit 1, before anything
+#      is downloaded, the install byte-identical, lock and temp cleaned up.
 #   5a repair (update.ps1 -Repair, the panel's Repair button) at the SAME
 #      version with a current runtime: fetch-runtime.ps1 gets -Force, the
 #      runtime is downloaded and swapped in as a new folder, version.json
@@ -433,6 +437,25 @@ try {
     if ($code -eq 0 -and (Get-LastLogLine) -eq $wantOk) { Pass "4b: ends $wantOk" } else { Fail "4b: exit $code, last line $(Get-LastLogLine)" }
     if ((Get-RuntimeFingerprint $c4b) -eq $fp) { Pass "4b: the runtime is byte-identical to before the interrupted swap" } else { Fail "4b: the runtime differs" }
     Test-Clean $c4b "4b"
+
+    # ---------- Case 4c: the restore of runtime.old fails ----------
+    $c4c = New-TestInstall "case4c" $currentLine
+    [System.IO.Directory]::Move((Join-Path $c4c "daemon\runtime"), (Join-Path $c4c "daemon\runtime.old"))
+    $before = Get-TreeHash $c4c
+    Set-FetchEnv $unreachable $goodPins
+    # FileShare.Read without Delete: Windows refuses to rename a folder that
+    # holds a file open like this (a running node.exe would not block it).
+    $held = [System.IO.File]::Open((Join-Path $c4c "daemon\runtime.old\VERSION"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $code = Invoke-Update $c4c $asset
+    } finally { $held.Dispose() }
+    $log = Read-Log
+    if ($code -eq 1 -and (Get-LastLogLine) -eq "err:runtime-swap") { Pass "4c: a failed restore of runtime.old ends with err:runtime-swap, exit 1" } else { Fail "4c: exit $code, last line $(Get-LastLogLine) (log: $logPath; if the restore succeeded, the open file did not block the folder rename)" }
+    if ($log -match "ERROR: could not restore daemon\\runtime from runtime\.old") { Pass "4c: the log names the failed restore" } else { Fail "4c: no 'could not restore' ERROR line in the log" }
+    if ($log -notmatch "(?m)^Downloading ") { Pass "4c: nothing was downloaded" } else { Fail "4c: the updater went on to download after the failed restore" }
+    if ((Get-TreeHash $c4c) -eq $before) { Pass "4c: install untouched (runtime.old still there, no runtime)" } else { Fail "4c: the install changed" }
+    if (Get-ChildItem -LiteralPath $tmp -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "gaffer-update-*" }) { Fail "4c: temp folders left in $tmp" } else { Pass "4c: temp folders cleaned up" }
+    if (Test-Path -LiteralPath $lockPath) { Fail "4c: update lock left behind" } else { Pass "4c: update lock released" }
 
     # ---------- Case 5a: repair re-provisions a current runtime at the same version ----------
     $c5 = New-TestInstall "case5a" $currentLine

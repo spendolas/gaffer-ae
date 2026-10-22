@@ -42,7 +42,9 @@ if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if 
 #                           err:sync, err:runtime) after an ERROR line
 #                           (err:runtime before the swap: install untouched;
 #                           err:runtime-swap: moving the new runtime into
-#                           place failed, the install may be unfinished)
+#                           place failed, or restoring an interrupted
+#                           swap's runtime.old failed, the install may be
+#                           unfinished)
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -746,14 +748,16 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # Recovery first (spec 6.8): an updater stopped between the two runtime
     # renames leaves runtime.old and no runtime. Rename it back when it
     # passes the size check; one that does not is left to the runtime step
-    # below, which provisions a fresh runtime and clears it.
+    # below, which provisions a fresh runtime and clears it. A rename back
+    # that fails ends err:runtime-swap before anything is fetched or changed,
+    # like update.sh (Repair, or reinstall).
     if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {
         if (Test-RuntimeStamp $runtimeOld) {
             try {
                 [System.IO.Directory]::Move($runtimeOld, $runtimeDir)
                 Write-Host "Restored daemon\runtime from runtime.old (an earlier update stopped between its two renames)"
             } catch {
-                Write-Host "Could not restore daemon\runtime from runtime.old: $($_.Exception.Message)"
+                Exit-Update "could not restore daemon\runtime from runtime.old (an earlier update stopped between its two renames): $($_.Exception.Message)" "runtime-swap"
             }
         } else {
             Write-Host "Found daemon\runtime.old without a runtime, but it fails the size check; the runtime step provisions a new one"
