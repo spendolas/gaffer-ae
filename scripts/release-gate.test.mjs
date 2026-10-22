@@ -68,6 +68,20 @@ test('0.12.0 with four assets -> recover', () => {
   assert.equal(r.action, 'recover');
 });
 
+test('requiredAssets compares the numeric version only: a 0.12.0 prerelease needs SHA256SUMS.txt', () => {
+  assert.equal(requiredAssets('0.12.0-beta.1').length, 5);
+  assert.ok(requiredAssets('0.12.0-beta.1').includes('SHA256SUMS.txt'));
+  assert.equal(requiredAssets('0.11.4-beta.1').length, 4);
+  assert.equal(requiredAssets('0.12.0').length, 5);
+  assert.equal(requiredAssets('0.11.3').length, 4);
+  assert.equal(requiredAssets('1.0.0-rc.1').length, 5);
+});
+
+test('0.12.0-beta.1 published with four assets -> recover (missing SHA256SUMS.txt)', () => {
+  const r = decide({ version: '0.12.0-beta.1', tags: ['v0.12.0-beta.1'], release: { isDraft: false, assets: four() }, changelog: CHANGELOG.replace('0.11.0-beta.1', '0.12.0-beta.1') });
+  assert.equal(r.action, 'recover');
+});
+
 test('0.12.0 with five assets -> skip', () => {
   const r = decide({ version: '0.12.0', tags: ['v0.12.0'], release: { isDraft: false, assets: allAssets() }, changelog: '' });
   assert.equal(r.action, 'skip');
