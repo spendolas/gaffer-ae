@@ -514,6 +514,19 @@
     try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ } // offers Repair
   }
 
+  // Another panel's updater is swapping the runtime (resolveDaemonLaunch
+  // retry, or err:runtime-updating from start.sh / start.ps1 on the
+  // ExtendScript route): not an error, try again shortly (the "Starting
+  // daemon..." status stays up). Bounded by swapRetries / SWAP_RETRY_MAX.
+  function scheduleSwapRetry() {
+    swapRetries++;
+    setTimeout(function () {
+      daemonStartAttempted = false;
+      if (window.__gafferUpdating || (ws && ws.readyState === 1)) return; // ours is updating, or a daemon came up
+      startDaemon();
+    }, SWAP_RETRY_MS);
+  }
+
   // Returns 'started', 'refused' (a notice is showing or about to),
   // 'retry' (swap window, a retry is scheduled), or false only when
   // CEP Node integration or GafferLaunch is unavailable (then the ExtendScript
@@ -547,14 +560,7 @@
       });
       appendDaemonLog(fs, launch.notes);
       if (launch.retry) {
-        // Another panel's updater is swapping the runtime: not an error, try
-        // again shortly (the "Starting daemon..." status stays up).
-        swapRetries++;
-        setTimeout(function () {
-          daemonStartAttempted = false;
-          if (window.__gafferUpdating || (ws && ws.readyState === 1)) return; // ours is updating, or a daemon came up
-          startDaemon();
-        }, SWAP_RETRY_MS);
+        scheduleSwapRetry();
         return 'retry';
       }
       swapRetries = 0;
@@ -586,6 +592,10 @@
   function spawnViaExtendScript() {
     // Fallback for CEP contexts without Node integration.
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    // Once the bounded swap wait is over, the launcher skips its swap-window
+    // rule (resolveDaemonLaunch's swapWaitExpired), so a stranded runtime.old
+    // or runtime.new never blocks the launch forever.
+    var arg = (Launch && swapRetries >= SWAP_RETRY_MAX) ? ' ' + Launch.SWAP_WAIT_EXPIRED_ARG : '';
     var jsx = '(function() {'
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
@@ -593,16 +603,30 @@
       // -NoProfile: a user profile could re-introduce NODE_OPTIONS or change
       // the PATH that start.ps1's system-node search sees. powershell -File
       // accepts the forward slashes.
-      + '  return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"");'
+      + '  return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"' + arg + '");'
       + '} else {'
-      + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"");'
+      + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"' + arg + '");'
       + '}'
       + '})()';
     cs.evalScript(jsx, function (result) {
       console.log('Gaffer: daemon spawn via ExtendScript: ' + result);
-      // Launcher contract: pid:<N> runtime|node, or err:<code>.
-      var m = String(result).match(/err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)/);
-      if (m) showLaunchError(m[1] === 'launch-usage' ? 'launch-failed' : m[1]);
+      // Launcher contract: pid:<N> runtime|node, or err:<code>
+      // (GafferLaunch.parseLauncherOutput).
+      var out;
+      if (Launch) {
+        out = Launch.parseLauncherOutput(result);
+      } else {
+        var m = String(result).match(/err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)/);
+        out = m ? { error: m[1] === 'launch-usage' ? 'launch-failed' : m[1] } : {};
+      }
+      if (out.retry) {
+        // err:runtime-updating: an updater is swapping the runtime, no
+        // user-facing error, the same bounded retry as the Node route.
+        scheduleSwapRetry();
+        return;
+      }
+      swapRetries = 0;
+      if (out.error) showLaunchError(out.error);
     });
   }
 

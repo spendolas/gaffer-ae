@@ -8,14 +8,23 @@
 #      size and sha256 match the win-x64 pin in runtime-pins.json, then the
 #      stamp is written). A runtime that fails the check is NEVER bypassed
 #      with a system node.
-#   2. No runtime: system node (%ProgramFiles%, %LOCALAPPDATA%\Programs, then
+#   2. No runtime but runtime.old or runtime.new next to it: an updater is
+#      swapping the runtime. A stateless launcher cannot wait, so it starts
+#      nothing and prints err:runtime-updating; the panel retries in a few
+#      seconds, bounded like its own swap wait, and once that wait is over
+#      passes the argument swap-wait-expired, which skips this rule.
+#   3. No runtime: system node (%ProgramFiles%, %LOCALAPPDATA%\Programs, then
 #      PATH) with daemon.mjs when present, else index.js.
 # The spawn itself is launch.cjs (detached, hidden, log appended, cleaned
 # env); Start-Process with redirection hung the caller and truncated the log.
 # Output contract, one line on stdout (panel/main.js parses it):
 #   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
+#   | err:runtime-updating (not an error: retry shortly)
 # Keep this file ASCII-only with a UTF-8 BOM (Windows PowerShell 5.1).
 # Test seam: GAFFER_DAEMON_LOG moves the log, only when GAFFER_TEST=1.
+
+# The only argument: swap-wait-expired (the panel's bounded swap wait is over).
+$swapWaitExpired = ($args.Count -gt 0 -and [string] $args[0] -eq 'swap-wait-expired')
 
 # CSInterface paths arrive with forward slashes; work on one native path.
 $dir = (Split-Path -Parent $MyInvocation.MyCommand.Path) -replace '/', '\'
@@ -140,6 +149,15 @@ if ($env:NODE_EXTRA_CA_CERTS -and ($null -eq $env:GAFFER_CLAUDE_EXTRA_CA_CERTS))
 Remove-Item -LiteralPath Env:NODE_OPTIONS -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath Env:NODE_PATH -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath Env:NODE_EXTRA_CA_CERTS -ErrorAction SilentlyContinue
+
+if (-not $swapWaitExpired -and -not (Test-Path -LiteralPath $bin)) {
+    $swapping = @()
+    if (Test-Path -LiteralPath (Join-Path $dir 'runtime.old')) { $swapping += 'runtime.old' }
+    if (Test-Path -LiteralPath (Join-Path $dir 'runtime.new')) { $swapping += 'runtime.new' }
+    if ($swapping.Count -gt 0) {
+        Stop-Launch 'runtime-updating' ('no runtime but ' + ($swapping -join ' and ') + ' present, an update is swapping the runtime, the panel retries shortly')
+    }
+}
 
 if (Test-Path -LiteralPath $bin) {
     Test-BundledRuntime

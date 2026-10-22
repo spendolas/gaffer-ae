@@ -280,8 +280,35 @@
     return { bin: node, args: [entry], cwd: daemonDir, kind: 'node', notes: notes };
   }
 
+  // The ExtendScript route's launcher output (start.sh / start.ps1, spec
+  // section 5), one contract line:
+  //   pid:<N> runtime | pid:<N> node | err:runtime-damaged |
+  //   err:runtime-missing | err:runtime-updating | err:launch-failed
+  // -> { pid, kind } | { retry: 'runtime-updating' } | { error: code } | {}.
+  // err:runtime-updating is the launchers' form of resolveDaemonLaunch's
+  // swap-window retry (no runtime, runtime.old or runtime.new present): not
+  // an error, the panel tries again shortly. launch-usage (launch.cjs called
+  // wrongly) reads as launch-failed. Anything else (no output: callSystem
+  // failed) is {} and shows nothing, as before.
+  function parseLauncherOutput(result) {
+    var s = String(result == null ? '' : result);
+    if (/(^|\s)err:runtime-updating(\s|$)/.test(s)) return { retry: 'runtime-updating' };
+    var m = s.match(/(^|\s)err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)(\s|$)/);
+    if (m) return { error: m[2] === 'launch-usage' ? 'launch-failed' : m[2] };
+    m = s.match(/(^|\s)pid:(\d+) (runtime|node)(\s|$)/);
+    if (m) return { pid: Number(m[2]), kind: m[3] };
+    return {};
+  }
+
+  // Argument the panel hands start.sh / start.ps1 once its bounded swap wait
+  // is over: the launcher then skips the swap-window rule, like
+  // resolveDaemonLaunch with swapWaitExpired.
+  var SWAP_WAIT_EXPIRED_ARG = 'swap-wait-expired';
+
   var api = {
     resolveDaemonLaunch: resolveDaemonLaunch,
+    parseLauncherOutput: parseLauncherOutput,
+    SWAP_WAIT_EXPIRED_ARG: SWAP_WAIT_EXPIRED_ARG,
     cleanDaemonEnv: cleanDaemonEnv,
     normalizeWinPath: normalizeWinPath,
     launchNotice: launchNotice,
