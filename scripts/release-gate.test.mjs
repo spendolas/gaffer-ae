@@ -29,7 +29,7 @@ const CHANGELOG = [
 
 const allAssets = () => REQUIRED_ASSETS.map((name) => ({ name }));
 
-test('published release with all four assets -> skip', () => {
+test('published release with all five assets -> skip', () => {
   const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets: allAssets() }, changelog: '' });
   assert.equal(r.action, 'skip');
 });
@@ -41,6 +41,22 @@ test('draft release -> recover', () => {
 
 test('published release missing one asset -> recover', () => {
   const assets = allAssets().filter((a) => a.name !== 'gaffer-update-win.zip');
+  const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets }, changelog: CHANGELOG });
+  assert.equal(r.action, 'recover');
+});
+
+test('the required asset list is the four archives plus SHA256SUMS.txt', () => {
+  assert.deepEqual([...REQUIRED_ASSETS].sort(), [
+    'SHA256SUMS.txt',
+    'gaffer-install-mac.tar.gz',
+    'gaffer-install-win.zip',
+    'gaffer-update-mac.tar.gz',
+    'gaffer-update-win.zip',
+  ]);
+});
+
+test('published release missing only SHA256SUMS.txt -> recover', () => {
+  const assets = allAssets().filter((a) => a.name !== 'SHA256SUMS.txt');
   const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets }, changelog: CHANGELOG });
   assert.equal(r.action, 'recover');
 });

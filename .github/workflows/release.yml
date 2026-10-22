@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes a GitHub Release with four uploaded assets when
+# Publishes a GitHub Release with five uploaded assets when
 # panel/version.json changes on main. scripts/release-gate.mjs decides
 # create / recover / skip, so a push that does not bump the version (or
 # only touches the legacy commit field) is a no-op. Manual runs default to a
@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           (cd panel/daemon && npm ci && npm test)
           node scripts/check-ps-encoding.mjs
-          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs scripts/runtime-pins.test.mjs scripts/third-party-notices.test.mjs
 
       - name: Build assets
         if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
@@ -151,7 +151,7 @@ jobs:
           ls -l artifact/dist
           # Every installer and updater downloads one of these by exact name;
           # a release missing any of them would break installs or updates.
-          for asset in gaffer-install-mac.tar.gz gaffer-install-win.zip gaffer-update-mac.tar.gz gaffer-update-win.zip; do
+          for asset in gaffer-install-mac.tar.gz gaffer-install-win.zip gaffer-update-mac.tar.gz gaffer-update-win.zip SHA256SUMS.txt; do
             if [ ! -f "artifact/dist/$asset" ]; then
               echo "Required release asset missing from the build artifact: $asset"
               exit 1
