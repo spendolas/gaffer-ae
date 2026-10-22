@@ -317,3 +317,83 @@ test('CLAUDE.md describes the bundle, the pinned runtime and five release assets
   assert.ok(claudeMd.includes('daemon.mjs'));
   assert.ok(claudeMd.includes('ASCII-only with a UTF-8 BOM'), '.ps1 rules unchanged');
 });
+
+// ---- Developer installers (spec 9): install-win.ps1 test switches, windows-tests/test-7 ----
+// The behaviour runs on Windows only (scripts/windows-tests/test-7-install-win.ps1).
+
+const raw = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)));
+const readNoBom = (rel) => raw(rel).toString('utf8').replace(/^\uFEFF/, '');
+const win = readNoBom('./install-win.ps1');
+const t7 = readNoBom('./windows-tests/test-7-install-win.ps1');
+const SWITCHES = ['-ExtensionsDir', '-NoSymlink', '-NoStopDaemon', '-NoRegistry', '-NoMcp'];
+
+// Text between the first occurrence of `start` and the next line at column 0
+// that starts with `stop` (a regex), for checking what a branch encloses.
+function between(text, start, stop) {
+  const i = text.indexOf(start);
+  assert.ok(i !== -1, 'not found: ' + start);
+  const rest = text.slice(i);
+  const j = rest.slice(start.length).search(stop);
+  return j === -1 ? rest : rest.slice(0, start.length + j);
+}
+
+test('install-win.ps1 and test-7 are ASCII with a UTF-8 BOM', () => {
+  for (const rel of ['./install-win.ps1', './windows-tests/test-7-install-win.ps1']) {
+    const b = raw(rel);
+    assert.deepEqual([...b.subarray(0, 3)], [0xef, 0xbb, 0xbf], rel + ' BOM');
+    assert.ok(![...b.subarray(3)].some((c) => c > 0x7e || (c < 0x20 && c !== 0x0a && c !== 0x0d && c !== 0x09)), rel + ' ASCII only');
+  }
+});
+
+test('install-win.ps1 declares the test switches with defaults that keep the old behaviour', () => {
+  const param = between(win, 'param(', /^\)/m);
+  assert.match(param, /\[string\] \$ExtensionsDir = ""/);
+  for (const s of ['NoSymlink', 'NoStopDaemon', 'NoRegistry', 'NoMcp']) assert.match(param, new RegExp('\\[switch\\] \\$' + s + '\\b'));
+  assert.ok(win.indexOf('param(') < win.indexOf('$ErrorActionPreference = "Stop"'), 'param block comes first');
+  assert.ok(win.includes('if (-not $ExtensionsDir) { $ExtensionsDir = "$env:APPDATA\\Adobe\\CEP\\extensions" }'), 'default is the real CEP extensions folder');
+  assert.ok(win.includes('$installDir = Join-Path $ExtensionsDir $extensionId'));
+  for (const s of SWITCHES) assert.ok(win.split('\n').slice(0, 30).join('\n').includes(s), 'header usage documents ' + s);
+});
+
+test('every side effect sits behind its switch', () => {
+  const stop = between(win, 'if ($NoStopDaemon) {', /^\}\s*$/m);
+  assert.ok(stop.includes('Stop-Daemon') && stop.includes('Stop-Process') && stop.includes('gaffer-daemon'), 'daemon stop is inside the -NoStopDaemon branch');
+  assert.equal(win.split('Stop-Process').length - 1, (stop.split('Stop-Process').length - 1), 'no Stop-Process outside the guarded block');
+  const reg = between(win, 'if ($NoRegistry) {', /^\}\s*$/m);
+  assert.ok(reg.includes('PlayerDebugMode') && reg.includes('Set-ItemProperty'));
+  assert.equal(win.split('Set-ItemProperty').length - 1, 1, 'only the guarded registry write');
+  const mcpStart = win.indexOf('if ($NoMcp) {');
+  assert.ok(mcpStart !== -1);
+  assert.ok(mcpStart < win.indexOf('"mcp", "get", "gaffer"') && mcpStart < win.indexOf('"mcp", "add"'), 'mcp get/add come after the -NoMcp gate');
+  assert.match(win.slice(mcpStart), /^if \(\$NoMcp\) \{[\s\S]*?\} elseif \(-not \$claudeBin\) \{/, '-NoMcp leaves $registerMcp false');
+  assert.ok(win.includes('if ($NoSymlink) {\n    $installKind = "copy"'), '-NoSymlink forces the copy path');
+});
+
+test('install-win.ps1 copy path: robocopy excludes, failure check, link-safe removal, LiteralPath', () => {
+  assert.ok(win.includes('robocopy "$panelDir" "$installDir" /E /XD node_modules dist .remember runtime runtime.new runtime.old /XF package-lock.json .debug'));
+  assert.ok(win.includes('if ($LASTEXITCODE -ge 8) {'), 'robocopy failure stops the install');
+  assert.ok(win.includes('[System.IO.Directory]::Delete($installDir, $false)'), 'a symlinked install is unlinked, not recursively deleted');
+  assert.ok(win.includes('Remove-Item -LiteralPath $installDir -Recurse -Force'));
+  assert.ok(!/Remove-Item -Recurse -Force \$installDir/.test(win), 'no wildcard-path recursive delete of the install');
+  assert.ok(win.includes('-File "$deployedDaemon\\fetch-runtime.ps1" -Into $deployedDaemon'));
+  assert.ok(win.includes("if ($last -notmatch '^runtime:(current|installed)') {"));
+});
+
+test('test-7 runs the installer with every side-effect switch, TEMP in scratch, both layouts', () => {
+  assert.ok(t7.includes('-ExtensionsDir $extDir -NoSymlink -NoStopDaemon -NoRegistry -NoMcp'));
+  assert.ok(t7.includes('$env:TEMP = $tmp; $env:TMP = $tmp'));
+  assert.ok(t7.includes('Case A: packaged release layout') && t7.includes('Case B: checkout layout'));
+  assert.ok(/REAL DOWNLOAD/.test(t7), 'header says the runtime is really downloaded');
+  for (const s of ['registry CSXS.$v PlayerDebugMode', '.claude.json', 'real extension folder', 'port 9823 listener', 'real %TEMP% gaffer-* entries']) {
+    assert.ok(t7.includes(s), 'outside-scratch snapshot covers ' + s);
+  }
+  for (const p of ['node_modules\\x\\index.js', 'daemon\\dist\\stage\\x.txt', '.remember\\x.md', 'daemon\\runtime.new\\node.exe', 'daemon\\runtime.old\\node.exe', 'daemon\\package-lock.json']) {
+    assert.ok(t7.includes(p), 'test-7 plants ' + p);
+  }
+  assert.ok(t7.includes('Select-String -LiteralPath $installer -Pattern "NoRegistry"'), 'refuses to run an installer without the switches');
+});
+
+test('README documents none of the installer test switches as user steps', () => {
+  for (const s of SWITCHES) assert.ok(!readme.includes(s), 'README mentions ' + s);
+  assert.ok(!readme.includes('test-7-install-win'));
+});
