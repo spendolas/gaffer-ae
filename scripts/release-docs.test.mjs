@@ -195,8 +195,40 @@ test('README step 4 downloads the latest release package and verifies it against
   // A curl | tar pipeline exits 0 when the download fails (tar is last and
   // succeeds on empty input), so the install must download to a file first.
   assert.ok(!s.includes('| tar'), 'macOS install must not pipe curl into tar');
-  assert.ok(s.includes('mkdir -p "$DL" "$INSTALL_DIR"'));
   assert.ok(s.includes('-C "$INSTALL_DIR"'));
+  // The install folder is created only after the checksum passed (an empty
+  // folder is not an install), on both platforms.
+  assert.ok(s.indexOf('mkdir -p "$INSTALL_DIR"') > s.indexOf('shasum -a 256 -c -'), 'macOS creates the install folder after the checksum');
+  assert.ok(s.indexOf('New-Item -ItemType Directory -Path $installDir') > s.indexOf('does not match SHA256SUMS.txt'), 'Windows creates the install folder after the checksum');
+  assert.ok(s.includes('a partial folder is not an install'));
+  // Sequencing window: until the first release with SHA256SUMS.txt is
+  // published, releases/latest has no checksum file. Wait and retry, never
+  // work around it.
+  assert.ok(s.includes('If only the `SHA256SUMS.txt` download fails with HTTP 404'));
+  assert.ok(s.includes('a new Gaffer release is still being published'));
+  assert.ok(s.includes('wait a few minutes and run this step again unchanged'));
+  assert.ok(s.includes('do not skip the checksum'));
+  assert.ok(s.includes('If it still fails after 15 minutes, stop and tell the user.'));
+});
+
+test('README downloads into new private folders, never a fixed name in a shared temp directory', () => {
+  assert.ok(!readme.includes('gaffer-download'), 'fixed download folder name left in the README');
+  assert.equal(install.split('mktemp -d "${TMPDIR:-/tmp}/gaffer-').length - 1, 3, 'step 4 and both macOS step 5 blocks use mktemp -d');
+  assert.equal(install.split('[guid]::NewGuid().ToString("N")').length - 1, 2, 'step 4 and the Windows step 5 block use a GUID folder');
+  for (const n of [6, 7]) assert.ok(step(n).includes('<download folder step 5 printed>'), 'step ' + n + ' takes the folder step 5 printed');
+  assert.ok(step(5).includes('prints its path; steps 6 and 7 need that path'));
+});
+
+test('README Windows blocks fail one way: throw, never a printed warning that lets the block go on', () => {
+  for (const n of [4, 5, 6, 7]) assert.ok(!/Write-Host "(Download|Extract) failed/.test(step(n)), 'step ' + n + ' prints a failure and continues');
+  assert.ok(step(5).includes('throw "Download failed (curl exit $LASTEXITCODE). From nodejs.org: use Gaffer\'s mirror'));
+  assert.ok(step(7).includes('throw "Extract failed (tar exit $LASTEXITCODE)"'));
+});
+
+test('README tells an agent in bash to run the Windows blocks in PowerShell', () => {
+  const rules = section(install, /^### Rules for Claude/m, /^### /m);
+  assert.ok(rules.includes('Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that'));
+  assert.ok(rules.includes('step 4 names a wait and retry'));
 });
 
 test('README steps 5 to 8 carry the trigger sentence, the extract command and the signature checks', () => {

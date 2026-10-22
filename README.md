@@ -34,7 +34,8 @@ Before you begin, read these rules. They apply to every step below.
 - Do not change proxy, certificate or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
 - Do not add shell aliases, modify the user's PATH, or change any config outside the paths explicitly named in these steps.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
-- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 5 names Gaffer's mirror).
+- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry, step 5 names Gaffer's mirror).
+- Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <file>`. Bash expands `$` inside double quotes, so the .ps1 file is the safer choice.
 - After the install completes, run the verification step. Do not skip it.
 
 ### What to do
@@ -75,26 +76,26 @@ Before you begin, read these rules. They apply to every step below.
 
    On macOS the command prints the platform name used in steps 5 to 8 (`darwin-arm64` for Apple Silicon, `darwin-x64` for Intel). Do not use `uname -m` instead: it reports `x86_64` in a terminal running under Rosetta on Apple Silicon. On Windows, `AMD64` or `ARM64` means the platform is `win-x64` (Windows on ARM runs it under its x64 emulation). Anything else (`x86`): stop and tell the user that Gaffer needs 64-bit Windows.
 
-4. **Download the Gaffer package, verify it, and extract it** into the CEP extensions directory. The package and its checksum file come from the same GitHub release.
+4. **Download the Gaffer package, verify it, and extract it** into the CEP extensions directory. The package and its checksum file come from the same GitHub release. Each block downloads into a new private folder and prints its path, and creates the install folder only after the checksum passed.
 
    ```bash
    # macOS
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
-   DL="${TMPDIR:-/tmp}/gaffer-download"
-   rm -rf "$DL" && mkdir -p "$DL" "$INSTALL_DIR" && cd "$DL" \
-     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o gaffer-install-mac.tar.gz https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz \
-     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o SHA256SUMS.txt https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt \
-     && grep ' gaffer-install-mac.tar.gz$' SHA256SUMS.txt | shasum -a 256 -c - \
-     && tar -xzf gaffer-install-mac.tar.gz -C "$INSTALL_DIR" \
-     && rm -f gaffer-install-mac.tar.gz SHA256SUMS.txt
+   DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-package.XXXXXX")" && echo "Download folder: $DL" \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/gaffer-install-mac.tar.gz" https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/SHA256SUMS.txt" https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt \
+     && (cd "$DL" && grep ' gaffer-install-mac.tar.gz$' SHA256SUMS.txt | shasum -a 256 -c -) \
+     && mkdir -p "$INSTALL_DIR" \
+     && tar -xzf "$DL/gaffer-install-mac.tar.gz" -C "$INSTALL_DIR" \
+     && rm -rf "$DL"
    ```
 
    ```powershell
    # Windows (PowerShell)
    $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
-   $dl = "$env:TEMP\gaffer-download"
-   Remove-Item -Recurse -Force $dl -ErrorAction SilentlyContinue
-   New-Item -ItemType Directory -Path $dl, $installDir -Force | Out-Null
+   $dl = Join-Path $env:TEMP ("gaffer-package-" + [guid]::NewGuid().ToString("N"))
+   New-Item -ItemType Directory -Path $dl | Out-Null
+   "Download folder: $dl"
    curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\gaffer-install-win.zip" https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-win.zip
    if ($LASTEXITCODE -ne 0) { throw "Download of gaffer-install-win.zip failed (curl exit $LASTEXITCODE)" }
    curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\SHA256SUMS.txt" https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt
@@ -102,21 +103,24 @@ Before you begin, read these rules. They apply to every step below.
    $want = ((Get-Content "$dl\SHA256SUMS.txt" | Where-Object { $_ -match ' gaffer-install-win\.zip$' }) -split '\s+')[0]
    $got = (Get-FileHash "$dl\gaffer-install-win.zip" -Algorithm SHA256).Hash.ToLower()
    if (-not $want -or $got -ne $want) { throw "gaffer-install-win.zip does not match SHA256SUMS.txt" }
+   New-Item -ItemType Directory -Path $installDir -Force | Out-Null
    tar.exe -xf "$dl\gaffer-install-win.zip" -C $installDir
    if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }
-   Remove-Item -Force "$dl\gaffer-install-win.zip", "$dl\SHA256SUMS.txt"
+   Remove-Item -Recurse -Force $dl
    ```
 
-   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If a download fails or the checksum does not match, stop and report it; do not extract the package.
+   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If a download fails or the checksum does not match, stop and report it; do not extract the package. If the extract fails, remove the install folder (path in step 2) before you stop: a partial folder is not an install. After any failure, also delete the download folder the block printed.
+
+   If only the `SHA256SUMS.txt` download fails with HTTP 404 (curl prints `The requested URL returned error: 404`; its exit code can be 22 or 56), a new Gaffer release is still being published. Delete the download folder, wait a few minutes and run this step again unchanged. Do not work around it: do not skip the checksum and do not take the package from another release. If it still fails after 15 minutes, stop and tell the user.
 
 <!-- runtime-pins:begin. Generated from panel/daemon/runtime-pins.json by scripts/readme-pins.mjs; edit the script, then run: node scripts/readme-pins.mjs --write -->
-5. **Download the Node.js runtime.** Gaffer runs on the official Node.js v24.22.1 from nodejs.org, kept as a single file inside Gaffer's own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed.
+5. **Download the Node.js runtime.** Gaffer runs on the official Node.js v24.22.1 from nodejs.org, kept as a single file inside Gaffer's own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed. The block creates a new download folder and prints its path; steps 6 and 7 need that path.
 
    **`darwin-arm64`** (macOS, Apple Silicon)
 
    ```bash
-   DL="${TMPDIR:-/tmp}/gaffer-download"
-   mkdir -p "$DL" && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
+   DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-node.XXXXXX")" && echo "Download folder: $DL" \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
    ```
 
    If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-arm64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
@@ -124,8 +128,8 @@ Before you begin, read these rules. They apply to every step below.
    **`darwin-x64`** (macOS, Intel)
 
    ```bash
-   DL="${TMPDIR:-/tmp}/gaffer-download"
-   mkdir -p "$DL" && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
+   DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-node.XXXXXX")" && echo "Download folder: $DL" \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
    ```
 
    If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-x64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
@@ -133,22 +137,24 @@ Before you begin, read these rules. They apply to every step below.
    **`win-x64`** (Windows)
 
    ```powershell
-   $dl = "$env:TEMP\gaffer-download"
-   New-Item -ItemType Directory -Path $dl -Force | Out-Null
+   $dl = Join-Path $env:TEMP ("gaffer-node-" + [guid]::NewGuid().ToString("N"))
+   New-Item -ItemType Directory -Path $dl | Out-Null
+   "Download folder: $dl"
    curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\node-v24.22.1-win-x64.zip" https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip
-   if ($LASTEXITCODE -ne 0) { Write-Host "Download failed (curl exit $LASTEXITCODE)" }
+   if ($LASTEXITCODE -ne 0) { throw "Download failed (curl exit $LASTEXITCODE). From nodejs.org: use Gaffer's mirror as described below. From the mirror: stop." }
    ```
 
    If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-win-x64.zip`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
 
-   For the mirror, run the same command with the mirror URL in place of the nodejs.org URL, and tell the user that you used the mirror. If the mirror download fails too, stop and tell the user: "Could not download the Node runtime from nodejs.org or Gaffer's mirror. Check your network and try again."
+   For the mirror, run the same block with the mirror URL in place of the nodejs.org URL, and tell the user that you used the mirror. It creates a new download folder: delete the folder of the failed attempt, and use the folder printed by the download that succeeded in steps 6 and 7. If the mirror download fails too, stop and tell the user: "Could not download the Node runtime from nodejs.org or Gaffer's mirror. Check your network and try again."
 
-6. **Verify the SHA-256 of the Node.js download.** It must equal the value written here for your platform.
+6. **Verify the SHA-256 of the Node.js download.** It must equal the value written here for your platform. Replace `<download folder step 5 printed>` with the folder step 5 printed.
 
    **`darwin-arm64`** (macOS, Apple Silicon) expected SHA-256 `89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7`
 
    ```bash
-   cd "${TMPDIR:-/tmp}/gaffer-download" && echo "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7  node-v24.22.1-darwin-arm64.tar.gz" | shasum -a 256 -c -
+   DL="<download folder step 5 printed>"
+   cd "$DL" && echo "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7  node-v24.22.1-darwin-arm64.tar.gz" | shasum -a 256 -c -
    ```
 
    It must print `node-v24.22.1-darwin-arm64.tar.gz: OK`.
@@ -156,7 +162,8 @@ Before you begin, read these rules. They apply to every step below.
    **`darwin-x64`** (macOS, Intel) expected SHA-256 `d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035`
 
    ```bash
-   cd "${TMPDIR:-/tmp}/gaffer-download" && echo "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035  node-v24.22.1-darwin-x64.tar.gz" | shasum -a 256 -c -
+   DL="<download folder step 5 printed>"
+   cd "$DL" && echo "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035  node-v24.22.1-darwin-x64.tar.gz" | shasum -a 256 -c -
    ```
 
    It must print `node-v24.22.1-darwin-x64.tar.gz: OK`.
@@ -164,7 +171,9 @@ Before you begin, read these rules. They apply to every step below.
    **`win-x64`** (Windows) expected SHA-256 `d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5`
 
    ```powershell
-   $got = (Get-FileHash "$env:TEMP\gaffer-download\node-v24.22.1-win-x64.zip" -Algorithm SHA256).Hash.ToLower()
+   $dl = "<download folder step 5 printed>"
+   if (-not (Test-Path -LiteralPath "$dl\node-v24.22.1-win-x64.zip")) { throw "No download at $dl\node-v24.22.1-win-x64.zip. Use the folder step 5 printed." }
+   $got = (Get-FileHash "$dl\node-v24.22.1-win-x64.zip" -Algorithm SHA256).Hash.ToLower()
    if ($got -eq "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5") { "SHA-256 OK" } else { "SHA-256 MISMATCH: $got" }
    ```
 
@@ -172,13 +181,13 @@ Before you begin, read these rules. They apply to every step below.
 
    On a mismatch, delete the downloaded file. If it came from nodejs.org, download it once from the mirror (step 5) and check again. If the mirror's copy does not match either, stop and tell the user that the download did not match the expected checksum. Never extract an archive that failed this check.
 
-7. **Extract only the `node` binary into Gaffer's folder, then delete the archive.** The archive also contains npm and other tools; Gaffer needs only the one file.
+7. **Extract only the `node` binary into Gaffer's folder, then delete the archive.** The archive also contains npm and other tools; Gaffer needs only the one file. Replace `<download folder step 5 printed>` with the folder step 5 printed.
 
    **`darwin-arm64`** (macOS, Apple Silicon)
 
    ```bash
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
-   DL="${TMPDIR:-/tmp}/gaffer-download"
+   DL="<download folder step 5 printed>"
    mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.1-darwin-arm64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.1-darwin-arm64/bin/node && rm -rf "$DL"
    ```
 
@@ -186,7 +195,7 @@ Before you begin, read these rules. They apply to every step below.
 
    ```bash
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
-   DL="${TMPDIR:-/tmp}/gaffer-download"
+   DL="<download folder step 5 printed>"
    mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.1-darwin-x64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.1-darwin-x64/bin/node && rm -rf "$DL"
    ```
 
@@ -194,17 +203,16 @@ Before you begin, read these rules. They apply to every step below.
 
    ```powershell
    $installDir = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel"
-   $dl = "$env:TEMP\gaffer-download"
+   $dl = "<download folder step 5 printed>"
    $rt = "$installDir\daemon\runtime"
    New-Item -ItemType Directory -Path $rt -Force | Out-Null
    tar.exe -xf "$dl\node-v24.22.1-win-x64.zip" -C $rt node-v24.22.1-win-x64/node.exe
-   if ($LASTEXITCODE -eq 0) {
-     Move-Item -Force "$rt\node-v24.22.1-win-x64\node.exe" "$rt\node.exe"
-     Remove-Item -Recurse -Force "$rt\node-v24.22.1-win-x64", $dl
-   } else { Write-Host "Extract failed (tar exit $LASTEXITCODE)" }
+   if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }
+   Move-Item -Force "$rt\node-v24.22.1-win-x64\node.exe" "$rt\node.exe"
+   Remove-Item -Recurse -Force "$rt\node-v24.22.1-win-x64", $dl
    ```
 
-   The result is one file: `daemon/runtime/node` (Windows: `daemon\runtime\node.exe`) inside the install folder. Delete the archive and any download folder you created, including empty ones.
+   The result is one file: `daemon/runtime/node` (Windows: `daemon\runtime\node.exe`) inside the install folder. Delete the archive and any download folder you created, including empty ones and those of failed attempts.
 
 8. **Verify the runtime's code signature, then run it once.** If nodejs.org is unreachable, the code signature is the independent check. It shows the file was signed by the Node.js project and not changed since.
 
