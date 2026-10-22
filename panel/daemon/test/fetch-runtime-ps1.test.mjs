@@ -70,7 +70,8 @@ describe('fetch-runtime.ps1 static checks', () => {
 
   test('test seams are honoured only in test mode', () => {
     const seams = ['GAFFER_FETCH_BASE_OFFICIAL', 'GAFFER_FETCH_BASE_MIRROR', 'GAFFER_FETCH_PINS',
-      'GAFFER_FETCH_SKIP_CODESIGN', 'GAFFER_FETCH_PLATFORM', 'GAFFER_FETCH_NO_TAR'];
+      'GAFFER_FETCH_SKIP_CODESIGN', 'GAFFER_FETCH_PLATFORM', 'GAFFER_FETCH_NO_TAR', 'GAFFER_FETCH_NO_CURL'];
+    for (const seam of seams) assert.ok(text.includes('#   ' + seam), seam + ' is not documented in the header');
     assert.ok(code.includes('$testMode = ($env:GAFFER_FETCH_TEST -eq "1")'));
     for (const seam of seams) {
       const uses = codeLines.filter((l) => l.includes('$env:' + seam));
@@ -125,6 +126,41 @@ describe('fetch-runtime.ps1 static checks', () => {
     assert.ok(code.includes('"-o", $archive, $url'), 'curl must write by relative name inside the temp folder');
     assert.ok(code.includes('Invoke-Native $newDir $tar @("-xf", $archivePath, $member)'));
     assert.match(code, /\$ErrorActionPreference = "Continue"\s*\n\s*\$smokeOut = & \$newExe --version 2>&1/);
+  });
+
+  test('cleanup lives in a finally block around the whole run', () => {
+    assert.match(code, /\} finally \{[^}]*?Remove-Tree \$tmpDir[\s\S]*?if \(-not \$script:keepNew\) \{ Remove-Tree \$newDir \}\s*\n\}\s*$/);
+    assert.match(code, /if \(\$StageOnly\) \{\s*\n\s*\$script:keepNew = \$true/);
+    assert.match(code, /\[System\.IO\.Directory\]::Move\(\$newDir, \$runtimeDir\)[\s\S]*?\$script:keepNew = \$true/);
+    // Exit-Fail itself no longer deletes anything: the finally block does.
+    const exitFail = code.slice(code.indexOf('function Exit-Fail'), code.indexOf('function Get-StampSize'));
+    assert.ok(!exitFail.includes('Remove-Tree'), 'Exit-Fail must leave cleanup to finally');
+  });
+
+  test('runtime.old is restored only after its size check and deleted only while runtime exists', () => {
+    assert.ok(code.includes('$oldStamp = Get-StampSize $oldDir'));
+    assert.match(code, /\$oldOk = \(\[string\] \(Get-Item -LiteralPath \$oldExe\)\.Length\) -eq \$oldStamp/);
+    assert.match(code, /if \(\$oldOk\) \{\s*\n\s*try \{\s*\n\s*\[System\.IO\.Directory\]::Move\(\$oldDir, \$runtimeDir\)/);
+    // Every Remove-Tree $oldDir is guarded by a runtime check on its line or
+    // sits in the swap block after the runtime check.
+    assert.ok(code.includes('if ((Test-Path -LiteralPath $oldDir) -and (Test-Path -LiteralPath $runtimeDir)) {\n        Remove-Tree $oldDir'));
+  });
+
+  test('system proxy fallback after curl, like update.ps1', () => {
+    for (const s of ['function Get-ViaSystemProxy', '[System.Net.SecurityProtocolType]::Tls12',
+      '[System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials',
+      '$req.Timeout = 20000', '$req -is [System.Net.HttpWebRequest]', 'download exceeded its 600 s budget',
+      'Get-ViaSystemProxy $url $archivePath $testMode', '$skipCurl = ($testMode -and $env:GAFFER_FETCH_NO_CURL -eq "1")',
+      'refusing a non-https URL', 'redirected to a non-https URL']) {
+      assert.ok(code.includes(s), 'missing ' + s);
+    }
+    // The fallback runs before the hash check of the same source.
+    assert.ok(code.indexOf('Get-ViaSystemProxy $url') < code.indexOf('$gotSha = Get-Sha256 $archivePath'));
+  });
+
+  test('no Move-Item -Destination (wildcards in paths)', () => {
+    assert.ok(!/Move-Item/.test(code));
+    assert.ok(code.includes('[System.IO.File]::Move($tarOut, $newExe)'));
   });
 
   test('the placeholder binary hash skips only the hash check', () => {
@@ -338,6 +374,38 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     r = run(c);
     assert.match(r.out, /restored runtime from runtime\.old/);
     assert.equal(r.last, 'runtime:current', r.out);
+  });
+
+  test('runtime.old failing its size check is neither restored nor deleted', () => {
+    const c = setup({ official: 'missing', mirror: 'missing' });
+    const old = join(c.into, 'runtime.old');
+    mkdirSync(old);
+    writeFileSync(join(old, 'node.exe'), 'truncated');
+    writeFileSync(join(old, 'VERIFIED'), '999 abc\n');
+    const r = run(c);
+    assert.match(r.out, /runtime\.old does not pass its size check, leaving it in place/);
+    assert.equal(r.last, 'err:runtime', r.out);
+    assert.ok(!existsSync(join(c.into, 'runtime')));
+    assert.equal(readFileSync(join(old, 'node.exe'), 'utf8'), 'truncated');
+    assert.equal(readFileSync(join(old, 'VERIFIED'), 'utf8'), '999 abc\n');
+  });
+
+  test('curl failing falls back to the system proxy path (FileWebRequest in test mode)', () => {
+    const c = setup();
+    const r = run(c, [], { GAFFER_FETCH_NO_CURL: '1' });
+    assert.match(r.out, /trying the system proxy path/);
+    assert.match(r.out, /downloaded through the system proxy path/);
+    assert.equal(r.last, 'runtime:installed ' + version + ' ' + plat, r.out);
+    assertInstalled(c);
+  });
+
+  test('curl and the system proxy path both failing: mirror, then err:runtime', () => {
+    const c = setup({ official: 'missing', mirror: 'missing' });
+    const r = run(c, [], { GAFFER_FETCH_NO_CURL: '1' });
+    assert.match(r.out, /runtime: official download failed, using the mirror/);
+    assert.equal(r.last, 'err:runtime', r.out);
+    assert.deepEqual(tree(c.temp), []);
+    assert.deepEqual(readdirSync(c.into), []);
   });
 
   test('binary size or hash mismatch fails; the placeholder skips only the hash', () => {

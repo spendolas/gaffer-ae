@@ -6,7 +6,10 @@
 # Usage (Windows PowerShell 5.1 or later):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File fetch-runtime.ps1 [-Into <daemon-dir>] [-StageOnly]
 #
-#   -Into       the daemon folder to provision (default: this script's folder)
+#   -Into       the daemon folder to provision (default: this script's folder).
+#               Through -File, do not end a quoted -Into with a backslash:
+#               "C:\x\daemon\" reaches the script as C:\x\daemon" (the \"
+#               escapes the quote). Write "C:\x\daemon" instead.
 #   -StageOnly  steps 1 to 7 only: leave the verified runtime in
 #               <daemon-dir>\runtime.new and stop (the updater swaps it in
 #               after it has stopped the daemon)
@@ -18,7 +21,16 @@
 # Exit codes: 0 for runtime:current and runtime:installed, 1 for err:runtime.
 #
 # Nothing is written outside -Into (runtime, runtime.new, runtime.old) and
-# the temp folder %TEMP%\gaffer-runtime-<guid>, which is always removed.
+# the temp folder %TEMP%\gaffer-runtime-<guid>. The whole run sits in one
+# try/finally, which PowerShell also runs on exit, Ctrl+C and a stopped
+# in-process caller: the temp folder is always removed, a runtime.new is
+# kept only after a successful -StageOnly run, and a runtime moved aside by
+# an interrupted swap is put back.
+#
+# Downloads: curl.exe first; when curl fails, the same URL again through
+# .NET HttpWebRequest with the system proxy (WinINET settings, PAC) and the
+# user's default network credentials, like update.ps1. Official source
+# first, then the mirror, each verified against the pinned SHA-256.
 #
 # Test seams, honoured only when GAFFER_FETCH_TEST=1 (same names as
 # fetch-runtime.sh):
@@ -28,6 +40,9 @@
 #   GAFFER_FETCH_SKIP_CODESIGN  1 skips the Authenticode check (test archives are unsigned)
 #   GAFFER_FETCH_PLATFORM       forces the platform key
 #   GAFFER_FETCH_NO_TAR         1 skips tar.exe and uses the .NET zip fallback (Windows only seam)
+#   GAFFER_FETCH_NO_CURL        1 treats every curl.exe attempt as failed, so the system proxy
+#                               path runs (file:// sources work there through FileWebRequest;
+#                               Windows only seam)
 #
 # Keep this file ASCII-only with a UTF-8 BOM (node scripts/check-ps-encoding.mjs).
 
@@ -59,9 +74,12 @@ $tempRoot = $env:TEMP
 if (-not $tempRoot -or -not (Test-Path -LiteralPath $tempRoot -PathType Container)) { $tempRoot = [System.IO.Path]::GetTempPath() }
 $tmpDir = Join-Path $tempRoot ("gaffer-runtime-" + [guid]::NewGuid().ToString("N"))
 
-# Set once the swap has moved the old runtime aside, so a failure after that
-# point puts it back.
+# Set once the swap has moved the old runtime aside, so a failure or an
+# interruption after that point puts it back (in the finally block).
 $script:movedAside = $false
+# Set when runtime.new must survive the run: after a successful -StageOnly
+# (the updater swaps it in) and after a successful swap (it no longer exists).
+$script:keepNew = $false
 
 function Remove-Tree([string] $path) {
     if (Test-Path -LiteralPath $path) {
@@ -69,15 +87,25 @@ function Remove-Tree([string] $path) {
     }
 }
 
+# Cleanup (temp folder, runtime.new, putting a moved-aside runtime back) is
+# done by the finally block around the whole run, which also runs on exit.
 function Exit-Fail([string] $message) {
     Write-Step "ERROR: $message"
-    Remove-Tree $tmpDir
-    Remove-Tree $newDir
+    # Put a moved-aside runtime back here so the log says so before the
+    # last line; the finally block repeats this silently for interruptions.
     if ($script:movedAside -and -not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $oldDir)) {
-        try { [System.IO.Directory]::Move($oldDir, $runtimeDir); Write-Step "restored the previous runtime" } catch {}
+        try { [System.IO.Directory]::Move($oldDir, $runtimeDir); $script:movedAside = $false; Write-Step "restored the previous runtime" } catch {}
     }
     Write-Output "err:runtime"
     exit 1
+}
+
+# Reads the size field of a VERIFIED stamp ("<size> <sha256>"); "" if absent.
+function Get-StampSize([string] $dir) {
+    $stamp = Join-Path $dir "VERIFIED"
+    if (-not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return "" }
+    $fields = ([System.IO.File]::ReadAllText($stamp)).Trim() -split '\s+'
+    return [string] $fields[0]
 }
 
 function Get-Sha256([string] $path) {
@@ -89,13 +117,14 @@ function Get-Sha256([string] $path) {
 # "Stop" on PS 5.1; the assignment below is local to this function. Returns
 # the exit code.
 #
-# Why a working directory: curl.exe and tar.exe receive their arguments in
-# the ANSI code page, so a path with characters outside it (an accented or
-# non-Latin user name in %TEMP% or %APPDATA%) can arrive mangled. PowerShell
-# starts native programs in the current location through the Unicode API,
-# so the download is written by relative name inside the temp folder and
-# tar extracts relative to runtime.new. If tar still cannot read the archive
-# path, the .NET zip reader takes over.
+# Why a working directory: curl.exe and tar.exe may receive their arguments
+# in the ANSI code page, so a path with characters outside it (an accented
+# or non-Latin user name in %TEMP% or %APPDATA%) can arrive mangled.
+# PowerShell starts native programs in the current location through the
+# Unicode API, so curl writes the download by relative name inside the temp
+# folder and tar extracts relative to runtime.new. tar still receives the
+# archive's absolute path; if that arrives mangled, tar fails and the .NET
+# zip reader takes over.
 function Invoke-Native([string] $workDir, [string] $exe, [string[]] $arguments) {
     $ErrorActionPreference = "Continue"
     Push-Location -LiteralPath $workDir -ErrorAction Stop
@@ -106,6 +135,71 @@ function Invoke-Native([string] $workDir, [string] $exe, [string[]] $arguments) 
         Pop-Location
     }
     return $exitCode
+}
+
+# The system proxy path, used when curl.exe fails (mirrors
+# Get-ReleaseAssetViaSystemProxy in update.ps1): TLS 1.2, the WinINET proxy
+# (Internet Options, PAC) with the user's default network credentials, 20 s
+# to connect and get headers like curl's --connect-timeout, every body read
+# bounded to a 20 s stall, 600 s in total like curl's --max-time (a read is
+# only started while 20 s of the budget remain). Up to 3 attempts while a
+# retry can still start within 120 s; a 4xx answer is final. Outside test
+# mode only https is accepted, also after redirects. Returns "" on success,
+# else the reason.
+function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnyScheme) {
+    if (-not $allowAnyScheme -and -not $uri.StartsWith("https://")) { return "refusing a non-https URL" }
+    try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch {}
+    try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials } catch {}
+    $started = Get-Date
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        $reason = ""
+        $final = $false
+        try {
+            $req = [System.Net.WebRequest]::Create($uri)
+            $req.Timeout = 20000
+            # file:// gives a FileWebRequest (test mode), which has none of these.
+            if ($req -is [System.Net.HttpWebRequest]) {
+                $req.ReadWriteTimeout = 20000
+                $req.AllowAutoRedirect = $true
+                $req.UserAgent = "gaffer-fetch-runtime"
+            }
+            $resp = $req.GetResponse()
+            try {
+                if (-not $allowAnyScheme -and $resp.ResponseUri.Scheme -ne "https") { throw "redirected to a non-https URL" }
+                $in = $resp.GetResponseStream()
+                $out = [System.IO.File]::Create($outFile)
+                try {
+                    $buf = New-Object byte[] 65536
+                    while ($true) {
+                        if (((Get-Date) - $started).TotalSeconds -gt 580) { throw "download exceeded its 600 s budget" }
+                        $n = $in.Read($buf, 0, $buf.Length)
+                        if ($n -le 0) { break }
+                        $out.Write($buf, 0, $n)
+                    }
+                } finally {
+                    $out.Dispose()
+                    $in.Dispose()
+                }
+            } finally { $resp.Close() }
+            return ""
+        } catch {
+            Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+            # A .NET method's WebException arrives wrapped in a
+            # MethodInvocationException; look at both levels for the status.
+            $status = 0
+            try { $status = [int] $_.Exception.Response.StatusCode } catch {}
+            if ($status -eq 0) { try { $status = [int] $_.Exception.InnerException.Response.StatusCode } catch {} }
+            $reason = $_.Exception.Message
+            if ($_.Exception.InnerException) { $reason = $_.Exception.InnerException.Message }
+            if ($status -ge 400 -and $status -lt 500) { $final = $true; $reason = "the server answered $status" }
+        }
+        $elapsed = ((Get-Date) - $started).TotalSeconds
+        if ($final -or $attempt -ge 3 -or $elapsed -ge 120) { return "system proxy download failed: $reason" }
+        Write-Step "system proxy attempt $attempt failed ($reason), retrying"
+        Start-Sleep -Seconds 2
+    }
 }
 
 try {
@@ -150,17 +244,29 @@ try {
 
     # ---- Leftovers from an earlier run ----------------------------------
     # An updater killed between the two renames leaves runtime.old and no
-    # runtime: put it back. Otherwise runtime.old is a leftover that was
-    # locked last time (a node.exe still running from it): delete it now.
+    # runtime: put it back, but only when its binary still matches its own
+    # VERIFIED size (spec 6.8). runtime.old is deleted only while a runtime
+    # exists: then it is a leftover that was locked last time (a node.exe
+    # still running from it). Without a runtime it is never deleted.
     if ((Test-Path -LiteralPath $oldDir) -and -not (Test-Path -LiteralPath $runtimeDir)) {
-        try {
-            [System.IO.Directory]::Move($oldDir, $runtimeDir)
-            Write-Step "restored runtime from runtime.old (an earlier swap was interrupted)"
-        } catch {
-            Write-Step "could not restore runtime.old: $($_.Exception.Message)"
+        $oldExe = Join-Path $oldDir $binaryName
+        $oldStamp = Get-StampSize $oldDir
+        $oldOk = $false
+        if ($oldStamp -and (Test-Path -LiteralPath $oldExe -PathType Leaf)) {
+            $oldOk = ([string] (Get-Item -LiteralPath $oldExe).Length) -eq $oldStamp
+        }
+        if ($oldOk) {
+            try {
+                [System.IO.Directory]::Move($oldDir, $runtimeDir)
+                Write-Step "restored runtime from runtime.old (an earlier swap was interrupted)"
+            } catch {
+                Write-Step "could not restore runtime.old, leaving it in place: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Step "runtime.old does not pass its size check, leaving it in place"
         }
     }
-    if (Test-Path -LiteralPath $oldDir) {
+    if ((Test-Path -LiteralPath $oldDir) -and (Test-Path -LiteralPath $runtimeDir)) {
         Remove-Tree $oldDir
         if (Test-Path -LiteralPath $oldDir) { Write-Step "runtime.old is still in use, it will be removed on the next run" }
         else { Write-Step "removed a leftover runtime.old" }
@@ -198,6 +304,7 @@ try {
     }
     $proto = "=https"
     if ($testMode) { $proto = "=https,http,file" }
+    $skipCurl = ($testMode -and $env:GAFFER_FETCH_NO_CURL -eq "1")
 
     # --ssl-no-revoke: same reasoning as update.ps1. The TLS chain is still
     # fully validated, only the OCSP/CRL lookup that inspecting proxies block
@@ -214,12 +321,31 @@ try {
         $curlArgs = @("--fail", "--silent", "--show-error", "--ssl-no-revoke", "--proto", $proto, "--location",
             "--connect-timeout", "20", "--max-time", "600", "--retry", "3", "--retry-delay", "2",
             "-o", $archive, $url)
-        $code = Invoke-Native $tmpDir $curl $curlArgs
+        $curlStarted = Get-Date
+        if ($skipCurl) {
+            $code = "skipped (test mode)"
+        } else {
+            $code = Invoke-Native $tmpDir $curl $curlArgs
+        }
         if ($code -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            $lastProblem = "the $($src.name) download failed (curl exit $code)"
-            Write-Step $lastProblem
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
-            continue
+            $curlSeconds = [int] ((Get-Date) - $curlStarted).TotalSeconds
+            if ($curlSeconds -ge 300) {
+                # A link that slow is not a blocked one: the proxy path would
+                # only double the wait.
+                $lastProblem = "the $($src.name) download failed (curl exit $code after $curlSeconds s)"
+                Write-Step $lastProblem
+                continue
+            }
+            Write-Step "curl.exe could not download it (exit $code), trying the system proxy path"
+            $proxyProblem = Get-ViaSystemProxy $url $archivePath $testMode
+            if ($proxyProblem -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+                $lastProblem = "the $($src.name) download failed (curl exit $code; $proxyProblem)"
+                Write-Step $lastProblem
+                Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+                continue
+            }
+            Write-Step "downloaded through the system proxy path"
         }
         $gotSha = Get-Sha256 $archivePath
         if ($gotSha -ne $archiveSha) {
@@ -245,9 +371,9 @@ try {
         $code = Invoke-Native $newDir $tar @("-xf", $archivePath, $member)
         $tarOut = Join-Path $newDir ($member -replace '/', '\')
         if ($code -eq 0 -and (Test-Path -LiteralPath $tarOut -PathType Leaf)) {
-            if ($tarOut -ne $newExe) { Move-Item -LiteralPath $tarOut -Destination $newExe -Force }
-            $topDir = Join-Path $newDir (($member -split '/')[0])
-            if ($topDir -ne $newExe) { Remove-Tree $topDir }
+            # The member is always <folder>/<name>.exe (checked above).
+            [System.IO.File]::Move($tarOut, $newExe)
+            Remove-Tree (Join-Path $newDir (($member -split '/')[0]))
             $extracted = $true
             Write-Step "extracted $member with tar.exe"
         } else {
@@ -329,7 +455,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $newDir "VERIFIED"), "$newSize $newSha`n", $enc)
 
     if ($StageOnly) {
-        Remove-Tree $tmpDir
+        $script:keepNew = $true
         Write-Step "staged in $newDir"
         Write-Output "runtime:installed $version $platform"
         exit 0
@@ -337,6 +463,10 @@ try {
 
     # ---- 8. Swap -------------------------------------------------------
     if (Test-Path -LiteralPath $runtimeDir) {
+        # A runtime.old still here was locked at the start; one more try,
+        # since the rename below needs the name.
+        if (Test-Path -LiteralPath $oldDir) { Remove-Tree $oldDir }
+        if (Test-Path -LiteralPath $oldDir) { Exit-Fail "runtime.old is still in use and blocks the swap; stop the daemon and try again" }
         try {
             [System.IO.Directory]::Move($runtimeDir, $oldDir)
             $script:movedAside = $true
@@ -350,16 +480,24 @@ try {
         Exit-Fail "could not move runtime.new into place: $($_.Exception.Message)"
     }
     $script:movedAside = $false
+    $script:keepNew = $true
     if (Test-Path -LiteralPath $oldDir) {
         Remove-Tree $oldDir
         if (Test-Path -LiteralPath $oldDir) { Write-Step "runtime.old is in use, it will be removed on the next run" }
     }
 
-    # ---- 9. Clean up ---------------------------------------------------
-    Remove-Tree $tmpDir
+    # ---- 9. Clean up (temp folder: finally block) ---------------------
     Write-Step "installed in $runtimeDir"
     Write-Output "runtime:installed $version $platform"
     exit 0
 } catch {
     Exit-Fail "unexpected failure: $($_.Exception.Message)"
+} finally {
+    # Runs on success, on every Exit-Fail, on exit 0 and on Ctrl+C. Silent:
+    # the contract line has already been printed.
+    Remove-Tree $tmpDir
+    if ($script:movedAside -and -not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $oldDir)) {
+        try { [System.IO.Directory]::Move($oldDir, $runtimeDir) } catch {}
+    }
+    if (-not $script:keepNew) { Remove-Tree $newDir }
 }
