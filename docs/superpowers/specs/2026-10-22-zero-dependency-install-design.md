@@ -312,10 +312,11 @@ On macOS this is not proven: the application firewall was off on the test Mac, a
 | Hash mismatch | install, update | as above, with "the download did not match the expected checksum" | retry; nothing installed |
 | Signature check fails | install, update | "The Node runtime's signature could not be verified. Nothing was installed." | stop, report |
 | Disk full during staging | update | `err:runtime`, install untouched | free space |
-| Runtime truncated or wrong size at launch | panel | "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall." Status stays disconnected, no silent fallback | update (the stamp check fails, so the updater re-provisions even when the version is current) |
-| Runtime deleted (for example by antivirus) | panel | "Gaffer's runtime is missing. Open Settings and run Update, or reinstall." (when no system node exists) | same |
+| Runtime truncated or wrong size at launch | panel | "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall." Status stays disconnected, no silent fallback. Settings shows Repair (Update when a newer release exists) | Repair (fresh download), else reinstall. Repair runs `update.sh --repair` / `update.ps1 -Repair`: the runtime is downloaded and verified again even when it looks current, files are re-synced, the panel reloads on `ok:<version>`. A plain update also re-provisions it (the stamp check fails) |
+| Runtime deleted (for example by antivirus) | panel | "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall." (when no system node exists) | Repair (fresh download), else reinstall |
 | Exec bit lost (macOS) | panel | nothing; launcher restores it and logs it | automatic |
-| Gatekeeper kills the runtime (exit 137) | panel | "macOS blocked Gaffer's runtime. Reinstall Gaffer." plus the log line | reinstall |
+| Gatekeeper kills the runtime (exit 137) | panel | "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer." plus the log line | Repair (fresh download into a new folder), else reinstall |
+| Repair fails | panel, after Repair | download failed (`err:runtime`): "Repair failed: could not download Gaffer's runtime. Check your network and try again." Any other failure: "Repair did not complete. The updater log has details: <log path>." Banner offers "Force stop & retry" | retry later; install untouched on `err:runtime` |
 | Port already in use (double start, reload race) | daemon | nothing; second daemon logs "port 9824 in use, daemon already running, exiting" and exits 0; panel connects to the first | automatic |
 | Hostile `NODE_OPTIONS` | launch | nothing; variable cleared | automatic |
 | Updater killed between renames | update | next update or launch finds `runtime.old`, restores it | automatic |

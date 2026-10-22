@@ -167,3 +167,10 @@ test('the panel reads the same log file the updaters write', () => {
   assert.ok(read('../update.sh').includes('LOG="${TMPDIR:-/tmp}/gaffer-update.log"'));
   assert.ok(read('../update.ps1').includes('$logPath = Join-Path $env:TEMP "gaffer-update.log"'));
 });
+
+test('readUpdateLogSince delegates to the pure slice, and the wait also checks the ExtendScript output for a result line', () => {
+  assert.ok(fnBody('readUpdateLogSince').includes('UpdateState.readUpdateLogSlice('));
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes('!UpdateState.lastUpdaterResult(logText)') && wait.includes('UpdateState.lastUpdaterResult(run.output)'),
+    'a log with no result line must fall back to the callSystem output');
+});
