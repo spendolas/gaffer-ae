@@ -208,6 +208,25 @@
     return null;
   }
 
+  // Dev install = the panel is symlinked out of a git checkout (the repo's
+  // panel/ folder), so the checkout's .git sits next to the link's TARGET.
+  // POSIX: the kernel resolves <ext>/../.git through the symlink. Windows:
+  // the lexical ".." of a directory symlink or junction resolves against the
+  // link itself, so the target comes from fs.realpathSync first (a symlinked
+  // dev install made by scripts/install-win.ps1). Any error: not dev.
+  function isDevCheckout(fs, extPath, platform) {
+    try {
+      if (platform !== 'win32') return !!fs.existsSync(String(extPath).replace(/\/+$/, '') + '/../.git');
+      if (typeof fs.realpathSync !== 'function') return false;
+      var real = normalizeWinPath(fs.realpathSync(normalizeWinPath(extPath)));
+      var cut = real.lastIndexOf('\\');
+      if (cut <= 0) return false;
+      return !!fs.existsSync(real.slice(0, cut) + '\\.git');
+    } catch (e) {
+      return false;
+    }
+  }
+
   // resolveDaemonLaunch({ daemonDir, platform, fs, pins, env, detectDev, hashFile, swapWaitExpired })
   //   -> { bin, args, cwd, kind: 'runtime'|'node', notes }   or   { error, reason, notes }
   //   or { retry: 'runtime-swapping', reason, notes }
@@ -268,6 +287,7 @@
     launchNotice: launchNotice,
     gatekeeperKilled: gatekeeperKilled,
     spawnFailureCode: spawnFailureCode,
+    isDevCheckout: isDevCheckout,
     GATEKEEPER_WINDOW_MS: GATEKEEPER_WINDOW_MS
   };
   root.GafferLaunch = api;

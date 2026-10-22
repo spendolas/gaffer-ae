@@ -541,3 +541,43 @@ test('main.js: a panel-made kill suppresses the Gatekeeper notice', () => {
   const stop = main.slice(main.indexOf('function forceStopDaemonPort('));
   assert.ok(/daemonKilledByPanelAt = Date\.now\(\)/.test(stop.slice(0, 600)), 'forceStopDaemonPort records its kill');
 });
+
+// ── dev checkout detection (reviewer B: Windows symlinked dev install) ──
+
+function devFs(existing, realpaths) {
+  return {
+    existsSync: (p) => existing.includes(p),
+    realpathSync: (p) => { if (realpaths[p]) return realpaths[p]; const e = new Error('ENOENT: ' + p); e.code = 'ENOENT'; throw e; },
+  };
+}
+
+test('isDevCheckout on Windows: a symlinked extension resolves to the checkout, whose parent has .git', () => {
+  assert.equal(typeof L.isDevCheckout, 'function');
+  const ext = 'C:/Users/A/AppData/Roaming/Adobe/CEP/extensions/com.gaffer.panel';
+  const fs = devFs(['D:\\src\\gaffer\\.git'], { 'C:\\Users\\A\\AppData\\Roaming\\Adobe\\CEP\\extensions\\com.gaffer.panel': 'D:\\src\\gaffer\\panel' });
+  assert.equal(L.isDevCheckout(fs, ext, 'win32'), true);
+});
+
+test('isDevCheckout on Windows: a real (packaged) folder is not dev, and the lexical .. is never used', () => {
+  const ext = 'C:\\Users\\A\\AppData\\Roaming\\Adobe\\CEP\\extensions\\com.gaffer.panel';
+  // A packaged (real) folder: no .git next to it.
+  assert.equal(L.isDevCheckout(devFs([], { [ext]: ext }), ext, 'win32'), false);
+  // A .git next to the link (lexical ..) must not count: only the target's parent does.
+  const fs = devFs(['C:\\Users\\A\\AppData\\Roaming\\Adobe\\CEP\\extensions\\.git'], { [ext]: 'D:\\pkg\\gaffer\\panel' });
+  assert.equal(L.isDevCheckout(fs, ext, 'win32'), false);
+  assert.equal(L.isDevCheckout(devFs([], {}), ext, 'win32'), false, 'realpath failing is not dev');
+  assert.equal(L.isDevCheckout({ existsSync: () => true }, ext, 'win32'), false, 'no realpathSync is not dev');
+});
+
+test('isDevCheckout on macOS keeps the kernel-resolved <ext>/../.git test', () => {
+  const ext = '/Users/x/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel';
+  assert.equal(L.isDevCheckout(devFs([ext + '/../.git'], {}), ext, 'darwin'), true);
+  assert.equal(L.isDevCheckout(devFs([], {}), ext, 'darwin'), false);
+});
+
+test('main.js decides dev through GafferLaunch.isDevCheckout on every platform', () => {
+  const main = read('../../main.js');
+  const fn = main.slice(main.indexOf('function isDevCheckoutSync('), main.indexOf('function readRuntimePins('));
+  assert.ok(fn.includes('Launch.isDevCheckout(fs, extPath, process.platform)'), fn);
+  assert.ok(!fn.includes("=== 'win32') return false"), 'Windows is no longer never-dev');
+});
