@@ -1,34 +1,139 @@
-﻿# Gaffer daemon launcher (Windows) - called by CEP panel.
-# Prefer node over compiled binary because binary may be stale (not
-# replaced by update.ps1). Set $env:GAFFER_USE_BINARY=1 to force binary.
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $dir
+﻿# Gaffer daemon launcher (Windows), called by the CEP panel only on the
+# ExtendScript fallback route (spawnViaExtendScript in panel/main.js); the
+# normal route is spawnViaNode. Mirrors resolveDaemonLaunch in
+# panel/daemon-launch.js exactly (zero-dependency install spec, sections 4
+# and 5). Windows is never a dev install.
+#   1. runtime\node.exe exists: it must pass the check (daemon.mjs present,
+#      size equals the runtime\VERIFIED stamp, or on a stamp-less first run
+#      size and sha256 match the win-x64 pin in runtime-pins.json, then the
+#      stamp is written). A runtime that fails the check is NEVER bypassed
+#      with a system node.
+#   2. No runtime: system node (%ProgramFiles%, %LOCALAPPDATA%\Programs, then
+#      PATH) with daemon.mjs when present, else index.js.
+# The spawn itself is launch.cjs (detached, hidden, log appended, cleaned
+# env); Start-Process with redirection hung the caller and truncated the log.
+# Output contract, one line on stdout (panel/main.js parses it):
+#   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
+# Keep this file ASCII-only with a UTF-8 BOM (Windows PowerShell 5.1).
+# GAFFER_DAEMON_LOG moves the log (tests).
 
-# Find node first
-$nodePaths = @(
-    "C:\Program Files\nodejs\node.exe",
-    "$env:LOCALAPPDATA\Programs\nodejs\node.exe",
-    "$env:ProgramFiles\nodejs\node.exe"
-)
-$node = $null
-foreach ($p in $nodePaths) {
-    if (Test-Path $p) { $node = $p; break }
-}
-if (-not $node) {
-    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+# CSInterface paths arrive with forward slashes; work on one native path.
+$dir = (Split-Path -Parent $MyInvocation.MyCommand.Path) -replace '/', '\'
+$dir = $dir.TrimEnd('\')
+if ($dir -match '^[A-Za-z]:$') { $dir += '\' }
+Set-Location -LiteralPath $dir
+
+$log = Join-Path $env:TEMP 'gaffer-daemon.log'
+if ($env:GAFFER_DAEMON_LOG) { $log = $env:GAFFER_DAEMON_LOG }
+$bin = Join-Path $dir 'runtime\node.exe'
+$bundle = Join-Path $dir 'daemon.mjs'
+$stamp = Join-Path $dir 'runtime\VERIFIED'
+$pinsPath = Join-Path $dir 'runtime-pins.json'
+
+function Write-Note([string] $text) {
+    $line = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') + ' Gaffer start.ps1: ' + $text + "`r`n"
+    try { [IO.File]::AppendAllText($log, $line) } catch { }
 }
 
-# Prefer binary only if explicitly requested via env var
-if ($env:GAFFER_USE_BINARY -and (Test-Path "$dir\gaffer-daemon.exe")) {
-    Start-Process -FilePath "$dir\gaffer-daemon.exe" -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gaffer-daemon.log" -RedirectStandardError "$env:TEMP\gaffer-daemon-err.log"
-    Write-Output "binary"
-    exit 0
-}
-
-if (-not $node) {
-    Write-Error "node not found"
+function Stop-Launch([string] $code, [string] $reason) {
+    if ($reason) { Write-Note ('runtime: ' + $reason) }
+    $suffix = ''
+    if ($reason) { $suffix = ' (' + $reason + ')' }
+    Write-Note ('daemon not launched: err:' + $code + $suffix)
+    Write-Output ('err:' + $code)
     exit 1
 }
 
-Start-Process -FilePath $node -ArgumentList "index.js" -WorkingDirectory $dir -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\gaffer-daemon.log" -RedirectStandardError "$env:TEMP\gaffer-daemon-err.log"
-Write-Output "node"
+# Recorded size from the stamp, $null when absent, unreadable or garbled.
+# Spec form "<size> <sha256>"; the PoC wrote "size=<n>" lines, read both.
+function Get-StampSize {
+    if (-not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return $null }
+    try { $raw = [IO.File]::ReadAllText($stamp) } catch { return $null }
+    if ($raw -match '^\s*(\d+)(?:\s|$)') { return [int64] $Matches[1] }
+    if ($raw -match 'size=(\d+)') { return [int64] $Matches[1] }
+    return $null
+}
+
+function Test-BundledRuntime {
+    if (-not (Test-Path -LiteralPath $bundle)) { Stop-Launch 'runtime-damaged' 'daemon.mjs missing next to the runtime' }
+    try { $size = [int64] (Get-Item -LiteralPath $bin).Length }
+    catch { Stop-Launch 'runtime-damaged' ('cannot stat runtime: ' + $_.Exception.Message) }
+
+    $stamped = Get-StampSize
+    if ($null -ne $stamped) {
+        if ($stamped -ne $size) { Stop-Launch 'runtime-damaged' ('runtime size ' + $size + ' does not match the stamp ' + $stamped) }
+        return
+    }
+    # Stamp-less first run (README install): verify once against the pin.
+    $pin = $null
+    try {
+        $pins = [IO.File]::ReadAllText($pinsPath) | ConvertFrom-Json
+        $p = $pins.node.platforms.'win-x64'
+        if ($p -and ([int64] $p.binaryBytes) -eq $size) { $pin = $p }
+    } catch { $pin = $null }
+    if (-not $pin) { Stop-Launch 'runtime-damaged' ('no stamp and runtime size ' + $size + ' matches no pinned binary') }
+    $sha = [string] $pin.binarySha256
+    if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
+        Write-Note ('runtime: pinned sha256 for win-x64 is a placeholder (' + $sha + '), skipping the hash check, size matched')
+        $recorded = 'unhashed'
+    } else {
+        try { $got = (Get-FileHash -LiteralPath $bin -Algorithm SHA256).Hash.ToLowerInvariant() }
+        catch { Stop-Launch 'runtime-damaged' ('cannot hash runtime: ' + $_.Exception.Message) }
+        if ($got -ne $sha.ToLowerInvariant()) { Stop-Launch 'runtime-damaged' ('runtime sha256 ' + $got + ' does not match the pin for win-x64') }
+        $recorded = $got
+        Write-Note 'runtime: first run, sha256 matches the pin for win-x64'
+    }
+    try {
+        [IO.File]::WriteAllText($stamp, ([string] $size) + ' ' + $recorded + "`n")
+        Write-Note ('runtime: wrote stamp ' + $stamp)
+    } catch {
+        Write-Note ('runtime: could not write the stamp (' + $_.Exception.Message + '), will verify again next launch')
+    }
+}
+
+# Same candidates and order as findSystemNode in daemon-launch.js.
+function Find-SystemNode {
+    $candidates = @()
+    if ($env:ProgramFiles) { $candidates += (($env:ProgramFiles -replace '/', '\').TrimEnd('\') + '\nodejs\node.exe') }
+    if ($env:LOCALAPPDATA) { $candidates += (($env:LOCALAPPDATA -replace '/', '\').TrimEnd('\') + '\Programs\nodejs\node.exe') }
+    if ($env:PATH) {
+        foreach ($d in ($env:PATH -split ';')) {
+            if (-not $d) { continue }
+            $d = (($d.Trim('"')) -replace '/', '\').TrimEnd('\')
+            if (-not $d) { continue }
+            $candidates += ($d + '\node.exe')
+        }
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    return $null
+}
+
+# Decision D7: pass the original CA bundle on for the claude child only, then
+# clear the three variables so neither launch.cjs nor the daemon sees them.
+if ($env:NODE_EXTRA_CA_CERTS -and ($null -eq $env:GAFFER_CLAUDE_EXTRA_CA_CERTS)) {
+    $env:GAFFER_CLAUDE_EXTRA_CA_CERTS = $env:NODE_EXTRA_CA_CERTS
+}
+Remove-Item -LiteralPath Env:NODE_OPTIONS -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath Env:NODE_PATH -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath Env:NODE_EXTRA_CA_CERTS -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $bin) {
+    Test-BundledRuntime
+    $node = $bin
+    $entry = 'daemon.mjs'
+    $kind = 'runtime'
+} else {
+    Write-Note ('runtime: no bundled runtime at ' + $bin + ', probing for a system node')
+    $node = Find-SystemNode
+    if (-not $node) { Stop-Launch 'runtime-missing' 'no bundled runtime and no system node found' }
+    $entry = 'index.js'
+    if (Test-Path -LiteralPath $bundle) { $entry = 'daemon.mjs' }
+    $kind = 'node'
+}
+
+# launch.cjs prints the contract line (pid:<N> runtime|node) and exits at
+# once; the daemon holds only the log, never this script's stdout.
+& $node "$dir\launch.cjs" $kind $entry
+exit $LASTEXITCODE
