@@ -37,7 +37,7 @@ const expected = {
     archiveSha256: '89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7',
     member: 'node-v24.22.1-darwin-arm64/bin/node',
     binaryBytes: 122545856,
-    binarySha256: 'PENDING-FIRST-ACCEPTANCE-RUN',
+    binarySha256: '6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329',
   },
   'win-x64': {
     archive: 'node-v24.22.1-win-x64.zip',
@@ -61,7 +61,7 @@ for (const [plat, want] of Object.entries(expected)) {
 test('every real hash is 64 lowercase hex; the only placeholder is the arm64 binary hash', () => {
   for (const [plat, p] of Object.entries(pins.node.platforms)) {
     assert.match(p.archiveSha256, /^[0-9a-f]{64}$/, plat + ' archiveSha256');
-    if (p.binarySha256 === 'PENDING-FIRST-ACCEPTANCE-RUN') assert.equal(plat, 'darwin-arm64');
+    if (p.binarySha256 === '6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329') assert.equal(plat, 'darwin-arm64');
     else assert.match(p.binarySha256, /^[0-9a-f]{64}$/, plat + ' binarySha256');
   }
 });
