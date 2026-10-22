@@ -15,8 +15,12 @@
   var NOTICES = {
     'runtime-damaged': "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall.",
     'runtime-missing': "Gaffer's runtime is missing. Open Settings and run Update, or reinstall.",
-    'launch-failed': 'Gaffer could not start its daemon. Open Settings and run Update, or reinstall.'
+    'launch-failed': 'Gaffer could not start its daemon. Open Settings and run Update, or reinstall.',
+    'runtime-blocked': "macOS blocked Gaffer's runtime. Reinstall Gaffer."
   };
+  // How soon after launch a SIGKILL / exit 137 still reads as Gatekeeper
+  // refusing the runtime (it kills at exec, well inside this window).
+  var GATEKEEPER_WINDOW_MS = 10000;
 
   // CSInterface returns the extension path with forward slashes on Windows
   // ("C:/Users/..."). The daemon's command line and cwd must be one native
@@ -67,6 +71,18 @@
 
   function launchNotice(code) {
     return NOTICES[code] || NOTICES['launch-failed'];
+  }
+
+  // Failure modes "Gatekeeper kills the runtime (exit 137)": on macOS, the
+  // bundled runtime dying by SIGKILL (exit 137 when seen through a shell)
+  // within GATEKEEPER_WINDOW_MS of launch. o = { platform, kind, code,
+  // signal, elapsedMs }. A system node, another platform, a late kill or any
+  // other exit is not this case (today's behaviour applies).
+  function gatekeeperKilled(o) {
+    if (!o || o.platform !== 'darwin' || o.kind !== 'runtime') return false;
+    var t = o.elapsedMs;
+    if (typeof t !== 'number' || !(t >= 0) || t > GATEKEEPER_WINDOW_MS) return false;
+    return o.signal === 'SIGKILL' || o.code === 137;
   }
 
   function exists(fs, p) {
@@ -212,7 +228,9 @@
     resolveDaemonLaunch: resolveDaemonLaunch,
     cleanDaemonEnv: cleanDaemonEnv,
     normalizeWinPath: normalizeWinPath,
-    launchNotice: launchNotice
+    launchNotice: launchNotice,
+    gatekeeperKilled: gatekeeperKilled,
+    GATEKEEPER_WINDOW_MS: GATEKEEPER_WINDOW_MS
   };
   root.GafferLaunch = api;
   if (typeof module !== 'undefined' && module && module.exports) module.exports = api;
