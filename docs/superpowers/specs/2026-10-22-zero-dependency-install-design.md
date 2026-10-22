@@ -1,5 +1,17 @@
 # Zero-dependency install: design spec
 
+**Changes since the first draft (2026-10-22, second commit):**
+
+- Proof evidence: P5 (real AE on the Mac) filled in; new rows P6 (real AE on the Windows VM, including a real chat turn), P7 (Windows Firewall test) and P8 (GitHub hosted runners, full record). P4 gains the trial cost and the Opus objections.
+- Section 2: the arm64 binary hash is partly known (first 8 and last 4 hex digits); the first acceptance run records the full value.
+- Section 4: Windows path normalisation, Windows system-node fallback candidates, case-insensitive `NODE_*` cleaning, which launch route each platform really uses, and the daemon's parent process and lifetime.
+- Section 11 and D2: host the mirror on a normal versioned release, never a "trial" one.
+- Security model: the firewall note is replaced by the tested Windows Firewall result and a loopback-only rule for every listener.
+- Failure modes: stale Claude login row.
+- Open risks: real AE on Windows and Windows chat through the bundled runtime are now proven and removed; the remaining unproven items are listed with their cases.
+- Rollout gates: evidence list updated; G5 now covers A1 to A26.
+- Acceptance plan: new environment step E6 (fresh Claude sign-in) and VM notes in E4; new cases A23 to A26 (Windows first launch with no firewall prompt and loopback-only listeners, Windows visual check, daemon lifetime across panel and AE close, Windows path normalisation); A1, A2, A4, A14, A18 and A20 extended; plan gate G4 includes A23 and A24.
+
 **Date:** 2026-10-22
 **Status:** Design decided and proven by proof-of-concept runs, pending implementation. Owner decisions listed at the end.
 **Feature:** Install, run and update Gaffer on a machine that has only After Effects and Claude. No Node.js, no npm, nothing else pre-installed, and nothing installed outside Gaffer's own folders.
@@ -121,7 +133,7 @@ One source of truth for the runtime, read by the fetch scripts, the launchers, t
                         "archiveSha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
                         "member": "node-v24.22.1-darwin-arm64/bin/node",
                         "binaryBytes": 122545856,
-                        "binarySha256": "<fill in from the CI arm64 run>" },
+                        "binarySha256": "<6f320694...f329, full value from the first acceptance run>" },
       "win-x64":      { "archive": "node-v24.22.1-win-x64.zip",
                         "archiveSha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5",
                         "member": "node-v24.22.1-win-x64/node.exe",
@@ -133,7 +145,7 @@ One source of truth for the runtime, read by the fetch scripts, the launchers, t
 }
 ```
 
-Archive sizes: 54.4 MB (mac x64), 53.1 MB (mac arm64), 37.7 MB (win-x64). The arm64 binary hash is the one value not yet recorded; the implementation fills it from the CI arm64 run and the weekly check confirms it.
+Archive sizes: 54.4 MB (mac x64), 53.1 MB (mac arm64), 37.7 MB (win-x64). The arm64 binary hash is the one value not yet fully recorded: the runner run (P8) logged only its first 8 and last 4 hex digits (`6f320694...f329`) and its size (122,545,856 bytes). The first acceptance run (case A18) records the full value, the implementation pins it, and the weekly check confirms it.
 
 ### 3. Provisioning, `panel/daemon/fetch-runtime.sh` and `fetch-runtime.ps1` (new)
 
@@ -157,15 +169,18 @@ Used by the updaters, by `install-mac.sh` / `install-win.ps1`, and documented st
 
 - `resolveDaemonLaunch(daemonDir)` returns `{ bin, args, kind }` or `{ error }`:
   1. If `runtime/node` (`node.exe`) and `daemon.mjs` exist: read `runtime/VERIFIED`. If the stamp is present and the file size matches it, return `{ bin: runtime, args: ['daemon.mjs'], kind: 'runtime' }`. If the stamp is absent (README install), hash the binary once against `binarySha256` for the platform in `runtime-pins.json`, write the stamp on a match, and use it (one-time cost 0.7 to 3.2 s). A size or hash mismatch returns `{ error: 'runtime-damaged' }`. On macOS, a binary whose size and stamp match but has lost its exec bit gets `chmod 755` and a log line.
-  2. If `runtime/` does not exist: dev install (`detectDevInstall()`) or a 0.11.x install mid-migration (section 7). Use the system node probe that exists today, with `daemon.mjs` when present, else `index.js`. Return `kind: 'node'`. No node found: `{ error: 'runtime-missing' }`.
+  2. If `runtime/` does not exist: dev install (`detectDevInstall()`) or a 0.11.x install mid-migration (section 7). Use the system node probe that exists today, with `daemon.mjs` when present, else `index.js`. Return `kind: 'node'`. No node found: `{ error: 'runtime-missing' }`. On Windows the candidates mirror `start.ps1`, in this order: `%ProgramFiles%\nodejs\node.exe`, `%LOCALAPPDATA%\Programs\nodejs\node.exe`, then bare `node` (today's panel tries only bare `node`).
   A runtime that exists but fails the check never falls back to the system node.
-- `cleanDaemonEnv()` copies `process.env` and deletes `NODE_OPTIONS`, `NODE_PATH`, `NODE_EXTRA_CA_CERTS`. Everything else stays: Claude needs `USER` and `HOME` (a stripped env made `claude auth status` report "not signed in"). The runtime dir is never added to PATH. See decision D7 for corporate CA certificates.
+- **Windows path normalisation.** CSInterface returns the extension path with forward slashes (`C:/Users/...`). `resolveDaemonLaunch` converts it to backslashes before it builds the runtime path, the `daemon.mjs` argument and the `cwd`, so the command line reads `...\daemon\runtime\node.exe daemon.mjs` (found while building the Windows PoC panel; acceptance case A26).
+- `cleanDaemonEnv()` copies `process.env` and deletes `NODE_OPTIONS`, `NODE_PATH`, `NODE_EXTRA_CA_CERTS`. On Windows, environment names are case-insensitive, so the match is case-insensitive there (`node_options` is removed too). Everything else stays: Claude needs `USER` and `HOME` (a stripped env made `claude auth status` report "not signed in"); on Windows `PATH`, `APPDATA`, `USERNAME` and `USERPROFILE` stay (P6: 46 variables kept, `claude.exe` worked with the cleaned env). The runtime dir is never added to PATH. See decision D7 for corporate CA certificates.
 - `launchDaemon(launch)` keeps today's spawn shape: `cp.spawn(bin, args, { cwd: daemonDir, detached: true, stdio: ['ignore', fd, fd], windowsHide: true, env })` with `fd` opened in append mode on the log.
 - On `{ error }`, `startDaemon()` logs the code and shows a panel notice instead of "Starting daemon..." (texts in Failure modes). `spawnViaExtendScript()` stays the fallback when CEP Node integration is missing.
+- **Which route really runs.** In the real AE runs on both platforms (P5, P6) the panel started the daemon through `spawnViaNode` (`cp.spawn` with the runtime). `start.sh` and `start.ps1` run only on the ExtendScript fallback route, so they are rarely exercised in the field and need their own acceptance coverage (A14, A16).
+- **Parent and lifetime.** The daemon is spawned detached but keeps a live parent: AE's `CEPHtmlEngine` (Windows: `CEPHtmlEngine.exe`, the renderer process, session 1), not pid 1. By design the daemon survives a panel close and the next panel load reuses it; in an earlier Mac session it also kept running after AE quit. Whether it should outlive AE, and what each platform actually does, is checked in acceptance case A25.
 
 ### 5. Launchers, `start.sh` and `start.ps1`
 
-Both mirror `resolveDaemonLaunch` exactly and keep the output contract `pid:<N> runtime`, `pid:<N> node`, or `err:<code>` (`err:runtime-damaged`, `err:runtime-missing`). The `GAFFER_USE_BINARY` branch is removed.
+Both mirror `resolveDaemonLaunch` exactly and keep the output contract `pid:<N> runtime`, `pid:<N> node`, or `err:<code>` (`err:runtime-damaged`, `err:runtime-missing`). The `GAFFER_USE_BINARY` branch is removed. Both are only the fallback for the ExtendScript route (section 4, "Which route really runs"); the panel's normal route on Mac and Windows is `spawnViaNode`.
 
 - `start.sh`: `env -u NODE_OPTIONS -u NODE_PATH -u NODE_EXTRA_CA_CERTS nohup "$NODE" daemon.mjs >> /tmp/gaffer-daemon.log 2>&1 &`. The stamp-less first run hashes with `shasum -a 256` and reads the pin with `grep`/`sed` (no jq on a stock Mac).
 - `start.ps1`: does not use `Start-Process -Redirect*`. It runs `& $node launch.cjs` (new, about 30 lines, plain CommonJS so it runs on the runtime or a system node), which opens `%TEMP%\gaffer-daemon.log` in append mode, spawns `daemon.mjs` with `detached: true`, `windowsHide: true`, `stdio: ['ignore', fd, fd]` and the cleaned env, prints `pid:<N> runtime|node` and exits. Node passes only the named handles to the child, so the caller's pipe is never inherited. This removes the hang and the log truncation. File stays ASCII-only with a UTF-8 BOM.
@@ -206,7 +221,7 @@ Decision D6 offers a way to give existing users the runtime on R1's first launch
 
 - **Runtime unchanged (the normal case).** Download the 2.2 MB update asset, verify, compare `runtime/VERSION` with the pins: equal, so no network call to nodejs.org or the mirror. Stop daemon, sync (runtime excluded), write `version.json`. The runtime file's hash, size and mtime are unchanged.
 - **Runtime changed** (a release bumps `runtime-pins.json`, for example a Node security release). Download update asset, stage and verify the new runtime while the daemon still runs, stop daemon, swap runtime, sync, write `version.json`, delete `runtime.old`, warm up on Windows. Any failure before the swap leaves the install exactly as it was and prints `err:runtime`. Total download about 56 MB once.
-- **Daemon self-restart.** Unchanged: the daemon never respawns itself. On a `version.json` content change it broadcasts `daemon_reloading` and exits; the panel relaunches it through `resolveDaemonLaunch`. The PoC showed the relaunch through the runtime 6 s after a forced change, with the panel reconnecting.
+- **Daemon self-restart.** Unchanged: the daemon never respawns itself. On a `version.json` content change it broadcasts `daemon_reloading` and exits; the panel relaunches it through `resolveDaemonLaunch`. The PoC showed the relaunch through the runtime 6 s after a forced change on the Mac (P5) and 6.7 s on Windows (P6, old daemon gone after 5.9 s), with the panel reconnecting.
 
 ### 9. Install paths
 
@@ -254,7 +269,7 @@ New `.github/workflows/node-runtime-check.yml`, weekly (Monday 08:30 UTC) and ma
 
 ### 11. Mirror
 
-A normal versioned GitHub release `node-v24.22.1` on `spendolas/gaffer-ae`, created with `gh release create node-v24.22.1 --latest=false`, carrying the three official archives byte for byte plus nodejs.org's `SHASUMS256.txt` and `SHASUMS256.txt.sig`. Release notes: "Byte-identical copy of the official Node.js v24.22.1 archives from https://nodejs.org/dist/v24.22.1/, for networks that cannot reach nodejs.org. Gaffer's installer uses it only if the official download fails. Verify with SHASUMS256.txt." `--latest=false` is required: GitHub otherwise marks the newest release as latest, which would break every `releases/latest/download/gaffer-*` URL and the panel's update check. The tag does not match `v*`, so `release-gate.mjs` ignores it. Its `download_count` doubles as a measure of how often the fallback is used. The node mirror has the Node.js license inside each archive, which covers redistribution.
+A normal versioned GitHub release `node-v24.22.1` on `spendolas/gaffer-ae`, created with `gh release create node-v24.22.1 --latest=false`, carrying the three official archives byte for byte plus nodejs.org's `SHASUMS256.txt` and `SHASUMS256.txt.sig`. Release notes: "Byte-identical copy of the official Node.js v24.22.1 archives from https://nodejs.org/dist/v24.22.1/, for networks that cannot reach nodejs.org. Gaffer's installer uses it only if the official download fails. Verify with SHASUMS256.txt." `--latest=false` is required: GitHub otherwise marks the newest release as latest, which would break every `releases/latest/download/gaffer-*` URL and the panel's update check. The tag does not match `v*`, so `release-gate.mjs` ignores it. Its `download_count` doubles as a measure of how often the fallback is used. The node mirror has the Node.js license inside each archive, which covers redistribution. The agent trials (P4) used a temporary mirror; the real one must be a normal versioned release named after the Node version, never labelled as a test or trial, because agents judge the source partly by how it looks (Opus called the trial mirror "not an official source").
 
 ### 12. Bug fixes in the same change
 
@@ -273,7 +288,19 @@ A normal versioned GitHub release `node-v24.22.1` on `spendolas/gaffer-ae`, crea
 7. **No PATH exposure.** The runtime is called by absolute path only, so no other program picks it up.
 8. **Out of scope** (unchanged from today): a compromised GitHub account, malware running as the user.
 
-Firewall note: personal firewalls (Little Snitch, LuLu, Windows Firewall prompts) key rules to the program path. `runtime/node` is a new path and may prompt once (it listens on 127.0.0.1 only, and its outbound calls are the update check and telemetry). Separately, the desktop app's bundled `claude` lives in a versioned folder that changes on every Claude app update, so such users already see a new prompt after each Claude update (true since v0.11.2).
+**Firewall (tested, P7).** Windows Firewall keys its rules to the program path, and `runtime\node.exe` is a new path. Tested on the VM with the firewall on for Domain, Private and Public and `NotifyOnListen` True:
+
+- A `node.exe` at a new path that listens only on 127.0.0.1 gets no "Do you want to allow public and private networks to access this app?" prompt and no firewall rule. The real daemon bundle (127.0.0.1 only) did not trigger one either.
+- A `node.exe` listening on 0.0.0.0, or with no address (all interfaces, `::`), does trigger the prompt, and when the prompt is dismissed or left unanswered Windows creates two block rules for that exact path.
+
+Consequences:
+
+1. The zero-dependency design shows no firewall prompt on Windows because the daemon binds only 127.0.0.1 (true since v0.11.2; before that the panel WebSocket listened on all interfaces, so every Windows user would have seen this prompt at the first daemon start).
+2. Regression guard: the acceptance test asserts that every listener of the daemon is loopback-only and that no firewall prompt appears on the first launch on a clean Windows machine (case A23).
+3. Rule: any future listener (a diagnostics port, `--inspect`, a dev server) must bind 127.0.0.1 explicitly. Never rely on a default address.
+4. Stale auto-created block rules for deleted paths are harmless, but removing them needs admin rights, so Gaffer never tries.
+
+On macOS this is not proven: the application firewall was off on the test Mac, and the owner's personal firewall asked once, for the Claude binary. Third-party Mac firewalls (Little Snitch, LuLu) also key rules to the program path, so `runtime/node` may prompt once there (its outbound calls are the update check and telemetry); case A20 records it. Separately, the desktop app's bundled `claude` lives in a versioned folder that changes on every Claude app update, so such users already see a new prompt after each Claude update (true since v0.11.2).
 
 ## Failure modes
 
@@ -293,6 +320,8 @@ Firewall note: personal firewalls (Little Snitch, LuLu, Windows Firewall prompts
 | Hostile `NODE_OPTIONS` | launch | nothing; variable cleared | automatic |
 | Updater killed between renames | update | next update or launch finds `runtime.old`, restores it | automatic |
 | Wrong-architecture runtime (Mac migrated Intel to Apple Silicon) | launch | runs under Rosetta if installed; else the damaged/missing notice | updater re-provisions because `VERSION` names the platform |
+| Stale Claude login (expired OAuth token, failed refresh) | panel open | the sign-in screen: the daemon's auth-status call makes the claude CLI try a token refresh, and a failed refresh leaves empty tokens in `.credentials.json` (seen on the VM 13 s after daemon start) | sign in to Claude again. Not caused by the runtime; acceptance prep E6 signs in freshly |
+| Panel or daemon listener on a non-loopback address | first launch, Windows | Windows Firewall prompt; unanswered, two block rules for the path | prevented by the loopback-only rule (Security model, Firewall); case A23 guards it |
 
 ## Size and speed
 
@@ -321,22 +350,28 @@ Users install updates when the panel offers them, and the offer only goes to a n
 |---|---|---|---|
 | P1 | Mac Intel PoC, 14 tests | build; run with `env -i` and no `node_modules`; signature kept; paths with spaces and accents; truncated and tampered copies rejected; parity bundle vs source (handshake, 403s, register/auth_status, MCP initialize, tools/list with 26 tools, runJSX and runJSXLoop JSX to a mock panel including acorn undo-group stripping, 60 s timeout); chat turn end to end both variants; launcher cases; fresh-HOME footprint; daemon suite under Node 24 and 20; self-restart and atomic bundle swap; source maps; sizes; licenses; download routine vs wrong hash, truncation, HTML error page, no network; quarantine on the whole tree; stripped signature | all pass. Build 0 errors, outputs byte-identical, 324/324 tests, only Gaffer's config dir created, 460 vs 680 ms, 81 vs 95 MB RSS, 77 packages all MIT/ISC/BSD, quarantine runs, stripped signature exit 137 |
 | P2 | Windows 11 Home VM, Defender on, 10 tests | single `node.exe` from the zip via `tar.exe`; Authenticode; Mark-of-the-Web from curl.exe, Invoke-WebRequest, WebClient; PATH stripped to System32; parity; time to listen; Defender/SmartScreen events; update locking; path lengths; footprint; unit tests | all pass. 0.5 s extract, signature Valid, no MotW from any of the three, tool list sha256 `68693916750f82147194bef71e6c39926e8b8886004662567653b2d1feab8223` (36,641 bytes), runJSX capture sha256 `db239664e741baa4ca260e0b29251f91fbc910c67c478529dc941d2b76717faf` (2,465 bytes), 1.1 s vs 12.3 s, no events, 26 vs 109 char paths, nothing outside the test folder, 315/316 (one packaging artifact, fixed in section 12) |
-| P3 | GitHub runners macos-15 (M1), macos-15-intel, windows-latest | R1 to R8 on a throwaway branch (deleted) | all pass with identical tool-list and JSX hashes, 324/324 on all three, arm64 binary is arm64 and signed. Gatekeeper UI and Defender real-time not exercised |
-| P4 | Clean Claude sessions, Sonnet and Opus, Claude Code auto mode, node and npm hidden, nodejs.org blocked via a dead proxy | install with and without mirror wording | 6 of 6 auto runs offered the mirror used it with the hash verified; 0 of 10 runs attempted any install outside the working folder; with no fallback both models stopped and reported; Opus ran the signature check unprompted and treated it as provenance; Opus noted the missing package checksum; in manual mode the download was the first approval prompt |
-| P5 | Real After Effects, owner's Intel Mac, PoC panel in strict mode | panel's own spawn, MCP call, chat turn, forced reload | daemon executable was `runtime/node`, no system node files open, no `NODE_*` in env, `USER`/`HOME` present, parent CEPHtmlEngine; `getProjectSummary` answered in real AE; chat turn `turn=ok via=structure` with tool use; Claude found via desktop app 2.1.308; relaunch through the runtime 6 s after a forced `version.json` change, panel reconnected. A first-run display distortion was an AE/CEF resize quirk fixed by nudging the dock, unrelated |
+| P3 | GitHub runners macos-15 (M1), macos-15-intel, windows-latest | R1 to R8 on a throwaway branch (deleted) | all pass with identical tool-list and JSX hashes, 324/324 on all three, arm64 binary is arm64 and signed. Gatekeeper UI and Defender real-time not exercised. Full record of the same run in P8 |
+| P4 | Clean Claude sessions, Sonnet and Opus, Claude Code auto and manual mode, node and npm hidden, nodejs.org blocked via a dead proxy | 10 clean-session runs, install with and without mirror wording | 6 of 6 auto runs offered the mirror used it with the hash verified; Sonnet never objected; Opus always accepted, but ran `codesign` unprompted and said the mirror was "not an official source" and that "the hash came in the same instructions"; with no fallback (V4) both models stopped and reported, none improvised; 0 of 10 runs attempted any install outside the working folder; Opus noted the missing package checksum; in manual mode the download was the first approval prompt and both agents stopped there and printed the commands. Total spend $0.66 |
+| P5 | Real After Effects 2026 (26.0), owner's Intel Mac on macOS 26, PoC panel in strict mode (system-node fallback disabled by a `daemon/runtime/STRICT` file) | panel's own `spawnViaNode`, MCP call, chat turn, forced reload | the panel launched `<ext>/daemon/runtime/node daemon.mjs`; daemon executable was the runtime, no file from any system node tree open (`lsof`), no `NODE_*` in env (`ps -E`), `USER`/`HOME` present; parent CEPHtmlEngine (detached, but a live parent, not pid 1); log lines in order; `claude found (desktop app)` 2.1.308; MCP initialize `serverInfo` showed the PoC version; `getProjectSummary` answered in real AE ("No active composition"); chat turn with a tool call `turn=ok via=structure` (Claude 2.1.308, opus); changing the content of `version.json` made the daemon exit and the panel relaunch it through the runtime in about 6 s (`serverInfo` changed to the new version), panel reconnected. Panel viewport 350x500 at devicePixelRatio 2, fonts confirmed loaded via the CEP debug port. A first-run display distortion was an AE/CEF resize quirk fixed by nudging the dock, unrelated |
+| P6 | Real After Effects 26.5, Windows 11 Home VM, Defender real-time ON, stock firewall, Windows PoC panel in strict mode | panel's own spawn, process and network checks, MCP call, real chat turn, forced reload, Defender and SmartScreen events, staged restore and live-panel swap | runtime `daemon\runtime\node.exe` v24.22.1, 93,915,464 bytes, sha256 `d702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5`, Authenticode Valid, OpenJS Foundation. Daemon exe = the runtime, command line `runtime\node.exe daemon.mjs`, parent `CEPHtmlEngine.exe` (renderer), session 1, no window owned by the daemon; listens only on 127.0.0.1:9823 and :9824 (0 non-loopback); 46 env variables, no `NODE_*`, `PATH`, `APPDATA`, `USERNAME`, `USERPROFILE` intact; log lines in order, `claude found (known location)` standalone 2.1.268; error log 0 bytes; MCP initialize `serverInfo` PoC version; `getProjectSummary` answered "No active composition". Forced restart via `version.json` content change: old daemon gone after 5.9 s, new daemon on 9823 after 6.7 s, again through the runtime, panel reconnected. Defender 0 detections, 0 SmartScreen events; one Windows error-reporting event RADAR_PRE_LEAK_64 for AfterFX.exe (AE's own memory-use monitor, unrelated to Node or Gaffer). The owner signed in to Claude in the VM and ran a real chat turn with a tool through the panel: `chat spawn: --model opus --effort medium ... cli=2.1.268 source=standalone`, then `turn=ok via=structure exit=0`; the answer used the tool and matched the empty project, so the cleaned env (`NODE_*` removed) did not break `claude.exe`. The panel showed as a floating panel window in AE. No console window flash was reported, but the owner did not watch the VM screen during the first launch: "no console flash" on Windows rests on the earlier automated EnumWindows and screenshot test (W4 in the Windows PoC runs) until case A24 checks it by eye. Staged restore steps and the live-panel swap worked as designed (the live `com.gaffer.panel` must be moved out of the CEP extensions folder: a leftover sibling folder with the same bundle id can be loaded twice) |
+| P7 | Windows 11 Home VM, Windows Firewall on for Domain, Private and Public, `NotifyOnListen` True | a fresh `node.exe` path listening on 127.0.0.1; the real daemon bundle; a `node.exe` listening on 0.0.0.0 and on no address (all interfaces, `::`) | 127.0.0.1 only: no prompt, no rule (both the test listener and the real daemon). 0.0.0.0 or no address: the "allow public and private networks" prompt appeared (owner saw it, screenshots), and dismissing or not answering it made Windows create two block rules for that exact path. See Security model, Firewall |
+| P8 | GitHub hosted runners: macos-15 (Apple M1 arm64, macOS 15.7.9), macos-15-intel (x86_64), windows-latest (Windows Server 2025), one throwaway branch (deleted), run https://github.com/spendolas/gaffer-ae/actions/runs/39806281902 | R1 to R8 | all pass on all three. arm64 archive 53,062,778 bytes, sha256 `89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7` verified; extracted arm64 `node` 122,545,856 bytes, Mach-O arm64, sha256 `6f320694...f329` (only the first 8 and last 4 hex digits were logged; the first acceptance run records the full value), signed Developer ID Node.js Foundation HX7739G8FX with hardened runtime. A quarantined binary runs directly and via `/bin/bash -c` with `env -i` on both Macs (Gatekeeper assessments enabled, but no logged-in GUI session, so the dialog path is not exercised). Unit tests 324/324 under the bundled Node 24 on all three. tools/list sha256 `68693916750f82147194bef71e6c39926e8b8886004662567653b2d1feab8223` (36,641 bytes, 26 tools) and runJSX capture sha256 `db239664e741baa4ca260e0b29251f91fbc910c67c478529dc941d2b76717faf` (2,465 bytes), identical on arm64, Intel, Windows, the owner's Intel Mac and the Windows VM. Startup 172 to 294 ms arm64, 547 to 685 ms Intel, 214 to 258 ms Windows. Footprint: nothing Gaffer-named outside the workspace (Windows: only CryptnetUrlCache entries created by `Get-AuthenticodeSignature` itself). Defender real-time was OFF on the runner, so first-run scan latency is measured only on the VM (5.6 s for the first run of a fresh 94 MB `node.exe` with Defender ON, section 3 step 7) |
 
 ## Open risks and how each closes before release
 
+Proven since the first draft and removed from this table: real AE on Windows with the bundled runtime, including a real chat turn with a tool (P6), and the Windows Firewall behaviour for a loopback-only daemon (P7). Still unproven:
+
 | Risk | Closed by |
 |---|---|
-| Real Apple Silicon hardware with Gatekeeper UI and a real AE launch | acceptance case A4 on an Apple Silicon Mac (owner or a tester) before the bump push |
-| Browser-downloaded package with quarantine propagated by Archive Utility | case A17 with Safari and Archive Utility |
-| Installer end to end by a real Claude agent against the new assets (only the runtime step was tested) | cases A1 to A3 against a temporary prerelease of the candidate |
+| Real Apple Silicon hardware with a real AE launch and the Gatekeeper dialog (runners have no GUI session, P8) | acceptance case A4 on an Apple Silicon Mac (owner or a tester) before the bump push |
+| Browser-downloaded Gaffer package with real quarantine propagation through Archive Utility | case A17 with Safari and Archive Utility |
+| Installer flow end to end by a real Claude agent against the NEW release assets (only the runtime-download step was tested, with a temporary pre-release that has since been deleted) | cases A1 to A3 against a temporary prerelease of the candidate |
 | Windows 10, Windows ARM, third-party antivirus | Windows 10: a second VM or a tester, case A1 on it. ARM: decision D5. AV: one tester with a common suite; until then a known risk in the release notes |
-| Real AE on Windows (the VM has AE, the real launch was not tested) | case A4 on `gaffer-winvm` |
 | Roaming or redirected `%APPDATA%` carrying a 94 MB `node.exe` | decision D8; documented in README troubleshooting either way |
-| Firewall prompts | case A20 (note only, Little Snitch or LuLu if available) |
-| Fallback wording under silent DNS failure or TLS interception (only a dead proxy was tested) | case A19 variants b and c |
+| Firewall prompt on Mac with a third-party firewall (the application firewall was off on the test Mac; the owner's personal firewall asked once, for the Claude binary) | case A20 (note only, Little Snitch or LuLu if available). Windows is covered by P7 and guarded by case A23 |
+| Fallback-mirror wording under a silent DNS failure or TLS interception (only a dead proxy was tested) | case A19 variants b and c |
+| "No console window flash" on Windows seen by a human (P6 first launch was not watched; only the automated W4 test covers it) | case A24 |
+| Daemon lifetime when the panel closes and when AE quits (survives panel close by design; behaviour on AE quit not verified on either platform with the runtime) | case A25 |
 | Who owns Node security releases | decision D3; the weekly job makes the need visible |
 | Existing users reach strict zero-dependency only one release later | by design; decision D6 offers a first-launch provisioning path |
 | Corporate users who rely on `NODE_EXTRA_CA_CERTS` for Claude | decision D7 |
@@ -344,7 +379,7 @@ Users install updates when the panel offers them, and the offer only goes to a n
 ## Decisions needed from the owner
 
 - **D1. MCP registration.** `claude mcp add -s user` writes into the user's Claude config (`~/.claude.json`), outside the allowed set, and the panel does not need it (it passes its MCP config inline). Proposal: make README step 11 opt-in ("only if you want Gaffer's tools in a terminal Claude session"), off by default, and have `install-mac.sh` ask instead of doing it.
-- **D2. Mirror.** Ship it (proposal: yes, section 11) or not, and where: a `node-v<version>` release on `spendolas/gaffer-ae` (proposal), a separate repo such as `spendolas/gaffer-runtime`, or assets on each Gaffer release (bloats every release, no).
+- **D2. Mirror.** Ship it (proposal: yes, section 11) or not, and where: a `node-v<version>` release on `spendolas/gaffer-ae` (proposal), a separate repo such as `spendolas/gaffer-runtime`, or assets on each Gaffer release (bloats every release, no). Whatever the location, it is a normal versioned release, never one labelled test or trial (section 11).
 - **D3. Node line policy and owner.** Proposal: stay on the current LTS line (24 today); take every security release of that line within 7 days of the weekly job failing; move to the next LTS when it enters Active LTS and has been out three months. Who acts on the weekly failure email: the owner, or a scheduled agent that prepares the bump PR for the owner to review.
 - **D4. ZXP signing** to drop the developer-mode flag: separate project, yes or no, and when.
 - **D5. Architecture.** macOS: hardware arch via `hw.optional.arm64` (proposal). Windows ARM: refuse with a clear message (proposal for R1), or use `win-x64` under emulation, or pin `win-arm64` too (more pins, one more CI runner).
@@ -366,17 +401,17 @@ Verification order (owner constraint 6), all before the version-bump push to `ma
 
 | Gate | What | Who runs it | Evidence |
 |---|---|---|---|
-| G1 | `gh workflow run release.yml -f dry_run=true` on the release branch; `build` and `smoke` green; download the `gaffer-release` artifact | agent in the repo | run URL, artifact SHA-256 list, smoke matrix hashes |
+| G1 | `gh workflow run release.yml -f dry_run=true` on the release branch; `build` and `smoke` green; download the `gaffer-release` artifact | agent in the repo | run URL, artifact SHA-256 list, smoke matrix hashes equal to the P8 values (tools/list `68693916...8223`, runJSX capture `db239664...7faf`) or an explained difference, the full arm64 `binarySha256` |
 | G2 | full Linux test set (the dry run's ubuntu `build` job, plus the same commands in a `node:24` container locally) | agent | job log, local output |
 | G3 | real update on a Mac: v0.11.3 install to the candidate with the old updater, then candidate to a synthetic candidate+1 with the new updater, both using only the dry-run assets | agent drives, owner present for AE | `ok:` lines, marker diffs, runtime hashes, panel screenshot |
-| G4 | same on `gaffer-winvm` | agent via `guestcontrol`, owner approves | same |
-| G5 | acceptance cases A1 to A22 that are marked "release gate" in the plan | agent and owner | completed results table |
+| G4 | same on `gaffer-winvm` | agent via `guestcontrol`, owner approves | same, plus the listener list (loopback only), the firewall rule check and the owner's note that no firewall prompt or console window appeared (A23, A24) |
+| G5 | acceptance cases A1 to A26 that are marked "release gate" in the plan | agent and owner | completed results table, with a fresh Claude sign-in recorded for every chat case (plan E6) |
 
 Then the push: bump `panel/version.json`, add the `CHANGELOG.md` section, push to `main`. The workflow publishes; nothing is tested for the first time after that point.
 
 ## Files touched
 
-- [ ] `panel/main.js` (`resolveDaemonLaunch`, `cleanDaemonEnv`, `launchDaemon`, notices)
+- [ ] `panel/main.js` (`resolveDaemonLaunch` with Windows path normalisation and the `start.ps1` fallback candidates, `cleanDaemonEnv` case-insensitive on Windows, `launchDaemon`, notices)
 - [ ] `panel/daemon/start.sh`, `start.ps1` (ASCII, BOM), `launch.cjs` (new)
 - [ ] `panel/daemon/update.sh`, `update.ps1` (ASCII, BOM)
 - [ ] `panel/daemon/fetch-runtime.sh`, `fetch-runtime.ps1` (new, ASCII, BOM), `runtime-pins.json` (new)
