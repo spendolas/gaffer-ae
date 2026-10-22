@@ -5,28 +5,55 @@ on:
     branches: [main]
     paths:
       - 'panel/daemon/**'
+      # Panel files the daemon suite reads (daemon-launch, update-state,
+      # update-wiring, input-overlay-order, mcp-server-version, launch-cjs,
+      # config-path tests).
+      - 'panel/daemon-launch.js'
+      - 'panel/main.js'
+      - 'panel/update-state.js'
+      - 'panel/index.html'
+      - 'panel/version.json'
+      - 'design/scripts/panel-capture.mjs'
       - 'scripts/windows-tests/**'
       - 'scripts/check-ps-encoding.mjs'
-      - 'scripts/install-win.ps1'
+      # The encoding lint checks every tracked .ps1.
+      - '**/*.ps1'
       - '.github/workflows/windows-tests.yml'
   pull_request:
     paths:
       - 'panel/daemon/**'
+      # Panel files the daemon suite reads (daemon-launch, update-state,
+      # update-wiring, input-overlay-order, mcp-server-version, launch-cjs,
+      # config-path tests).
+      - 'panel/daemon-launch.js'
+      - 'panel/main.js'
+      - 'panel/update-state.js'
+      - 'panel/index.html'
+      - 'panel/version.json'
+      - 'design/scripts/panel-capture.mjs'
       - 'scripts/windows-tests/**'
       - 'scripts/check-ps-encoding.mjs'
-      - 'scripts/install-win.ps1'
+      # The encoding lint checks every tracked .ps1.
+      - '**/*.ps1'
       - '.github/workflows/windows-tests.yml'
   workflow_dispatch: {}
 
 jobs:
   windows:
+    # 24 is the runtime Gaffer ships; 20 is the floor for a dev checkout
+    # (install-win.ps1 from source needs Node.js 20+).
+    name: windows (node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
 
       # Real pass/fail gate: every .ps1 must be ASCII-only + UTF-8 BOM, or
       # PowerShell 5.1 mis-parses it (see scripts/windows-tests/test-1-bom.ps1).
