@@ -47,8 +47,14 @@ describe('fetch-runtime.ps1 static checks', () => {
     assert.ok(code.includes('official download failed, using the mirror'), 'missing the mirror log line');
   });
 
-  test('takes -Into and -StageOnly', () => {
-    assert.match(code, /param\(\s*\[string\]\s*\$Into\s*=\s*"",\s*\[switch\]\s*\$StageOnly\s*\)/);
+  test('takes -Into, -StageOnly and -Force', () => {
+    assert.match(code, /param\(\s*\[string\]\s*\$Into\s*=\s*"",\s*\[switch\]\s*\$StageOnly,\s*\[switch\]\s*\$Force\s*\)/);
+  });
+
+  test('-Force skips only the skip check (the updater repair mode), like fetch-runtime.sh --force', () => {
+    const skip = text.split('# ---- 2. Skip check')[1].split('# ---- 3. Download')[0];
+    assert.ok(/if \(\$Force\) \{\s*Write-Step "-Force: re-provisioning \$expectedVersionLine whatever is installed"\s*\} elseif \(/.test(skip), '-Force does not bypass the skip check');
+    assert.ok(skip.includes('Write-Output "runtime:current"'), 'the skip check itself is gone');
   });
 
   test('uses the commands the spec names', () => {
@@ -381,6 +387,18 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
       assert.deepEqual(tree(c.temp), []);
     });
   }
+
+  test('-Force re-provisions a current runtime; -Force -StageOnly stages runtime.new', () => {
+    const c = setup();
+    assert.equal(run(c).last, 'runtime:installed ' + version + ' ' + plat);
+    const r = run(c, ['-Force']);
+    assert.equal(r.last, 'runtime:installed ' + version + ' ' + plat, r.out);
+    assert.match(r.out, /runtime: -Force: re-provisioning/);
+    assertInstalled(c);
+    const s2 = run(c, ['-StageOnly', '-Force']);
+    assert.equal(s2.last, 'runtime:installed ' + version + ' ' + plat, s2.out);
+    assert.equal(sha(join(c.into, 'runtime.new', 'node.exe')), binSha);
+  });
 
   test('-StageOnly leaves a stamped runtime.new and does not swap', () => {
     const c = setup();

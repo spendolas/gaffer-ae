@@ -594,7 +594,7 @@ test('update.ps1 stages the runtime with -StageOnly while the daemon runs, then 
   const version = at('Move-Item -LiteralPath $versionTmp -Destination "$panelDir\\version.json" -Force');
   assert.ok(at('Get-ReleaseAsset $assetSource $zipPath') < stage, 'the archive is extracted first');
   assert.ok(stage < stop && stop < aside && aside < swapIn && swapIn < robo && robo < version, 'order: stage, stop daemon, swap, sync, version.json last');
-  assert.ok(ps1Body.includes('$ErrorActionPreference = "Continue"\n    try {\n        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1 |'), 'native stderr from the child cannot abort the update');
+  assert.ok(ps1Body.includes('$ErrorActionPreference = "Continue"\n    try {\n        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir @fetchExtra 2>&1 |'), 'native stderr from the child cannot abort the update');
   assert.ok(ps1Body.includes('ForEach-Object { $l = "$_".Trim(); if ($l) { Write-Host $l; $l } })\n        $fetchExit = $LASTEXITCODE'), 'each child line is logged as it arrives and collected; the exit code is read right after');
   assert.ok(!ps1Body.includes('$fetchOut'), 'no collect-then-print left');
   assert.ok(ps1Body.includes('$psExe = Join-Path $PSHOME "powershell.exe"'), 'the child is the same PowerShell, sharing the (hidden) console');
@@ -702,6 +702,59 @@ test('update.ps1 keeps the v0.11.3 lock, process-tree and hand-run-terminal rule
   for (const l of rt.split('\n').filter((x) => !/^\s*#/.test(x) && /\b(Test-Path|Remove-Item|Get-Item)\b/.test(x) && /runtime|\$path|\$exe|\$stamp|fetchScript|daemon\.mjs/.test(x))) {
     assert.ok(l.includes('-LiteralPath'), 'path cmdlet without -LiteralPath: ' + l.trim());
   }
+});
+
+// ---- repair mode (Task 13): the panel's Repair button ----
+// update.sh --repair / update.ps1 -Repair re-provision the runtime even when
+// it looks current (the archive's fetch-runtime gets --force / -Force) and
+// then sync the release's files as in any update. Same lock, same last-line
+// contract (ok:<version>, err:<code>, busy:already-running).
+
+test('update.sh parses --repair (unknown arguments are logged and ignored) and runs under bash 3.2 set -u with no arguments (run under bash)', () => {
+  const first = 'REPAIR=""\nfor arg in "$@"; do';
+  const start = sh.indexOf(first);
+  assert.ok(start !== -1, 'no --repair argument loop in update.sh');
+  const snippet = sh.slice(start, sh.indexOf('\ndone\n', start) + 6);
+  const run = (args) => spawnSync('/bin/bash', ['-c', 'set -euo pipefail\n' + snippet + 'echo "repair:${REPAIR:-no}"', 'update.sh', ...args], { encoding: 'utf8' });
+  const none = run([]);
+  assert.equal(none.status, 0, none.stderr);
+  assert.equal(none.stdout.trim(), 'repair:no');
+  assert.equal(run(['--repair']).stdout.trim(), 'repair:1');
+  const odd = run(['--bogus', '--repair']);
+  assert.equal(odd.status, 0);
+  assert.equal(odd.stdout.trim(), 'Ignoring unknown argument: --bogus\nrepair:1');
+  // Parsed after the log redirect, so the run's mode is in the log.
+  assert.ok(sh.indexOf('exec >> "$LOG" 2>&1') < start, 'arguments must be parsed after the log redirect');
+  assert.ok(sh.includes('echo "Repair mode: '), 'repair mode is not logged');
+});
+
+test('update.sh stage_runtime passes --force to the archive\'s fetch-runtime.sh in repair mode only (run under bash)', () => {
+  const fake = `echo '{}' > "$EXTRACT_DIR/daemon/runtime-pins.json"
+cat > "$EXTRACT_DIR/daemon/fetch-runtime.sh" <<'EOF'
+echo "args: $*" >> "$(dirname "$0")/../../args"
+echo 'runtime:current'
+EOF`;
+  const show = 'stage_runtime; cat "$T/args"';
+  assert.match(runRuntime(fake, show).stdout, /args: --stage-only --into \S.*\/install\/daemon$/, 'no --force without --repair');
+  const rep = runRuntime('REPAIR=1\n' + fake, show);
+  assert.equal(rep.status, 0, rep.stderr);
+  assert.match(rep.stdout, /args: --stage-only --into .*\/install\/daemon --force$/);
+});
+
+test('update.ps1 takes -Repair and hands -Force to the archive\'s fetch-runtime.ps1 only then', () => {
+  const head = ps1Code.split('\n').filter((l) => l.trim()).slice(0, 4).join('\n');
+  assert.match(head, /^param\(\s*\[switch\] \$Repair\s*\)/, 'param([switch] $Repair) must be the first statement');
+  assert.ok(ps1.includes('$fetchExtra = @()') && ps1.includes("if ($Repair) { $fetchExtra = @('-Force') }"), 'no -Force for a repair');
+  assert.ok(ps1.includes('-File $fetchScript -StageOnly -Into $daemonDir @fetchExtra 2>&1'), 'the extra argument is not splatted into the fetch-runtime call');
+  assert.ok(ps1.includes('Write-Host "Repair mode: '), 'repair mode is not logged');
+});
+
+test('the Windows runtime harness has a repair case', () => {
+  const t6 = readFileSync(fileURLToPath(new URL('./windows-tests/test-6-runtime-update.ps1', import.meta.url)), 'utf8');
+  for (const c of ['Case 5a: repair re-provisions a current runtime', 'Case 5b: a damaged runtime at the same version', 'Case 5c: a repair whose download fails']) {
+    assert.ok(t6.includes(c), 'missing ' + c);
+  }
+  assert.ok(t6.includes('"-Repair"'), 'the harness never runs update.ps1 -Repair');
 });
 
 // ---- migration guarantee (spec 7, Review Focus c) ----

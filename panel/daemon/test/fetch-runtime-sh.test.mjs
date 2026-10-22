@@ -540,6 +540,47 @@ test('--stage-only on a current runtime removes a stale runtime.new', (t) => {
   assert.ok(!existsSync(join(sb.into, 'runtime.new')));
 });
 
+// --force (the updater's repair mode): a runtime that looks current is
+// downloaded and verified again, into a fresh folder (a new file, so a binary
+// macOS refuses to run, Gatekeeper exit 137, is really replaced).
+test('--force re-provisions a current runtime into a fresh file', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  run(sb);
+  const node = join(sb.into, 'runtime', 'node');
+  const inoBefore = statSync(node).ino;
+  const r = run(sb, ['--force']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.last, `runtime:installed ${VERSION} ${PLAT}`);
+  assert.match(r.stdout, /runtime: --force: re-provisioning/);
+  assert.deepEqual(readFileSync(node), sb.binBuf);
+  assert.notEqual(statSync(node).ino, inoBefore, 'the binary is a new file');
+  assert.deepEqual(listTree(sb.into), ['runtime', 'runtime/VERIFIED', 'runtime/VERSION', 'runtime/node']);
+});
+
+test('--force --stage-only stages runtime.new even when the runtime is current', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  run(sb);
+  const before = snapshot(join(sb.into, 'runtime'));
+  const r = run(sb, ['--stage-only', '--force']);
+  assert.equal(r.last, `runtime:installed ${VERSION} ${PLAT}`, r.stdout + r.stderr);
+  assert.deepEqual(snapshot(join(sb.into, 'runtime')), before, 'runtime/ untouched');
+  assert.deepEqual(readFileSync(join(sb.into, 'runtime.new', 'node')), sb.binBuf);
+});
+
+test('--force with both sources down fails and leaves the current runtime untouched', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  run(sb);
+  const before = snapshot(sb.into);
+  rmSync(join(sb.official, sb.archiveName));
+  rmSync(join(sb.mirror, sb.archiveName));
+  const r = run(sb, ['--stage-only', '--force']);
+  assert.equal(r.last, 'err:runtime');
+  assert.deepEqual(snapshot(sb.into), before);
+});
+
 for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) {
   test(`${sig} during the download cleans up and exits ${code}`, async (t) => {
     const { createServer } = await import('node:http');

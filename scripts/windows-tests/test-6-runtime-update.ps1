@@ -37,6 +37,14 @@
 #   4b the same state with a CURRENT runtime.old and unreachable sources: the
 #      next update restores it and finds it current (no download), the
 #      runtime is byte-identical to before.
+#   5a repair (update.ps1 -Repair, the panel's Repair button) at the SAME
+#      version with a current runtime: fetch-runtime.ps1 gets -Force, the
+#      runtime is downloaded and swapped in as a new folder, version.json
+#      keeps its content, ok:<version>.
+#   5b a damaged runtime (node.exe truncated) at the same version, plain
+#      update: the stamp check fails, so the runtime is re-provisioned.
+#   5c a repair whose download fails: err:runtime, exit 1, install
+#      byte-identical, the daemon never stopped.
 #
 # update.ps1 stops whatever listens on port 9823, so this refuses to run
 # while a Gaffer daemon is up (close After Effects first), unless
@@ -249,12 +257,15 @@ function Set-FetchEnv([string] $base, [string] $pins) {
 }
 function Clear-FetchEnv { foreach ($v in $fetchVars) { Remove-Item -LiteralPath "Env:\$v" -ErrorAction SilentlyContinue } }
 
-# Runs update.ps1 inside $dir to completion (fresh log), returns the exit code.
-function Invoke-Update([string] $dir, [string] $assetPath) {
+# Runs update.ps1 inside $dir to completion (fresh log), returns the exit
+# code. -Repair runs it the way the panel's Repair button does.
+function Invoke-Update([string] $dir, [string] $assetPath, [switch] $Repair) {
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $env:GAFFER_UPDATE_ASSET = $assetPath
     $env:TEMP = $tmp
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "daemon\update.ps1") | Out-Null
+    $updArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "daemon\update.ps1"))
+    if ($Repair) { $updArgs += "-Repair" }
+    & powershell.exe @updArgs | Out-Null
     return $LASTEXITCODE
 }
 function Read-Log {
@@ -422,6 +433,45 @@ try {
     if ($code -eq 0 -and (Get-LastLogLine) -eq $wantOk) { Pass "4b: ends $wantOk" } else { Fail "4b: exit $code, last line $(Get-LastLogLine)" }
     if ((Get-RuntimeFingerprint $c4b) -eq $fp) { Pass "4b: the runtime is byte-identical to before the interrupted swap" } else { Fail "4b: the runtime differs" }
     Test-Clean $c4b "4b"
+
+    # ---------- Case 5a: repair re-provisions a current runtime at the same version ----------
+    $c5 = New-TestInstall "case5a" $currentLine
+    Copy-Item -LiteralPath (Join-Path $expected "version.json") -Destination (Join-Path $c5 "version.json") -Force
+    $verBefore = Get-Sha (Join-Path $c5 "version.json")
+    # A file only the OLD runtime folder has: gone once a fresh folder is swapped in.
+    Write-Ascii (Join-Path $c5 "daemon\runtime\old-folder-marker.txt") "old`n"
+    $users = Get-UserHashes $c5
+    Set-FetchEnv $goodBase $goodPins
+    $code = Invoke-Update $c5 $asset -Repair
+    $log = Read-Log
+    if ($code -eq 0 -and (Get-LastLogLine) -eq $wantOk) { Pass "5a: repair at the same version ends $wantOk" } else { Fail "5a: exit $code, last line $(Get-LastLogLine) (log: $logPath)" }
+    if ($log -match "Repair mode: ") { Pass "5a: the log records repair mode" } else { Fail "5a: no 'Repair mode' line in the log" }
+    if ($log -match "runtime: -Force: re-provisioning" -and $log -match "runtime:installed $([regex]::Escape($currentLine))") { Pass "5a: fetch-runtime.ps1 ran with -Force and staged the runtime" } else { Fail "5a: no -Force re-provisioning in the log" }
+    if (-not (Test-Path -LiteralPath (Join-Path $c5 "daemon\runtime\old-folder-marker.txt")) -and (Get-Sha (Join-Path $c5 "daemon\runtime\node.exe")) -eq $binSha) { Pass "5a: a fresh runtime folder with the pinned node.exe is in place" } else { Fail "5a: the old runtime folder is still there" }
+    if ((Get-Sha (Join-Path $c5 "version.json")) -eq $verBefore) { Pass "5a: version.json content unchanged (same release)" } else { Fail "5a: version.json changed" }
+    Test-UserData $c5 $users "5a"
+    Test-Clean $c5 "5a"
+
+    # ---------- Case 5b: a damaged runtime at the same version, plain update ----------
+    $c5b = New-TestInstall "case5b" $currentLine
+    Copy-Item -LiteralPath (Join-Path $expected "version.json") -Destination (Join-Path $c5b "version.json") -Force
+    Write-Ascii (Join-Path $c5b "daemon\runtime\node.exe") "truncated"
+    Set-FetchEnv $goodBase $goodPins
+    $code = Invoke-Update $c5b $asset
+    if ($code -eq 0 -and (Get-LastLogLine) -eq $wantOk) { Pass "5b: plain update of a damaged runtime ends $wantOk" } else { Fail "5b: exit $code, last line $(Get-LastLogLine) (log: $logPath)" }
+    if ((Get-Sha (Join-Path $c5b "daemon\runtime\node.exe")) -eq $binSha) { Pass "5b: the stamp check failed and the runtime was re-provisioned" } else { Fail "5b: runtime\node.exe is still damaged" }
+    Test-Clean $c5b "5b"
+
+    # ---------- Case 5c: a repair whose download fails ----------
+    $c5c = New-TestInstall "case5c" $currentLine
+    $before = Get-TreeHash $c5c
+    Set-FetchEnv $unreachable $goodPins
+    $code = Invoke-Update $c5c $asset -Repair
+    $log = Read-Log
+    if ($code -eq 1 -and (Get-LastLogLine) -eq "err:runtime") { Pass "5c: a failed repair download ends with err:runtime, exit 1" } else { Fail "5c: exit $code, last line $(Get-LastLogLine)" }
+    if ($log -notmatch "Stopping daemon\.\.\.") { Pass "5c: the daemon was never stopped" } else { Fail "5c: the daemon was stopped before the failure" }
+    if ((Get-TreeHash $c5c) -eq $before) { Pass "5c: install untouched" } else { Fail "5c: the install changed" }
+    Test-Clean $c5c "5c"
 } finally {
     if ($holdProc -and -not $holdProc.HasExited) { Stop-Process -Id $holdProc.Id -Force -ErrorAction SilentlyContinue }
     if ($gated -and -not $gated.HasExited) { Stop-Process -Id $gated.Id -Force -ErrorAction SilentlyContinue }
