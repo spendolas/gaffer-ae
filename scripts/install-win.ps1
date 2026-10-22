@@ -119,7 +119,14 @@ if (-not $claudeBin -and $npmShim) {
 
 # Node.js is checked only where it is needed (the npm path below).
 function Assert-SystemNode {
-    $nodeVersion = & node --version 2>$null
+    # Under the script's "Stop" preference a bare "& node" with no node on
+    # PATH throws CommandNotFoundException before the message below can
+    # print, so look the command up first; the preference set here is local.
+    $ErrorActionPreference = "Continue"
+    $nodeVersion = $null
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $nodeVersion = & node --version 2>$null
+    }
     if (-not $nodeVersion) {
         Write-Host "ERROR: this install runs the daemon from source and needs Node.js 20+ and npm."
         Write-Host "  To install Gaffer without Node.js, follow the install steps in README.md instead."
