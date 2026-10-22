@@ -1,0 +1,8 @@
+{
+  "source": "Proof row P8 (spec docs/superpowers/specs/2026-10-22-zero-dependency-install-design.md), CI run 39806281902; identical on darwin-arm64, darwin-x64 and win-x64",
+  "toolCount": 26,
+  "toolsSha256": "68693916750f82147194bef71e6c39926e8b8886004662567653b2d1feab8223",
+  "toolsBytes": 36641,
+  "jsxSha256": "db239664e741baa4ca260e0b29251f91fbc910c67c478529dc941d2b76717faf",
+  "jsxBytes": 2465
+}

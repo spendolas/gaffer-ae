@@ -5,6 +5,10 @@ name: Release
 # create / recover / skip, so a push that does not bump the version (or
 # only touches the legacy commit field) is a no-op. Manual runs default to a
 # dry run that only uploads a workflow artifact named gaffer-release.
+#
+# Jobs: build (tests, bundle, notices, hygiene, npm audit, package) ->
+# smoke (the packaged daemon on the pinned Node runtime, macOS arm64, macOS
+# Intel and Windows, no system Node) -> publish (needs both).
 on:
   push:
     branches: [main]
@@ -31,6 +35,9 @@ jobs:
     outputs:
       action: ${{ steps.gate.outputs.action }}
       version: ${{ steps.version.outputs.version }}
+      # 'true' when the assets were built (create / recover, or any dry run);
+      # the smoke job runs only then.
+      built: ${{ steps.package.outputs.built }}
     env:
       # 'true' only for a manual run with dry_run checked; 'false' on push.
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
@@ -40,9 +47,10 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0   # tags are needed by the gate
 
+      # The bundle targets node24 and ships with the pinned Node 24 runtime.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Read version
         id: version
@@ -80,14 +88,64 @@ jobs:
           set -euo pipefail
           (cd panel/daemon && npm ci && npm test)
           node scripts/check-ps-encoding.mjs
-          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs scripts/runtime-pins.test.mjs scripts/third-party-notices.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs scripts/runtime-pins.test.mjs scripts/third-party-notices.test.mjs scripts/node-runtime-check.test.mjs scripts/smoke/smoke.test.mjs
 
-      - name: Build assets
+      # package-release.sh runs scripts/bundle-daemon.sh first: esbuild bundle,
+      # hygiene checks (no developer paths or secret patterns), the license
+      # allowlist and THIRD-PARTY-NOTICES.txt, npm audit --omit=dev
+      # --audit-level=high; then it stages, asserts the layout and builds the
+      # four archives plus SHA256SUMS.txt. Any failure stops the release.
+      - name: Bundle, hygiene, notices, audit, package
+        id: package
         if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
-        run: bash scripts/package-release.sh "$V" "$GITHUB_SHA" dist
+        env:
+          GAFFER_DEBUG_DIR: ${{ runner.temp }}/gaffer-debug
+        run: |
+          set -euo pipefail
+          bash scripts/package-release.sh "$V" "$GITHUB_SHA" dist
+          ls -l dist "$GAFFER_DEBUG_DIR"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      # meta.json and the source map embed build paths and never ship; kept
+      # here to symbolicate a field stack trace from daemon.mjs.
+      - name: Upload debug artifact
+        if: steps.package.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaffer-debug
+          path: |
+            ${{ runner.temp }}/gaffer-debug/meta.json
+            ${{ runner.temp }}/gaffer-debug/daemon.mjs.map
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      # The smoke job runs the daemon test suite from the checkout on the
+      # pinned runtime, without npm or a system Node: production
+      # dependencies only, installed here (pure JavaScript, no install
+      # scripts) and shipped to it as a CI-only artifact.
+      - name: Smoke test dependencies
+        if: steps.package.outputs.built == 'true'
+        run: |
+          set -euo pipefail
+          P="$RUNNER_TEMP/smoke-deps"
+          mkdir -p "$P"
+          cp panel/daemon/package.json panel/daemon/package-lock.json "$P/"
+          (cd "$P" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund && tar -czf "$RUNNER_TEMP/daemon-node-modules.tgz" node_modules)
+          ls -l "$RUNNER_TEMP/daemon-node-modules.tgz"
+
+      - name: Upload smoke dependencies
+        if: steps.package.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaffer-smoke-deps
+          path: ${{ runner.temp }}/daemon-node-modules.tgz
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
       - name: Upload artifact
-        if: steps.gate.outputs.action != 'skip' || env.DRY_RUN == 'true'
+        if: steps.package.outputs.built == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: gaffer-release
@@ -97,8 +155,141 @@ jobs:
           if-no-files-found: error
           overwrite: true   # "Re-run all jobs" must not 409 on the existing artifact
 
-  publish:
+  # The PoC runs R1 to R5 (spec section 10, proof rows P3/P8), made permanent:
+  # the PACKAGED update archive from the build artifact (never the checkout)
+  # is unpacked into a folder whose path has a space, the packaged
+  # fetch-runtime script provisions the pinned official Node (download,
+  # archive SHA-256, single-binary extract, size, SHA-256, signature,
+  # --version), then scripts/smoke/run-smoke.mjs, run by that runtime,
+  # re-checks the binary against the pins and its signature independently,
+  # starts the packaged daemon.mjs with a stripped PATH and no node_modules on
+  # test ports, runs the parity probe (WS handshake, MCP initialize,
+  # tools/list hash, runJSX capture hash, undo-group stripping, 60 s timeout),
+  # compares the hashes with the checkout's index.js on the same runtime, and
+  # runs the daemon test suite with that runtime.
+  smoke:
     needs: build
+    if: needs.build.outputs.built == 'true'
+    name: smoke (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: windows-latest
+            platform: win-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      # Never the default 9823/9824 (scripts/smoke refuses them).
+      SMOKE_WS_PORT: '27831'
+      SMOKE_MCP_PORT: '27832'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gaffer-release
+          path: ${{ runner.temp }}/release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gaffer-smoke-deps
+          path: ${{ runner.temp }}/smoke-deps
+
+      - name: Unpack the packaged update archive and provision the runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release/dist"
+          grep ' gaffer-update-mac.tar.gz$' SHA256SUMS.txt | /usr/bin/shasum -a 256 -c -
+          EXT="$RUNNER_TEMP/Gaffer Smoke/com.gaffer.panel"
+          mkdir -p "$EXT"
+          tar -xzf gaffer-update-mac.tar.gz -C "$EXT"
+          OUT="$(/bin/bash "$EXT/daemon/fetch-runtime.sh" --into "$EXT/daemon" 2>&1)" || true
+          echo "$OUT"
+          WANT="runtime:installed $(jq -r '.node.version' "$EXT/daemon/runtime-pins.json") ${{ matrix.platform }}"
+          LAST="$(printf '%s\n' "$OUT" | tail -n 1)"
+          if [ "$LAST" != "$WANT" ]; then echo "::error::fetch-runtime.sh ended with '$LAST', want '$WANT'"; exit 1; fi
+          echo "EXT=$EXT" >> "$GITHUB_ENV"
+          echo "RUNTIME=$EXT/daemon/runtime/node" >> "$GITHUB_ENV"
+
+      - name: Unpack the packaged update archive and provision the runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:RUNNER_TEMP 'release\dist'
+          $line = Get-Content (Join-Path $dist 'SHA256SUMS.txt') | Where-Object { $_ -match ' gaffer-update-win\.zip$' }
+          $want = ($line -split '\s+')[0].ToLower()
+          $got = (Get-FileHash -Algorithm SHA256 (Join-Path $dist 'gaffer-update-win.zip')).Hash.ToLower()
+          if ($got -ne $want) { throw "gaffer-update-win.zip sha256 $got != SHA256SUMS.txt $want" }
+          $ext = Join-Path $env:RUNNER_TEMP 'Gaffer Smoke\com.gaffer.panel'
+          New-Item -ItemType Directory -Force -Path $ext | Out-Null
+          & "$env:SystemRoot\System32\tar.exe" -xf (Join-Path $dist 'gaffer-update-win.zip') -C $ext
+          if ($LASTEXITCODE -ne 0) { throw "tar.exe exit $LASTEXITCODE" }
+          $daemon = Join-Path $ext 'daemon'
+          # Windows PowerShell 5.1, what end users run.
+          # Continue: a stderr line from the child must not abort this step;
+          # the contract is the last output line, checked below.
+          $ErrorActionPreference = 'Continue'
+          $out = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $daemon 'fetch-runtime.ps1') -Into $daemon 2>&1 | ForEach-Object { "$_" }
+          $ErrorActionPreference = 'Stop'
+          $out | ForEach-Object { Write-Host $_ }
+          $pins = Get-Content (Join-Path $daemon 'runtime-pins.json') -Raw | ConvertFrom-Json
+          $wantLine = "runtime:installed $($pins.node.version) ${{ matrix.platform }}"
+          $last = ($out | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()
+          if ($last -ne $wantLine) { throw "fetch-runtime.ps1 ended with '$last', want '$wantLine'" }
+          Add-Content -Path $env:GITHUB_ENV -Value "EXT=$ext"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUNTIME=$(Join-Path $daemon 'runtime\node.exe')"
+
+      # Production node_modules for the checkout's index.js and the test
+      # suite only. The packaged extension never gets any (run-smoke checks).
+      - name: Smoke and parity (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/smoke-deps/daemon-node-modules.tgz" -C panel/daemon
+          "$RUNTIME" scripts/smoke/run-smoke.mjs --ext "$EXT" --platform '${{ matrix.platform }}' \
+            --out "$RUNNER_TEMP/smoke-results" --ws-port "$SMOKE_WS_PORT" --mcp-port "$SMOKE_MCP_PORT" \
+            --source-daemon panel/daemon --baseline scripts/smoke/parity-baseline.json --timeout-check
+
+      - name: Smoke and parity (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $env:RUNNER_TEMP 'smoke-deps\daemon-node-modules.tgz') -C panel\daemon
+          if ($LASTEXITCODE -ne 0) { throw "tar.exe exit $LASTEXITCODE" }
+          & $env:RUNTIME scripts\smoke\run-smoke.mjs --ext $env:EXT --platform '${{ matrix.platform }}' `
+            --out (Join-Path $env:RUNNER_TEMP 'smoke-results') --ws-port $env:SMOKE_WS_PORT --mcp-port $env:SMOKE_MCP_PORT `
+            --source-daemon panel\daemon --baseline scripts\smoke\parity-baseline.json --timeout-check
+          exit $LASTEXITCODE
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: cat "$RUNNER_TEMP/smoke-results/results.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no results.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-results-${{ matrix.platform }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+  publish:
+    needs: [build, smoke]
     if: >-
       github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || inputs.dry_run == false)
@@ -117,7 +308,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - uses: actions/download-artifact@v4
         with:
