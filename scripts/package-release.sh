@@ -46,7 +46,9 @@ find "$STAGE/daemon" -type d -empty -delete
 # 2. The bundle (daemon.mjs, THIRD-PARTY-NOTICES.txt), then the shim and the
 # dependency-free package.json. A 0.11.x updater requires daemon/index.js and
 # runs `npm install --omit=dev`; the shim keeps it working and the empty
-# dependency set makes npm succeed and prune the old node_modules.
+# dependency set makes npm succeed. npm does not prune the old node_modules of
+# a real install (measured: it trusts its hidden lockfile and leaves the tree);
+# nothing runs from it, and the next new-updater sync deletes it.
 bash "${GAFFER_BUNDLE_SCRIPT:-$REPO_ROOT/scripts/bundle-daemon.sh}" "$STAGE"
 printf "import './daemon.mjs';\n" > "$STAGE/daemon/index.js"
 printf '{"name":"gaffer-daemon","private":true,"type":"module"}\n' > "$STAGE/daemon/package.json"
