@@ -34,7 +34,7 @@ test('main.js checks the latest GitHub release through GafferUpdateState', () =>
     "'https://api.github.com/repos/spendolas/gaffer-ae/releases/latest'",
     "'gafferReleaseCache'", "'If-None-Match'", "'application/vnd.github+json'",
     'UpdateState.readReleaseResponse(', 'UpdateState.decideUpdate(',
-    'UpdateState.shouldReloadAfterUpdate(', 'UpdateState.updateVerdict(',
+    'UpdateState.updateWaitStep(', 'UpdateState.updateVerdict(',
     'dismissedUpdateVersion: dismissedUpdateVersion']) {
     assert.ok(main.includes(needed), 'main.js is missing ' + needed);
   }
@@ -115,4 +115,55 @@ test('download timeouts in both updater scripts fit inside the panel give-up', (
 test('panel-capture forces the update-available state with a version', { skip: !hasDesign && 'design/ absent (packaged tree)' }, () => {
   assert.ok(capture.includes("setUpdateAvailable('99.0.0')"));
   assert.ok(!capture.includes("setUpdateAvailable('feedface')"));
+});
+
+// ---- Task 13: repair path and the updater's result line ----
+
+const fnBody = (name) => {
+  const start = main.indexOf('function ' + name + '(');
+  assert.ok(start !== -1, 'no function ' + name);
+  const next = main.indexOf('\n  function ', start + 1);
+  return main.slice(start, next === -1 ? undefined : next);
+};
+
+test('a refused launch remembers its code and refreshes the Settings button; a new launch clears it', () => {
+  const show = fnBody('showLaunchError');
+  assert.ok(show.includes('daemonLaunchCode = code'), 'showLaunchError does not keep the code');
+  assert.ok(show.includes('syncSettingsUpdateButton()'), 'showLaunchError does not refresh the Settings button');
+  assert.ok(fnBody('startDaemon').includes('daemonLaunchCode = null'), 'startDaemon does not clear the code');
+});
+
+test('the Settings button follows settingsUpdateAction and reads Repair for a repair', () => {
+  const sync = fnBody('syncSettingsUpdateButton');
+  assert.ok(sync.includes('UpdateState.settingsUpdateAction('), 'not driven by settingsUpdateAction');
+  assert.ok(sync.includes('UpdateState.isRepairableLaunchError(daemonLaunchCode)'));
+  assert.ok(sync.includes("'Repair'") && sync.includes("'Update'"), 'no Repair / Update label switch');
+});
+
+test('runUpdate passes the repair flag to both updaters on both routes', () => {
+  const run = fnBody('runUpdate');
+  assert.ok(run.includes("'--repair'"), 'Node route: no --repair for update.sh');
+  assert.ok(run.includes("'-Repair'"), 'Node route: no -Repair for update.ps1');
+  assert.ok(run.includes(' --repair'), 'ExtendScript route: no --repair for update.sh');
+  assert.ok(run.includes(' -Repair'), 'ExtendScript route: no -Repair for update.ps1');
+  assert.ok(run.includes('beginUpdateRun('), 'runUpdate does not record the log offset before starting the updater');
+  assert.ok(run.indexOf('beginUpdateRun(') < run.indexOf('cp.spawn('), 'the log offset must be taken before the spawn');
+  assert.ok(/child\.on\('exit', function \(\) \{ run\.exited = true; \}\)/.test(run), 'the Node route does not mark the updater as exited');
+});
+
+test('the wait reads the updater log through updateWaitStep and shows updateFailureText', () => {
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes('UpdateState.updateWaitStep('), 'wait does not use updateWaitStep');
+  assert.ok(wait.includes('readUpdateLogSince('), 'wait does not read the updater log');
+  assert.ok(wait.includes("step.action === 'fail'"), 'wait ignores err: results');
+  assert.ok(fnBody('showUpdateFailure').includes('UpdateState.updateFailureText('));
+  assert.ok(!wait.includes('UpdateState.shouldReloadAfterUpdate('), 'the version check now lives in updateWaitStep');
+});
+
+test('the panel reads the same log file the updaters write', () => {
+  const p = fnBody('updaterLogPath');
+  assert.ok(p.includes("'\\\\gaffer-update.log'") && p.includes('process.env.TEMP'), 'Windows path is not %TEMP%\\gaffer-update.log');
+  assert.ok(p.includes("'/gaffer-update.log'") && p.includes('process.env.TMPDIR'), 'macOS path is not ${TMPDIR:-/tmp}/gaffer-update.log');
+  assert.ok(read('../update.sh').includes('LOG="${TMPDIR:-/tmp}/gaffer-update.log"'));
+  assert.ok(read('../update.ps1').includes('$logPath = Join-Path $env:TEMP "gaffer-update.log"'));
 });

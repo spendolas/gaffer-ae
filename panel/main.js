@@ -397,6 +397,9 @@
   // GafferLaunch module; this file only does the I/O.
 
   var daemonLaunchError = null; // notice text while the launch is refused
+  // Its code (runtime-damaged, runtime-missing, runtime-blocked, launch-failed):
+  // Settings offers Repair while it is set (GafferUpdateState.isRepairableLaunchError).
+  var daemonLaunchCode = null;
 
   function daemonLogPath() {
     return process.platform === 'win32'
@@ -473,9 +476,11 @@
 
   function showLaunchError(code) {
     daemonLaunchError = Launch.launchNotice(code);
+    daemonLaunchCode = code;
     console.error('Gaffer: daemon not launched: ' + code);
     setStatus('disconnected', daemonLaunchError);
     try { showToast('error', daemonLaunchError, { duration: 0 }); } catch (e) { /* ignore */ }
+    try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ } // offers Repair
   }
 
   // Returns 'started', 'refused' (a notice is showing), or false only when
@@ -554,6 +559,7 @@
     if (daemonStartAttempted) return;
     daemonStartAttempted = true;
     daemonLaunchError = null;
+    daemonLaunchCode = null;
     // Shown first: a stamp-less first run hashes the runtime synchronously
     // (up to about 3 s). A refused launch replaces it with its notice.
     setStatus('starting', 'Starting daemon...');
@@ -2844,13 +2850,83 @@
     }
   }
 
-  // Poll the on-disk version.json and reload ONLY once its version moves.
-  // The updater writes that file last, so reloading earlier would load
-  // half-copied files and flag a false failure. After 180s without a change
-  // the banner offers "Force stop & retry", unless the updater still holds
-  // its lock: then it is alive and working (a slow npm install, say), a
-  // second updater would only exit busy, so wait one more window instead.
+  // The updater's log, where both scripts write their result line (update.sh:
+  // ${TMPDIR:-/tmp}/gaffer-update.log, update.ps1: Start-Transcript to
+  // %TEMP%\gaffer-update.log). The panel spawns them with its own env, so the
+  // same variables name the same file. Needs CEP Node; null without it.
+  function updaterLogPath() {
+    if (typeof require === 'undefined' || typeof process === 'undefined') return null;
+    return process.platform === 'win32'
+      ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-update.log'
+      : String(process.env.TMPDIR || '/tmp').replace(/\/+$/, '') + '/gaffer-update.log';
+  }
+
+  // One update or repair the panel is waiting on: mode 'update' | 'repair',
+  // the log's size when it started (the result line is looked for only in
+  // what the log gains after that), and whether the updater the panel
+  // started has exited. Taken BEFORE the updater starts.
+  var updateRun = null;
+  function beginUpdateRun(mode) {
+    var run = { mode: mode, logPath: updaterLogPath(), logStart: 0, exited: false };
+    if (run.logPath) {
+      try { run.logStart = require('fs').statSync(run.logPath).size; } catch (e) { run.logStart = 0; }
+    }
+    updateRun = run;
+    return run;
+  }
+
+  // What the updater log gained since the run started (at most its last
+  // 64 KB): '' when nothing yet or no log file, null when it cannot be read.
+  // A log that shrank (replaced) is read from its start.
+  function readUpdateLogSince(run) {
+    if (!run || !run.logPath) return null;
+    var fs, size, fd;
+    try { fs = require('fs'); } catch (e) { return null; }
+    try { size = fs.statSync(run.logPath).size; } catch (e) { return e && e.code === 'ENOENT' ? '' : null; }
+    var start = size >= run.logStart ? run.logStart : 0;
+    if (size - start > 65536) start = size - 65536;
+    if (size <= start) return '';
+    try {
+      fd = fs.openSync(run.logPath, 'r');
+      var buf = require('buffer').Buffer.alloc(size - start); // CEP may not expose a global Buffer
+      var n = fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString('utf8', 0, n);
+    } catch (e) {
+      return null;
+    } finally {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch (e2) { /* ignore */ } }
+    }
+  }
+
+  // Ends a wait that failed: the updater reported err:<code>, exited with no
+  // result line, or the give-up passed (code null). The banner stays up with
+  // "Force stop & retry" instead of hiding: a stuck update usually means
+  // something still holds the daemon port, and that button kills it directly
+  // rather than making the user hand-run a PowerShell command over chat.
+  function showUpdateFailure(run, code, actionsEl) {
+    updateRun = null;
+    window.__gafferUpdating = false;
+    syncSettingsUpdateButton();
+    var text = UpdateState.updateFailureText(run.mode, code, run.logPath);
+    updateTextEl.textContent = text.banner;
+    if (actionsEl) actionsEl.style.display = '';
+    updateBtnEl.style.display = 'none';
+    forceStopUpdateBtnEl.style.display = '';
+    updateBannerEl.classList.add('visible');
+    showChatNotice(text.notice);
+  }
+
+  // Poll every 5 s until the run is over (GafferUpdateState.updateWaitStep):
+  // the updater's ok:<version> (a repair keeps its version, so this is its
+  // only signal) or a moved version.json reloads the panel; its err:<code>
+  // ends the wait at once with that code's text. The updater writes
+  // version.json last, so reloading earlier would load half-copied files.
+  // After 180s with neither the banner offers "Force stop & retry", unless
+  // the updater still holds its lock: then it is alive and working (a slow
+  // runtime download, say), a second updater would only exit busy, so wait
+  // one more window instead.
   function waitForUpdatedVersion(startVersion, actionsEl) {
+    var run = updateRun || beginUpdateRun('update');
     var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
     var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
     var waited = 0;
@@ -2858,10 +2934,24 @@
     var timer = setInterval(function () {
       waited += 5000;
       cs.evalScript(jsx, function (result) {
-        if (UpdateState.shouldReloadAfterUpdate(startVersion, result)) {
+        var logText = readUpdateLogSince(run);
+        if (logText === null && run.output && UpdateState.lastUpdaterResult(run.output)) logText = run.output;
+        var step = UpdateState.updateWaitStep({
+          mode: run.mode,
+          startVersion: startVersion,
+          diskJson: result,
+          logText: logText,
+          exited: run.exited
+        });
+        if (step.action === 'reload') {
           clearInterval(timer);
           try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
           location.reload(); // fresh panel + fresh daemon
+        } else if (step.action === 'fail') {
+          clearInterval(timer);
+          // Reported here; the post-reload verdict must not report it again.
+          try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
+          showUpdateFailure(run, step.code, actionsEl);
         } else if (waited >= 180000) {
           if (!extended && runningUpdaterPid()) {
             extended = true;
@@ -2870,19 +2960,7 @@
             return;
           }
           clearInterval(timer);
-          window.__gafferUpdating = false;
-          syncSettingsUpdateButton();
-          // Stays up, offering a self-serve retry, instead of hiding —
-          // a stuck update usually means something still holds the
-          // daemon port, and this kills it directly rather than making
-          // the user hand-run a PowerShell command over chat.
-          updateTextEl.textContent = 'Update did not complete';
-          if (actionsEl) actionsEl.style.display = '';
-          updateBtnEl.style.display = 'none';
-          forceStopUpdateBtnEl.style.display = '';
-          updateBannerEl.classList.add('visible');
-          showChatNotice('Update did not complete. The updater log has details: '
-            + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
+          showUpdateFailure(run, null, actionsEl);
         }
       });
     }, 5000);
@@ -2899,6 +2977,7 @@
       if (actionsEl) actionsEl.style.display = 'none';
       window.__gafferUpdating = true;
       syncSettingsUpdateButton();
+      beginUpdateRun(updateRunPlan().mode); // its result lands in the log from here on
       waitForUpdatedVersion(versionData.version, actionsEl);
       return;
     }
@@ -2908,6 +2987,18 @@
       forceStopUpdateBtnEl.disabled = false;
       runUpdate();
     });
+  }
+
+  // What a click on Update / Repair runs. repair: the launch was refused for
+  // a runtime reason, so the updater re-provisions the runtime even when it
+  // looks current (update.sh --repair, update.ps1 -Repair). mode 'repair'
+  // when no newer release is there (the version will not change), else
+  // 'update' (a newer release, which then also repairs).
+  function updateRunPlan() {
+    var repair = UpdateState.isRepairableLaunchError(daemonLaunchCode);
+    var available = !!availableUpdateVersion
+      && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version);
+    return { repair: repair, mode: repair && !available ? 'repair' : 'update' };
   }
 
   function runUpdate() {
@@ -2925,19 +3016,26 @@
     }
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
     var daemonDir = extPath + '/daemon';
+    var plan = updateRunPlan();
+    // Before the updater starts: its result line is read from what the log
+    // gains after this point.
+    var run = beginUpdateRun(plan.mode);
 
     function reloadAfterUpdate() {
-      // The updater needs ~30-60s (download + npm); waitForUpdatedVersion
-      // reloads the panel once the on-disk version.json moves.
+      // The updater needs ~30-60s (download, plus about 54 MB when the
+      // runtime is re-provisioned); waitForUpdatedVersion reloads the panel
+      // on its ok: line or once the on-disk version.json moves.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
           target: availableUpdateVersion || null,
           at: Date.now(),
         }));
       } catch (e) { /* ignore */ }
-      updateTextEl.textContent = 'Updating…';
+      updateTextEl.textContent = plan.mode === 'repair' ? 'Repairing…' : 'Updating…';
       var actionsEl = updateBannerEl.querySelector('.actions');
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
+      // Repair starts from Settings with no banner up: show it, so the run is visible.
+      if (plan.mode === 'repair') updateBannerEl.classList.add('visible');
       window.__gafferUpdating = true; // pauses daemon auto-respawn
       syncSettingsUpdateButton(); // prevent a second update launch from Settings
       waitForUpdatedVersion(versionData.version, actionsEl);
@@ -2947,11 +3045,16 @@
       var jsx = '(function(){'
         + 'var isWin = $.os.indexOf("Windows") !== -1;'
         + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
-        + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
-        + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
+        + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"' + (plan.repair ? ' -Repair' : '') + '");'
+        + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"' + (plan.repair ? ' --repair' : '') + '");'
         + '})()';
       cs.evalScript(jsx, function (result) {
         console.log('Gaffer: update result (ExtendScript):', result);
+        // callSystem returns when the updater has exited. Its output is the
+        // fallback result source when the log cannot be read (Windows prints
+        // the result line to stdout too; update.sh sends everything to its log).
+        run.exited = true;
+        run.output = String(result == null ? '' : result);
         reloadAfterUpdate();
       });
     }
@@ -2968,9 +3071,11 @@
           // bad resolution used to look like a successful no-op
           cmd = (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
           args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
+          if (plan.repair) args.push('-Repair');
         } else {
           cmd = 'bash';
           args = [daemonDir + '/update.sh'];
+          if (plan.repair) args.push('--repair');
         }
         // stdio must be real file handles: detached + stdio:'ignore' silently
         // kills the child on some Node/Windows combos (verified on Win11) —
@@ -2986,6 +3091,7 @@
         // process-scoped, not document-scoped. Mac keeps detached (proven).
         var child = cp.spawn(cmd, args, { detached: !isWin, stdio: ['ignore', uout, uout], windowsHide: true });
         var spawnFailed = false;
+        child.on('exit', function () { run.exited = true; });
         child.on('error', function (e) {
           spawnFailed = true;
           console.error('Gaffer: Node spawn of updater failed — ExtendScript fallback', e);
@@ -3855,10 +3961,17 @@
     // Show ONLY when a completed check has confirmed an available release
     // newer than the local version. Pre-check / in-flight / up-to-date all
     // leave availableUpdateVersion null (or not newer than local) -> no CTA.
-    var available = !!availableUpdateVersion
-      && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version)
-      && !window.__gafferUpdating;
-    button.hidden = !available;
+    // A refused daemon launch (damaged, missing or blocked runtime) turns it
+    // into Repair when no newer release is there to fix it.
+    var action = UpdateState.settingsUpdateAction({
+      available: !!availableUpdateVersion
+        && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version),
+      repairable: UpdateState.isRepairableLaunchError(daemonLaunchCode),
+      updating: !!window.__gafferUpdating,
+      dev: !!isDevInstall
+    });
+    button.hidden = !action;
+    if (action) button.textContent = action === 'repair' ? 'Repair' : 'Update';
   }
   function syncSettings() {
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.
