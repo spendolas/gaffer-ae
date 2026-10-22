@@ -32,6 +32,20 @@
 # user's default network credentials, like update.ps1. Official source
 # first, then the mirror, each verified against the pinned SHA-256.
 #
+# Download budget (a deliberate change from spec section 3 step 3, which says
+# --max-time 600, same as fetch-runtime.sh): a 38 MB archive cannot finish in
+# 600 s on a slow link, and curl retries a timed-out attempt, so 600 s capped
+# attempts cost up to about 4 x 600 s per source without ever succeeding.
+# Instead an attempt aborts only when it stalls (below 10 KB/s for 60 s:
+# --speed-limit 10240 --speed-time 60), each attempt is capped at 1800 s, and
+# --retry-max-time 1800 stops new retries after 30 minutes on one source.
+# --connect-timeout 20 --retry 3 --retry-delay 2 are as in the spec. The
+# system proxy path uses the same numbers (see Get-ViaSystemProxy).
+#
+# Stale temp sweep: a killed run cannot clean up and would leak up to 38 MB,
+# so a run that downloads first removes %TEMP%\gaffer-runtime-<32 hex>
+# folders older than 24 h (exact name pattern, folders only, errors ignored).
+#
 # Test seams, honoured only when GAFFER_FETCH_TEST=1 (same names as
 # fetch-runtime.sh):
 #   GAFFER_FETCH_BASE_OFFICIAL  replaces the official base URL (file:// or http allowed)
@@ -40,6 +54,8 @@
 #   GAFFER_FETCH_SKIP_CODESIGN  1 skips the Authenticode check (test archives are unsigned)
 #   GAFFER_FETCH_PLATFORM       forces the platform key
 #   GAFFER_FETCH_NO_TAR         1 skips tar.exe and uses the .NET zip fallback (Windows only seam)
+#   GAFFER_FETCH_SPEED_TIME     seconds below 10 KB/s before an attempt aborts (digits only)
+#   GAFFER_FETCH_MAX_TIME       per-attempt and per-source retry budget, seconds (digits only)
 #   GAFFER_FETCH_NO_CURL        1 treats every curl.exe attempt as failed, so the system proxy
 #                               path runs (file:// sources work there through FileWebRequest;
 #                               Windows only seam)
@@ -140,13 +156,16 @@ function Invoke-Native([string] $workDir, [string] $exe, [string[]] $arguments) 
 # The system proxy path, used when curl.exe fails (mirrors
 # Get-ReleaseAssetViaSystemProxy in update.ps1): TLS 1.2, the WinINET proxy
 # (Internet Options, PAC) with the user's default network credentials, 20 s
-# to connect and get headers like curl's --connect-timeout, every body read
-# bounded to a 20 s stall, 600 s in total like curl's --max-time (a read is
-# only started while 20 s of the budget remain). Up to 3 attempts while a
-# retry can still start within 120 s; a 4xx answer is final. Outside test
-# mode only https is accepted, also after redirects. Returns "" on success,
-# else the reason.
-function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnyScheme) {
+# to connect and get headers like curl's --connect-timeout. Stall abort like
+# curl's --speed-limit 10240 --speed-time <speedTime>: one read blocking for
+# <speedTime> s fails (ReadWriteTimeout), and so does a trickle that brings
+# under 10 KB/s over any <speedTime> s window. <maxTime> s in total for all
+# attempts together (a read is only started while <speedTime> s of the
+# budget remain). Up to 4 attempts (curl's first plus --retry 3), 2 s apart,
+# while within the budget; a 4xx answer is final. Outside test mode only
+# https is accepted, also after redirects. Returns "" on success, else the
+# reason.
+function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnyScheme, [int] $speedTime, [int] $maxTime) {
     if (-not $allowAnyScheme -and -not $uri.StartsWith("https://")) { return "refusing a non-https URL" }
     try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch {}
     try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials } catch {}
@@ -161,7 +180,7 @@ function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnySc
             $req.Timeout = 20000
             # file:// gives a FileWebRequest (test mode), which has none of these.
             if ($req -is [System.Net.HttpWebRequest]) {
-                $req.ReadWriteTimeout = 20000
+                $req.ReadWriteTimeout = $speedTime * 1000
                 $req.AllowAutoRedirect = $true
                 $req.UserAgent = "gaffer-fetch-runtime"
             }
@@ -172,11 +191,20 @@ function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnySc
                 $out = [System.IO.File]::Create($outFile)
                 try {
                     $buf = New-Object byte[] 65536
+                    $windowStart = Get-Date
+                    $windowBytes = 0
                     while ($true) {
-                        if (((Get-Date) - $started).TotalSeconds -gt 580) { throw "download exceeded its 600 s budget" }
+                        if (((Get-Date) - $started).TotalSeconds -gt ($maxTime - $speedTime)) { throw "download exceeded its $maxTime s budget" }
                         $n = $in.Read($buf, 0, $buf.Length)
                         if ($n -le 0) { break }
                         $out.Write($buf, 0, $n)
+                        $windowBytes += $n
+                        $windowSeconds = ((Get-Date) - $windowStart).TotalSeconds
+                        if ($windowSeconds -ge $speedTime) {
+                            if ($windowBytes -lt (10240 * $windowSeconds)) { throw "download stalled (under 10 KB/s for $speedTime s)" }
+                            $windowStart = Get-Date
+                            $windowBytes = 0
+                        }
                     }
                 } finally {
                     $out.Dispose()
@@ -196,7 +224,7 @@ function Get-ViaSystemProxy([string] $uri, [string] $outFile, [bool] $allowAnySc
             if ($status -ge 400 -and $status -lt 500) { $final = $true; $reason = "the server answered $status" }
         }
         $elapsed = ((Get-Date) - $started).TotalSeconds
-        if ($final -or $attempt -ge 3 -or $elapsed -ge 120) { return "system proxy download failed: $reason" }
+        if ($final -or $attempt -ge 4 -or ($elapsed + 2) -ge $maxTime) { return "system proxy download failed: $reason" }
         Write-Step "system proxy attempt $attempt failed ($reason), retrying"
         Start-Sleep -Seconds 2
     }
@@ -294,6 +322,16 @@ try {
     }
 
     # ---- 3. Download, 4. verify the archive ----------------------------
+    # Stale temp sweep (see header): exact name, folders only, over 24 h old.
+    try {
+        $cutoff = (Get-Date).ToUniversalTime().AddHours(-24)
+        foreach ($stale in [System.IO.Directory]::GetDirectories($tempRoot, "gaffer-runtime-*")) {
+            $staleName = [System.IO.Path]::GetFileName($stale)
+            if ($staleName -cmatch '^gaffer-runtime-[0-9a-f]{32}$' -and [System.IO.Directory]::GetLastWriteTimeUtc($stale) -lt $cutoff) {
+                Remove-Tree $stale
+            }
+        }
+    } catch {}
     [void][System.IO.Directory]::CreateDirectory($tmpDir)
     $archivePath = Join-Path $tmpDir $archive
 
@@ -305,6 +343,10 @@ try {
     $proto = "=https"
     if ($testMode) { $proto = "=https,http,file" }
     $skipCurl = ($testMode -and $env:GAFFER_FETCH_NO_CURL -eq "1")
+    $speedTime = 60
+    $maxTime = 1800
+    if ($testMode -and $env:GAFFER_FETCH_SPEED_TIME -match '^[0-9]+$') { $speedTime = [int] $env:GAFFER_FETCH_SPEED_TIME }
+    if ($testMode -and $env:GAFFER_FETCH_MAX_TIME -match '^[0-9]+$') { $maxTime = [int] $env:GAFFER_FETCH_MAX_TIME }
 
     # --ssl-no-revoke: same reasoning as update.ps1. The TLS chain is still
     # fully validated, only the OCSP/CRL lookup that inspecting proxies block
@@ -318,8 +360,10 @@ try {
         $url = $src.base + $archive
         Write-Step "downloading $url"
         Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
-        $curlArgs = @("--fail", "--silent", "--show-error", "--ssl-no-revoke", "--proto", $proto, "--location",
-            "--connect-timeout", "20", "--max-time", "600", "--retry", "3", "--retry-delay", "2",
+        $curlArgs = @("--fail", "--proto", $proto, "--location", "--connect-timeout", "20",
+            "--speed-limit", "10240", "--speed-time", [string] $speedTime,
+            "--max-time", [string] $maxTime, "--retry-max-time", [string] $maxTime,
+            "--retry", "3", "--retry-delay", "2", "--silent", "--show-error", "--ssl-no-revoke",
             "-o", $archive, $url)
         $curlStarted = Get-Date
         if ($skipCurl) {
@@ -330,15 +374,16 @@ try {
         if ($code -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
             Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
             $curlSeconds = [int] ((Get-Date) - $curlStarted).TotalSeconds
-            if ($curlSeconds -ge 300) {
-                # A link that slow is not a blocked one: the proxy path would
-                # only double the wait.
+            if ($curlSeconds -ge [Math]::Min(300, $maxTime)) {
+                # curl got far enough to spend real time: the link is slow or
+                # stalling, not blocked, and the proxy path would only double
+                # the wait.
                 $lastProblem = "the $($src.name) download failed (curl exit $code after $curlSeconds s)"
                 Write-Step $lastProblem
                 continue
             }
             Write-Step "curl.exe could not download it (exit $code), trying the system proxy path"
-            $proxyProblem = Get-ViaSystemProxy $url $archivePath $testMode
+            $proxyProblem = Get-ViaSystemProxy $url $archivePath $testMode $speedTime $maxTime
             if ($proxyProblem -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
                 $lastProblem = "the $($src.name) download failed (curl exit $code; $proxyProblem)"
                 Write-Step $lastProblem
