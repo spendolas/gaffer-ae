@@ -6,7 +6,7 @@
 // codesign (GAFFER_FETCH_SKIP_CODESIGN=1), TMPDIR pointed at a per-test folder
 // so stray temp files are visible.
 
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -22,6 +22,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'fetch-runtime.sh');
 const VERSION = 'v99.1.2';
 const PLAT = 'darwin-x64';
+
+// fetch-runtime.sh is the macOS script (bash, POSIX paths); Windows has
+// fetch-runtime.ps1 and its own test. Every test in this file goes through
+// this wrapper so the whole file is skipped on win32 (module load only does
+// path joins, which are safe there).
+const SKIP = process.platform === 'win32' ? 'bash script, macOS/Linux only' : false;
+function test(name, fn) {
+  return nodeTest(name, { skip: SKIP }, fn);
+}
 
 function sha256(buf) {
   return createHash('sha256').update(buf).digest('hex');
