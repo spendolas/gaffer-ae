@@ -458,6 +458,15 @@
       try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
     }
     child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
+    // Gatekeeper refusing the runtime kills it at exec (SIGKILL / 137). An
+    // exit listener holds no stdio and does not keep the daemon tied to the
+    // panel; any other exit keeps today's behaviour.
+    var launchedAt = Date.now();
+    child.on('exit', function (code, signal) {
+      if (!Launch.gatekeeperKilled({ platform: process.platform, kind: launch.kind, code: code, signal: signal, elapsedMs: Date.now() - launchedAt })) return;
+      appendDaemonLog(fs, ['daemon not running: err:runtime-blocked (runtime killed ' + (signal || 'exit ' + code) + ' ' + (Date.now() - launchedAt) + ' ms after launch, macOS Gatekeeper)']);
+      showLaunchError('runtime-blocked');
+    });
     child.unref();
     return child;
   }

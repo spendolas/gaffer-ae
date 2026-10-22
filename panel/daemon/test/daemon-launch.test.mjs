@@ -423,3 +423,41 @@ test('main.js launches through GafferLaunch with the spec spawn shape', () => {
   assert.ok(/finally\s*\{[^}]*closeSync\(fd\)/.test(launch), 'log fd closed in finally');
   assert.ok(main.includes("showLaunchError('launch-failed')"), 'unexpected exceptions show a notice');
 });
+
+// ── Gatekeeper kill (Failure modes: "Gatekeeper kills the runtime (exit 137)") ──
+
+test('gatekeeperKilled: SIGKILL or exit 137 of the bundled runtime soon after launch on macOS', () => {
+  assert.equal(typeof L.gatekeeperKilled, 'function');
+  assert.equal(L.gatekeeperKilled({ platform: 'darwin', kind: 'runtime', code: null, signal: 'SIGKILL', elapsedMs: 300 }), true);
+  assert.equal(L.gatekeeperKilled({ platform: 'darwin', kind: 'runtime', code: 137, signal: null, elapsedMs: 1200 }), true);
+  assert.equal(L.gatekeeperKilled({ platform: 'darwin', kind: 'runtime', code: null, signal: 'SIGKILL', elapsedMs: L.GATEKEEPER_WINDOW_MS }), true);
+});
+
+test('gatekeeperKilled: every other exit keeps today\'s behaviour', () => {
+  const base = { platform: 'darwin', kind: 'runtime', code: null, signal: 'SIGKILL', elapsedMs: 300 };
+  const no = (o) => assert.equal(L.gatekeeperKilled(Object.assign({}, base, o)), false, JSON.stringify(o));
+  no({ elapsedMs: L.GATEKEEPER_WINDOW_MS + 1 });          // late: a user or OOM kill, not Gatekeeper
+  no({ platform: 'win32' });
+  no({ platform: 'linux' });
+  no({ kind: 'node' });                                     // a system node is not Gaffer's runtime
+  no({ signal: null, code: 0 });                            // port in use, already running
+  no({ signal: null, code: 1 });
+  no({ signal: 'SIGTERM' });
+  no({ signal: null, code: 137, elapsedMs: NaN });
+  assert.equal(L.gatekeeperKilled(null), false);
+});
+
+test('launchNotice runtime-blocked: the Failure-modes text, no em or en dashes', () => {
+  assert.equal(L.launchNotice('runtime-blocked'), "macOS blocked Gaffer's runtime. Reinstall Gaffer.");
+  assert.ok(!/[\u2013\u2014]/.test(L.launchNotice('runtime-blocked')));
+});
+
+test('main.js watches the spawned runtime for a Gatekeeper kill without holding it', () => {
+  const main = read('../../main.js');
+  const launch = main.slice(main.indexOf('function launchDaemon('), main.indexOf('function showLaunchError('));
+  assert.ok(/child\.on\('exit'/.test(launch), 'an exit listener on the ChildProcess');
+  assert.ok(launch.includes('Launch.gatekeeperKilled('), 'the pure verdict decides');
+  assert.ok(launch.includes('child.unref()'), 'the daemon still outlives the panel');
+  assert.ok(launch.includes("showLaunchError('runtime-blocked')"), 'the notice is shown');
+  assert.ok(/appendDaemonLog\(fs, \[[^\]]*runtime-blocked/.test(launch), 'a log line is written');
+});

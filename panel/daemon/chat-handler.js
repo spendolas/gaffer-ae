@@ -634,7 +634,34 @@ export function augmentedEnv() {
   for (var p of extraPaths) {
     if (pathParts.indexOf(p) === -1) pathParts.push(p);
   }
-  return { ...process.env, PATH: pathParts.join(':') };
+  return claudeChildEnv({ ...process.env, PATH: pathParts.join(':') }, process.platform);
+}
+
+// Decision D7 (zero-dependency install): the launchers strip
+// NODE_EXTRA_CA_CERTS from the daemon and pass the original value on as
+// GAFFER_CLAUDE_EXTRA_CA_CERTS. Claude Code honours NODE_EXTRA_CA_CERTS
+// behind TLS-inspecting corporate proxies, so restore it here, in a copy used
+// only for claude children; the stash variable itself never reaches the
+// child and the daemon's own env is untouched. With no (or an empty) stash
+// the env is returned as is, so a dev run that set NODE_EXTRA_CA_CERTS
+// directly keeps it. Names match case-insensitively on win32.
+var CA_VAR = 'NODE_EXTRA_CA_CERTS';
+var CA_STASH = 'GAFFER_CLAUDE_EXTRA_CA_CERTS';
+export function claudeChildEnv(env, platform) {
+  var isWin = (platform || process.platform) === 'win32';
+  var same = function (a, b) { return isWin ? String(a).toUpperCase() === b : a === b; };
+  var out = {};
+  var stash;
+  for (var k of Object.keys(env || {})) {
+    if (same(k, CA_STASH)) { if (stash === undefined) stash = env[k]; continue; }
+    out[k] = env[k];
+  }
+  if (stash === undefined || stash === '') return out;
+  for (var key of Object.keys(out)) {
+    if (same(key, CA_VAR)) delete out[key];
+  }
+  out[CA_VAR] = stash;
+  return out;
 }
 
 export class ChatHandler {
