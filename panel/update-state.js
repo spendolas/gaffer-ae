@@ -146,6 +146,33 @@
     return null;
   }
 
+  // What the updater log at path gained since byte offset start, as text.
+  // fs: statSync/openSync/readSync/closeSync like node:fs; alloc(n) returns a
+  // Buffer (CEP may not expose a global Buffer, so main.js passes one).
+  // A log shorter than start was replaced: read from 0. At most the last
+  // 64 KB. '' when nothing new or no log file yet (ENOENT), null when it
+  // cannot be read (no fs, no path, any other error).
+  var LOG_SLICE_MAX = 65536;
+  function readUpdateLogSlice(fs, path, start, alloc) {
+    if (!fs || !path) return null;
+    var size, fd, opened = false;
+    try { size = fs.statSync(path).size; } catch (e) { return e && e.code === 'ENOENT' ? '' : null; }
+    var from = size >= start ? start : 0;
+    if (size - from > LOG_SLICE_MAX) from = size - LOG_SLICE_MAX;
+    if (size <= from) return '';
+    try {
+      fd = fs.openSync(path, 'r');
+      opened = true;
+      var buf = alloc(size - from);
+      var n = fs.readSync(fd, buf, 0, buf.length, from);
+      return buf.toString('utf8', 0, n);
+    } catch (e) {
+      return null;
+    } finally {
+      if (opened) { try { fs.closeSync(fd); } catch (e2) { /* ignore */ } }
+    }
+  }
+
   // One poll while an update or repair runs. o = { mode: 'update'|'repair',
   // startVersion, diskJson (version.json as read), logText (log gained since
   // the start, or null when the panel cannot read it), exited (the updater
@@ -192,6 +219,7 @@
     isRepairableLaunchError: isRepairableLaunchError,
     settingsUpdateAction: settingsUpdateAction,
     lastUpdaterResult: lastUpdaterResult,
+    readUpdateLogSlice: readUpdateLogSlice,
     updateWaitStep: updateWaitStep,
     updateFailureText: updateFailureText,
     isNewerVersion: isNewerVersion,

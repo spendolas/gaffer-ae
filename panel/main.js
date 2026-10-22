@@ -2875,27 +2875,16 @@
     return run;
   }
 
-  // What the updater log gained since the run started (at most its last
-  // 64 KB): '' when nothing yet or no log file, null when it cannot be read.
-  // A log that shrank (replaced) is read from its start.
+  // What the updater log gained since the run started (pure slice logic in
+  // GafferUpdateState.readUpdateLogSlice): '' when nothing yet or no log
+  // file, null when it cannot be read. A second updater (a manual run, or
+  // the one ours found busy) appends to the same log after our offset; its
+  // ok:/err: is the latest result and ends our wait too, which is intended.
   function readUpdateLogSince(run) {
     if (!run || !run.logPath) return null;
-    var fs, size, fd;
-    try { fs = require('fs'); } catch (e) { return null; }
-    try { size = fs.statSync(run.logPath).size; } catch (e) { return e && e.code === 'ENOENT' ? '' : null; }
-    var start = size >= run.logStart ? run.logStart : 0;
-    if (size - start > 65536) start = size - 65536;
-    if (size <= start) return '';
-    try {
-      fd = fs.openSync(run.logPath, 'r');
-      var buf = require('buffer').Buffer.alloc(size - start); // CEP may not expose a global Buffer
-      var n = fs.readSync(fd, buf, 0, buf.length, start);
-      return buf.toString('utf8', 0, n);
-    } catch (e) {
-      return null;
-    } finally {
-      if (fd !== undefined) { try { fs.closeSync(fd); } catch (e2) { /* ignore */ } }
-    }
+    var fs, B;
+    try { fs = require('fs'); B = require('buffer').Buffer; } catch (e) { return null; } // CEP may not expose a global Buffer
+    return UpdateState.readUpdateLogSlice(fs, run.logPath, run.logStart, function (n) { return B.alloc(n); });
   }
 
   // Ends a wait that failed: the updater reported err:<code>, exited with no
@@ -2935,7 +2924,9 @@
       waited += 5000;
       cs.evalScript(jsx, function (result) {
         var logText = readUpdateLogSince(run);
-        if (logText === null && run.output && UpdateState.lastUpdaterResult(run.output)) logText = run.output;
+        // No result in the log (unreadable, or the ExtendScript route's updater
+        // saw another TMPDIR and wrote elsewhere): use callSystem's output if it has one.
+        if (!UpdateState.lastUpdaterResult(logText) && run.output && UpdateState.lastUpdaterResult(run.output)) logText = run.output;
         var step = UpdateState.updateWaitStep({
           mode: run.mode,
           startVersion: startVersion,

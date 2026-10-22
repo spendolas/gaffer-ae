@@ -391,8 +391,8 @@ test('cleanDaemonEnv on POSIX is case-sensitive (a lower-case name is a differen
 // ── notices ──
 
 test('launchNotice: Failure-modes texts, no em or en dashes', () => {
-  assert.equal(L.launchNotice('runtime-damaged'), "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall.");
-  assert.equal(L.launchNotice('runtime-missing'), "Gaffer's runtime is missing. Open Settings and run Update, or reinstall.");
+  assert.equal(L.launchNotice('runtime-damaged'), "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall.");
+  assert.equal(L.launchNotice('runtime-missing'), "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall.");
   assert.match(L.launchNotice('launch-failed'), /^Gaffer could not start its daemon\./);
   for (const c of ['runtime-damaged', 'runtime-missing', 'launch-failed', 'other']) assert.ok(!/[\u2013\u2014]/.test(L.launchNotice(c)));
 });
@@ -448,7 +448,7 @@ test('gatekeeperKilled: every other exit keeps today\'s behaviour', () => {
 });
 
 test('launchNotice runtime-blocked: the Failure-modes text, no em or en dashes', () => {
-  assert.equal(L.launchNotice('runtime-blocked'), "macOS blocked Gaffer's runtime. Reinstall Gaffer.");
+  assert.equal(L.launchNotice('runtime-blocked'), "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer.");
   assert.ok(!/[\u2013\u2014]/.test(L.launchNotice('runtime-blocked')));
 });
 

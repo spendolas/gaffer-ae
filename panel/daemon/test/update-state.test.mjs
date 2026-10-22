@@ -248,3 +248,46 @@ test('updateFailureText: the spec text for err:runtime, the generic text with th
     }
   }
 });
+
+// readUpdateLogSince's slice logic, with an injected fs-like object:
+// statSync(path) -> { size }, openSync/readSync/closeSync as in node:fs.
+function fakeFs(content, { statError, readError } = {}) {
+  const buf = Buffer.from(content, 'utf8');
+  const calls = { closed: 0 };
+  return {
+    calls,
+    statSync() { if (statError) throw statError; return { size: buf.length }; },
+    openSync() { if (readError) throw readError; return 7; },
+    readSync(fd, out, off, len, pos) { return buf.copy(out, off, pos, pos + len); },
+    closeSync() { calls.closed++; },
+  };
+}
+const alloc = (n) => Buffer.alloc(n);
+
+test('readUpdateLogSlice: only what the log gained since the start offset', () => {
+  const fs = fakeFs('old run\nok:0.11.0\n=== new ===\nerr:runtime\n');
+  assert.equal(U.readUpdateLogSlice(fs, '/x.log', 'old run\nok:0.11.0\n'.length, alloc), '=== new ===\nerr:runtime\n');
+  assert.equal(fs.calls.closed, 1, 'the file is closed');
+  assert.equal(U.readUpdateLogSlice(fakeFs('abc'), '/x.log', 3, alloc), '', 'nothing new yet');
+});
+
+test('readUpdateLogSlice: a log shorter than the offset (replaced) is read from its start', () => {
+  assert.equal(U.readUpdateLogSlice(fakeFs('ok:0.12.0\n'), '/x.log', 5000, alloc), 'ok:0.12.0\n');
+});
+
+test('readUpdateLogSlice: at most the last 64 KB', () => {
+  const big = 'x'.repeat(100000) + '\nok:0.12.0\n';
+  const out = U.readUpdateLogSlice(fakeFs(big), '/x.log', 0, alloc);
+  assert.equal(out.length, 65536);
+  assert.ok(out.endsWith('\nok:0.12.0\n'));
+});
+
+test('readUpdateLogSlice: no log file yet is empty, any other failure is unreadable (null)', () => {
+  const enoent = Object.assign(new Error('nope'), { code: 'ENOENT' });
+  const eacces = Object.assign(new Error('nope'), { code: 'EACCES' });
+  assert.equal(U.readUpdateLogSlice(fakeFs('', { statError: enoent }), '/x.log', 0, alloc), '');
+  assert.equal(U.readUpdateLogSlice(fakeFs('', { statError: eacces }), '/x.log', 0, alloc), null);
+  assert.equal(U.readUpdateLogSlice(fakeFs('ok:1.0.0\n', { readError: eacces }), '/x.log', 0, alloc), null);
+  assert.equal(U.readUpdateLogSlice(null, '/x.log', 0, alloc), null);
+  assert.equal(U.readUpdateLogSlice(fakeFs('a'), null, 0, alloc), null);
+});
