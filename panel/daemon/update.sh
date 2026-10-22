@@ -93,6 +93,9 @@ STUCK_AFTER=900
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
 #   GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames (the
 #                                   harness kills the updater there)
+# Like the stuck-age knob below, the gates count only next to
+# GAFFER_UPDATE_ASSET (the harness sets both, the panel sets neither): a
+# stray gate variable in a real environment never pauses an update.
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder younger than the lock, so
@@ -118,6 +121,7 @@ fi
 test_gate() {
   local gate="$1" i
   [ -n "$gate" ] || return 0
+  [ -n "${GAFFER_UPDATE_ASSET:-}" ] || return 0
   : > "$gate.ready"
   for i in $(seq 1 600); do
     [ -e "$gate" ] && return 0
