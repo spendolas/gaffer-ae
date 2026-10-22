@@ -165,7 +165,21 @@ jobs:
             gh release create "v$V" --draft --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md $PRE artifact/dist/*
             gh release edit "v$V" --draft=false
           elif [ "$ACTION" = "recover" ]; then
-            gh release upload "v$V" artifact/dist/* --clobber
+            if [ "$(jq -r '.isDraft' release.json)" = "true" ]; then
+              # Nothing public yet: replace whatever a failed run left behind.
+              gh release upload "v$V" artifact/dist/* --clobber
+            else
+              # Published release: never overwrite assets users already
+              # download (a retry would otherwise swap live v0.11.x assets for
+              # new-layout archives). Upload only the missing ones.
+              for f in artifact/dist/*; do
+                if jq -e --arg n "$(basename "$f")" '.assets | map(.name) | index($n)' release.json > /dev/null; then
+                  echo "Keeping existing asset $(basename "$f")"
+                else
+                  gh release upload "v$V" "$f"
+                fi
+              done
+            fi
             if [ "$(jq -r '.isDraft' release.json)" = "true" ]; then
               gh release edit "v$V" --draft=false
             fi

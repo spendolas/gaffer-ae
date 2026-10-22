@@ -66,6 +66,7 @@ fail() { echo "ERROR: stage assertion failed: $1" >&2; exit 1; }
 EXTRA="$(find "$STAGE/daemon" -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) ! -name daemon.mjs ! -name index.js ! -name launch.cjs)"
 [ -z "$EXTRA" ] || fail "code modules beside daemon.mjs: $EXTRA"
 [ "$(cat "$STAGE/daemon/index.js")" = "import './daemon.mjs';" ] || fail "index.js is not the shim"
+[ "$(cat "$STAGE/daemon/package.json")" = '{"name":"gaffer-daemon","private":true,"type":"module"}' ] || fail "daemon/package.json is not the dependency-free one"
 
 # 5. Archives (names unchanged) and SHA256SUMS.txt over them.
 tar -czf "$OUT_DIR/gaffer-install-mac.tar.gz" -C "$STAGE" .

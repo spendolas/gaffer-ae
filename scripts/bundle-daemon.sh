@@ -17,6 +17,28 @@
 #     (local runs without network; CI leaves it on)
 set -euo pipefail
 
+# Nothing from dev tooling may land in the home directory (npm cache, logs, userconfig).
+_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+export npm_config_cache="${npm_config_cache:-$_REPO/.npm-cache}"
+export npm_config_logs_dir="${npm_config_logs_dir:-$_REPO/.npm-cache/_logs}"
+export npm_config_userconfig="${npm_config_userconfig:-$_REPO/.npm-cache/no-userconfig}"
+
+# Hygiene patterns: developer paths (C:\Users in both the single and the
+# escaped double-backslash form) and secret shapes. Sourced by the test too.
+HYGIENE_PATTERNS=('/Users/' '/home/' 'C:\Users' 'C:\\Users' 'ghp_' 'github_pat_' 'sk-ant-' 'AKIA' '-----BEGIN')
+hygiene_check() {
+  local file="$1" pat
+  for pat in "${HYGIENE_PATTERNS[@]}"; do
+    if grep -qF -- "$pat" "$file"; then
+      echo "ERROR: hygiene check failed, $(basename "$file") contains '$pat':" >&2
+      grep -nF -- "$pat" "$file" | cut -c1-200 | head -5 >&2
+      return 1
+    fi
+  done
+}
+# Test seam: `bash bundle-daemon.sh --hygiene-only <file>`.
+if [ "${1:-}" = "--hygiene-only" ]; then hygiene_check "$2"; exit $?; fi
+
 if [ "$#" -ne 1 ]; then
   echo "usage: bash scripts/bundle-daemon.sh <stage-dir>" >&2
   exit 2
@@ -58,14 +80,7 @@ echo "Bundle: $(wc -c < "$STAGE/daemon/daemon.mjs" | tr -d ' ') bytes"
 
 echo "Hygiene checks..."
 BUNDLE="$STAGE/daemon/daemon.mjs"
-# Fixed-string patterns first (developer paths), then secret shapes.
-for pat in '/Users/' '/home/' 'C:\\Users' 'ghp_' 'github_pat_' 'sk-ant-' 'AKIA' '-----BEGIN'; do
-  if grep -qF -- "$pat" "$BUNDLE"; then
-    echo "ERROR: hygiene check failed, daemon.mjs contains '$pat':" >&2
-    grep -nF -- "$pat" "$BUNDLE" | cut -c1-200 | head -5 >&2
-    exit 1
-  fi
-done
+hygiene_check "$BUNDLE"
 
 echo "Third-party notices..."
 node "$SCRIPT_DIR/third-party-notices.mjs" "$DEBUG_DIR/meta.json" "$DAEMON_DIR/node_modules" "$STAGE/THIRD-PARTY-NOTICES.txt"
