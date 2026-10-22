@@ -166,6 +166,6 @@ Daemon: `@modelcontextprotocol/sdk`, `ws`, `zod`. Express comes transitively via
 
 
 - Target CEP 12 (AE 2022+). Extension ID: `com.gaffer.panel`.
-- Dev loading requires `PlayerDebugMode = 1` for both CSXS.11 and CSXS.12.
+- Dev loading requires `PlayerDebugMode = 1` for CSXS.11, CSXS.12 and CSXS.13 (AE 2022 to 2026+; the installers and README set all three).
 - The panel uses CEP's Node integration (`require('child_process')` etc.) for the daemon spawn and file access, always inside try/catch: when it is missing, OS operations go through ExtendScript `system.callSystem()` instead.
 - Keyboard shortcuts (Delete, Cmd+C/V/X/Z) must be registered via `cs.registerKeyEventsInterest()`.
