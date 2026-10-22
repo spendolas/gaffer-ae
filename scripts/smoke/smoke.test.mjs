@@ -182,3 +182,10 @@ test('run-smoke: node_modules found inside the tree and in parents', () => {
     assert.deepEqual(hits.sort(), [join(ext, 'daemon', 'node_modules'), join(root, 'node_modules')].sort());
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('run-smoke starts the daemon with GAFFER_TEST=1, so its port overrides are honoured', () => {
+  const src = readFileSync(new URL('./run-smoke.mjs', import.meta.url), 'utf8');
+  const line = src.split('\n').find((l) => l.includes('const daemonEnv = strippedEnv('));
+  assert.ok(line, 'no daemonEnv line');
+  assert.ok(line.includes("GAFFER_TEST: '1'") && line.includes('GAFFER_WS_PORT') && line.includes('GAFFER_MCP_PORT'), line);
+});
