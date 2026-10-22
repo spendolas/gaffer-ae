@@ -203,7 +203,7 @@ Contracts kept: the single-updater lock, `ok:<version>`, `busy:already-running`,
 Today's updaters (0.11.0 to 0.11.3) are what existing users run for their next update, and they cannot be changed. They refuse an archive without `daemon/index.js` and run `npm install --omit=dev` after the sync. So every release, for as long as 0.11.x clients exist (same invariant as `panel/version.json`):
 
 - ships `daemon/index.js` as the one-line shim `import './daemon.mjs';`
-- ships the dependency-free `daemon/package.json` above. npm then has nothing to install, succeeds, and prunes the old `node_modules` (to be confirmed by acceptance case A9; the next new-updater sync deletes it either way).
+- ships the dependency-free `daemon/package.json` above. npm then has nothing to install and succeeds. Measured in the integration check (npm 10.8.1, real 0.11.3 install): npm does NOT prune the old `node_modules`; it leaves the 24 MB tree in place. That is harmless, because nothing runs from it once `daemon.mjs` is bundled, and the next new-updater sync (which no longer excludes `node_modules`) deletes it.
 
 | Who | Their updater | What happens | Node used afterwards |
 |---|---|---|---|
