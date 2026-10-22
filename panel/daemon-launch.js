@@ -15,7 +15,7 @@
   var NOTICES = {
     'runtime-damaged': "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall.",
     'runtime-missing': "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall.",
-    'launch-failed': 'Gaffer could not start its daemon. Open Settings and run Update, or reinstall.',
+    'launch-failed': 'Gaffer could not start its daemon. Open Settings and click Repair, or reinstall.',
     'runtime-blocked': "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer."
   };
   // How soon after launch a SIGKILL / exit 137 still reads as Gatekeeper
@@ -76,13 +76,34 @@
   // Failure modes "Gatekeeper kills the runtime (exit 137)": on macOS, the
   // bundled runtime dying by SIGKILL (exit 137 when seen through a shell)
   // within GATEKEEPER_WINDOW_MS of launch. o = { platform, kind, code,
-  // signal, elapsedMs }. A system node, another platform, a late kill or any
-  // other exit is not this case (today's behaviour applies).
+  // signal, elapsedMs, panelKilled }. A system node, another platform, a late
+  // kill, a kill the panel made itself (forceStopDaemonPort, or an updater it
+  // started stopping the daemon: panelKilled) or any other exit is not this
+  // case (today's behaviour applies).
   function gatekeeperKilled(o) {
     if (!o || o.platform !== 'darwin' || o.kind !== 'runtime') return false;
+    if (o.panelKilled) return false;
     var t = o.elapsedMs;
     if (typeof t !== 'number' || !(t >= 0) || t > GATEKEEPER_WINDOW_MS) return false;
     return o.signal === 'SIGKILL' || o.code === 137;
+  }
+
+  // A spawn that fails at exec (the ChildProcess 'error' event, no pid): the
+  // launch code its notice uses. The bundled runtime refused by the kernel
+  // (EBADARCH: an x64 runtime on Apple Silicon without Rosetta; ENOEXEC: not
+  // an executable; EACCES: not executable by this user) is a runtime problem
+  // the Repair re-provisions; anything else, or a system node, is
+  // launch-failed. Both are repairable. libuv has no name for ENOEXEC (8) or
+  // macOS EBADARCH (86): Node throws those synchronously from spawn with code
+  // "Unknown system error -8" / "-86" and errno -8 / -86, so errno counts too
+  // (measured on Node 20, macOS: ENOEXEC throws, EACCES and ENOENT emit 'error').
+  var RUNTIME_EXEC_ERRORS = ['EBADARCH', 'ENOEXEC', 'EACCES'];
+  var RUNTIME_EXEC_ERRNOS = [-8, -86];
+  function spawnFailureCode(err, kind) {
+    if (kind !== 'runtime' || !err) return 'launch-failed';
+    if (typeof err.code === 'string' && RUNTIME_EXEC_ERRORS.indexOf(err.code) !== -1) return 'runtime-damaged';
+    if (RUNTIME_EXEC_ERRNOS.indexOf(err.errno) !== -1) return 'runtime-damaged';
+    return 'launch-failed';
   }
 
   function exists(fs, p) {
@@ -187,11 +208,16 @@
     return null;
   }
 
-  // resolveDaemonLaunch({ daemonDir, platform, fs, pins, env, detectDev, hashFile })
+  // resolveDaemonLaunch({ daemonDir, platform, fs, pins, env, detectDev, hashFile, swapWaitExpired })
   //   -> { bin, args, cwd, kind: 'runtime'|'node', notes }   or   { error, reason, notes }
+  //   or { retry: 'runtime-swapping', reason, notes }
   // error is 'runtime-damaged' (runtime present but fails the check: NEVER
   // falls back to a system node) or 'runtime-missing' (no runtime binary and
-  // no system node). notes are log lines for the daemon log.
+  // no system node). retry: a packaged install with no runtime but a
+  // runtime.old or runtime.new next to it is inside an updater's swap window
+  // (another panel's update): not an error, the panel tries again in a few
+  // seconds. Once the panel's bounded wait is over (swapWaitExpired) the
+  // system node probe applies as before. notes are log lines for the daemon log.
   function resolveDaemonLaunch(o) {
     var isWin = o.platform === 'win32';
     var sep = isWin ? '\\' : '/';
@@ -213,6 +239,17 @@
       return { bin: bin, args: ['daemon.mjs'], cwd: daemonDir, kind: 'runtime', notes: notes };
     }
 
+    if (!dev && !o.swapWaitExpired) {
+      var swapDirs = [];
+      if (exists(o.fs, daemonDir + sep + 'runtime.old')) swapDirs.push('runtime.old');
+      if (exists(o.fs, daemonDir + sep + 'runtime.new')) swapDirs.push('runtime.new');
+      if (swapDirs.length) {
+        var why = 'no runtime but ' + swapDirs.join(' and ') + ' present, an update is swapping the runtime';
+        notes.push('runtime: ' + why + ', retrying shortly');
+        return { retry: 'runtime-swapping', reason: why, notes: notes };
+      }
+    }
+
     // Dev install, or no runtime binary (0.11.x mid-migration, or deleted).
     if (dev) notes.push('runtime: dev install, using the system node with index.js');
     else notes.push('runtime: no bundled runtime at ' + bin + ', probing for a system node');
@@ -230,6 +267,7 @@
     normalizeWinPath: normalizeWinPath,
     launchNotice: launchNotice,
     gatekeeperKilled: gatekeeperKilled,
+    spawnFailureCode: spawnFailureCode,
     GATEKEEPER_WINDOW_MS: GATEKEEPER_WINDOW_MS
   };
   root.GafferLaunch = api;
