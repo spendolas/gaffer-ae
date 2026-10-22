@@ -11,6 +11,7 @@ import { parseArgs as parityArgs, evaluate, PROBE_CODE, PROBE_UNDO_LABEL } from 
 import {
   parseArgs as smokeArgs, strippedEnv, checkBinaryAgainstPin, teamIdFromCodesign,
   parseTapCounts, compareParity, findNodeModules, PLACEHOLDER_PIN,
+  nonLoopbackAddresses, listenAddrsFromLsof, listenersLoopbackOnly,
 } from './run-smoke.mjs';
 
 const baseline = JSON.parse(readFileSync(fileURLToPath(new URL('./parity-baseline.json', import.meta.url)), 'utf8'));
@@ -142,6 +143,31 @@ test('run-smoke: packaged vs source is the gate, the baseline only warns', () =>
   assert.equal(jsx.fails.length, 2);
   const moved = compareParity(s('n', 'm', 27), s('n', 'm', 27), { toolsSha256: 'a', jsxSha256: 'b', toolCount: 26 });
   assert.deepEqual(moved.fails, []); assert.equal(moved.warns.length, 3);
+  const sized = (tb, jb) => ({ tools_sha256: { sha256: 'a', bytes: tb }, jsx_captured: { sha256: 'b', length: jb }, mcp_tools_list: { count: 26 } });
+  const full = { toolsSha256: 'a', jsxSha256: 'b', toolCount: 26, toolsBytes: 36641, jsxBytes: 2465 };
+  assert.deepEqual(compareParity(sized(36641, 2465), null, full).warns, []);
+  const w = compareParity(sized(36000, 2400), null, full).warns;
+  assert.equal(w.length, 2); assert.match(w[0], /tools\/list size 36000/); assert.match(w[1], /capture size 2400/);
+});
+
+test('run-smoke: non-loopback addresses from os.networkInterfaces()', () => {
+  const ifaces = {
+    lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }, { address: '::1', family: 'IPv6', internal: true }, { address: 'fe80::1', family: 'IPv6', internal: true }],
+    en0: [{ address: 'fe80::1c2:3ff:fe4:5', family: 'IPv6', internal: false }, { address: '192.168.1.20', family: 'IPv4', internal: false }, { address: '2001:db8::5', family: 'IPv6', internal: false }],
+    utun: [{ address: '10.0.0.2', family: 4, internal: false }],
+  };
+  assert.deepEqual(nonLoopbackAddresses(ifaces), ['192.168.1.20', '2001:db8::5', '10.0.0.2']);
+  assert.deepEqual(nonLoopbackAddresses({}), []);
+});
+
+test('run-smoke: listener rule over lsof / Get-NetTCPConnection output', () => {
+  const addrs = listenAddrsFromLsof('p123\nf20\nn127.0.0.1:27831\nf21\nn127.0.0.1:27832\n');
+  assert.deepEqual(addrs, ['127.0.0.1:27831', '127.0.0.1:27832']);
+  assert.deepEqual(listenersLoopbackOnly(addrs, [27831, 27832]), []);
+  assert.match(listenersLoopbackOnly(['*:27831', '127.0.0.1:27832'], [27831, 27832]).join(), /listener on \*:27831.*no 127\.0\.0\.1:27831/);
+  assert.match(listenersLoopbackOnly(['127.0.0.1:27831', '0.0.0.0:27832'], [27831, 27832]).join(), /0\.0\.0\.0:27832/);
+  assert.match(listenersLoopbackOnly(['[::1]:27831', '127.0.0.1:27832'], [27831, 27832]).join(), /listener on \[::1\]:27831/);
+  assert.match(listenersLoopbackOnly([], [27831, 27832]).join(), /no 127\.0\.0\.1:27831/);
 });
 
 test('run-smoke: node_modules found inside the tree and in parents', () => {

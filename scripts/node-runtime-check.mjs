@@ -105,6 +105,14 @@ export function compareMirrorFile(name, official, mirror, pinnedSha) {
   return failures;
 }
 
+// What to do when the mirror answers 404 (spec section 11).
+export function mirrorHint(pins) {
+  const v = pins.node.version;
+  return 'mirror file(s) missing: create the mirror release per spec section 11: gh release create node-' + v +
+    ' --latest=false with the three archives (' + Object.values(pins.node.platforms).map((p) => p.archive).join(', ') +
+    ') plus SHASUMS256.txt and SHASUMS256.txt.sig, byte for byte from ' + pins.node.official;
+}
+
 // Rule 4 over the releases/latest JSON.
 export function checkLatest(latest) {
   const tag = latest && latest.tag_name;
@@ -132,11 +140,14 @@ export async function runCheck({ pins, net, shasumsText, repo, skipMirror }) {
   if (!skipMirror) {
     const files = Object.values(pins.node.platforms).map((p) => ({ name: p.archive, pinned: p.archiveSha256 }))
       .concat([{ name: 'SHASUMS256.txt' }, { name: 'SHASUMS256.txt.sig' }]);
+    let mirrorMissing = false;
     for (const f of files) {
       const official = await net.hashUrl(pins.node.official + f.name).catch((e) => ({ error: e.message }));
       const mirror = await net.hashUrl(pins.node.mirror + f.name).catch((e) => ({ error: e.message }));
+      if (mirror && mirror.error && /\b404\b/.test(mirror.error)) mirrorMissing = true;
       failures.push(...compareMirrorFile(f.name, official, mirror, f.pinned));
     }
+    if (mirrorMissing) failures.push(mirrorHint(pins));
   }
 
   const latest = await safe('releases/latest', () => net.getJson('https://api.github.com/repos/' + repo + '/releases/latest'));
@@ -147,9 +158,12 @@ export async function runCheck({ pins, net, shasumsText, repo, skipMirror }) {
 // ---------- real network ----------
 
 const UA = { 'User-Agent': 'gaffer-node-runtime-check' };
+// A stalled connection must fail the job, not hang it until the job timeout.
+const SMALL_TIMEOUT_MS = 60000;
+const ARCHIVE_TIMEOUT_MS = 600000;
 export const realNet = {
   async getText(url) {
-    const r = await fetch(url, { headers: UA, redirect: 'follow' });
+    const r = await fetch(url, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(SMALL_TIMEOUT_MS) });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
     return r.text();
   },
@@ -158,13 +172,13 @@ export const realNet = {
     // The workflow's read-only job token, only to lift the anonymous
     // api.github.com rate limit shared by hosted runners. Never sent elsewhere.
     if (process.env.GITHUB_TOKEN && url.startsWith('https://api.github.com/')) h.Authorization = 'Bearer ' + process.env.GITHUB_TOKEN;
-    const r = await fetch(url, { headers: h, redirect: 'follow' });
+    const r = await fetch(url, { headers: h, redirect: 'follow', signal: AbortSignal.timeout(SMALL_TIMEOUT_MS) });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
     return r.json();
   },
   // Streams the body through SHA-256 so 50 MB archives never sit in memory.
   async hashUrl(url) {
-    const r = await fetch(url, { headers: UA, redirect: 'follow' });
+    const r = await fetch(url, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS) });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
     const h = createHash('sha256');
     let bytes = 0;

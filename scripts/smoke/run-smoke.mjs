@@ -33,6 +33,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -119,7 +120,8 @@ export function parseTapCounts(text) {
 // a baseline difference is a warning only.
 export function compareParity(packaged, source, baseline) {
   const fails = [], warns = [];
-  const pick = (s) => ({ tools: s && s.tools_sha256 && s.tools_sha256.sha256, jsx: s && s.jsx_captured && s.jsx_captured.sha256, count: s && s.mcp_tools_list && s.mcp_tools_list.count });
+  const pick = (s) => ({ tools: s && s.tools_sha256 && s.tools_sha256.sha256, jsx: s && s.jsx_captured && s.jsx_captured.sha256, count: s && s.mcp_tools_list && s.mcp_tools_list.count,
+    toolsBytes: s && s.tools_sha256 && s.tools_sha256.bytes, jsxBytes: s && s.jsx_captured && s.jsx_captured.length });
   const P = pick(packaged);
   if (source) {
     const S = pick(source);
@@ -131,6 +133,8 @@ export function compareParity(packaged, source, baseline) {
     if (baseline.toolsSha256 && P.tools !== baseline.toolsSha256) warns.push('tools/list sha256 ' + P.tools + ' differs from parity-baseline.json ' + baseline.toolsSha256 + ' (fine if the tool surface changed on purpose; update the baseline)');
     if (baseline.jsxSha256 && P.jsx !== baseline.jsxSha256) warns.push('runJSX capture sha256 ' + P.jsx + ' differs from parity-baseline.json ' + baseline.jsxSha256 + ' (fine if safety.js changed on purpose; update the baseline)');
     if (baseline.toolCount && P.count !== baseline.toolCount) warns.push('tool count ' + P.count + ' differs from parity-baseline.json ' + baseline.toolCount);
+    if (baseline.toolsBytes && P.toolsBytes !== baseline.toolsBytes) warns.push('tools/list size ' + P.toolsBytes + ' bytes differs from parity-baseline.json ' + baseline.toolsBytes);
+    if (baseline.jsxBytes && P.jsxBytes !== baseline.jsxBytes) warns.push('runJSX capture size ' + P.jsxBytes + ' bytes differs from parity-baseline.json ' + baseline.jsxBytes);
   }
   return { fails, warns, hashes: P };
 }
@@ -161,7 +165,56 @@ export function findNodeModules(dir, fsImpl) {
   return hits;
 }
 
+// Every non-loopback, non-link-local address from os.networkInterfaces().
+// A daemon bound to 127.0.0.1 must refuse connections on all of them.
+export function nonLoopbackAddresses(ifaces) {
+  const out = [];
+  for (const list of Object.values(ifaces || {})) {
+    for (const a of list || []) {
+      if (!a || a.internal) continue;
+      if (a.family === 'IPv4' || a.family === 4) { if (!a.address.startsWith('127.')) out.push(a.address); }
+      else if (a.family === 'IPv6' || a.family === 6) {
+        if (a.address === '::1' || /^fe80:/i.test(a.address) || /%/.test(a.address)) continue; // loopback / link-local need a scope id
+        out.push(a.address);
+      }
+    }
+  }
+  return out;
+}
+
+// Local addresses of LISTEN sockets from `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN -Fn`
+// ("n127.0.0.1:27831", "n[::1]:27831", "n*:27831").
+export function listenAddrsFromLsof(text) {
+  return String(text || '').split(/\r?\n/).filter((l) => l.startsWith('n')).map((l) => l.slice(1).trim()).filter(Boolean);
+}
+
+// The listener rule: every listening socket is on 127.0.0.1, and both test
+// ports are among them.
+export function listenersLoopbackOnly(addrs, ports) {
+  const problems = [];
+  for (const a of addrs) {
+    const host = a.replace(/:(\d+)$/, '');
+    if (host !== '127.0.0.1') problems.push('listener on ' + a);
+  }
+  for (const p of ports) if (!addrs.some((a) => a === '127.0.0.1:' + p)) problems.push('no 127.0.0.1:' + p + ' listener');
+  return problems;
+}
+
 // ---------- runner ----------
+
+function connectsVia(host, port) {
+  return new Promise((resolve) => {
+    const s = net.connect({ host, port });
+    s.once('connect', () => { s.destroy(); resolve(true); });
+    s.once('error', () => resolve(false));
+    s.setTimeout(2000, () => { s.destroy(); resolve(false); });
+  });
+}
+
+function samePath(a, b, win) {
+  const norm = (p) => { let r = p; try { r = fs.realpathSync(p); } catch (e) { /* keep */ } return win ? r.toLowerCase() : r; };
+  return !!a && !!b && norm(a) === norm(b);
+}
 
 function sha256File(p) {
   const h = createHash('sha256');
@@ -288,6 +341,38 @@ async function main() {
 
   const pk = await startDaemon(daemonDir, 'daemon.mjs', 'packaged');
   row('R3', 'packaged daemon.mjs reaches listening (stripped env, runtime)', PF(pk.w.ok), (pk.w.ok ? pk.w.ms + ' ms' : pk.w.why) + '; log: ' + fs.readFileSync(pk.logPath, 'utf8').slice(0, 300));
+  if (pk.w.ok) {
+    const pid = pk.child.pid;
+    // Executable of the listening process (spawned by absolute path, but a
+    // wrapper or a re-exec would show here).
+    let exe = null;
+    if (isWin) {
+      const q = run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.WriteLine((Get-Process -Id ' + pid + ').Path)']);
+      exe = String(q.stdout || '').trim();
+    } else {
+      const q = run('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn']);
+      const first = String(q.stdout || '').split(/\r?\n/).find((l) => l.startsWith('n'));
+      exe = first ? first.slice(1) : null;
+    }
+    row('R3', 'process executable is the runtime node', PF(samePath(exe, runtime, isWin)), 'pid ' + pid + ': ' + exe);
+    // Listener rule (Global Constraint: every listener binds 127.0.0.1), two ways.
+    let addrs = [];
+    if (isWin) {
+      const q = run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-Command', 'Get-NetTCPConnection -State Listen -OwningProcess ' + pid + ' | ForEach-Object { [Console]::Out.WriteLine($_.LocalAddress + ":" + $_.LocalPort) }']);
+      addrs = String(q.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    } else {
+      addrs = listenAddrsFromLsof(run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn']).stdout);
+    }
+    const lp = listenersLoopbackOnly(addrs, [o.wsPort, o.mcpPort]);
+    row('R3', 'listening sockets loopback only (' + (isWin ? 'Get-NetTCPConnection' : 'lsof') + ')', PF(lp.length === 0), addrs.join(' ') + (lp.length ? '; ' + lp.join('; ') : ''));
+    const ext4 = nonLoopbackAddresses(os.networkInterfaces());
+    const reached = [];
+    for (const host of ext4) for (const p of [o.wsPort, o.mcpPort]) if (await connectsVia(host, p)) reached.push(host + ':' + p);
+    row('R3', 'test ports refuse connections on non-loopback addresses', PF(reached.length === 0),
+      ext4.length ? 'tried ' + ext4.join(', ') + (reached.length ? '; REACHABLE: ' + reached.join(', ') : '; all refused') : 'no non-loopback address on this machine, nothing to try');
+  }
   let packaged = null;
   if (pk.w.ok) {
     const expectVersion = JSON.parse(fs.readFileSync(path.join(ext, 'version.json'), 'utf8')).version;
@@ -299,7 +384,9 @@ async function main() {
   row('R3', 'packaged daemon stop', 'INFO', await stopChild(pk.child));
 
   let source = null;
-  if (o.sourceDaemon && packaged) {
+  const freeAgain = (await portFree(o.wsPort)) && (await portFree(o.mcpPort));
+  if (o.sourceDaemon && packaged && !freeAgain) row('R4', 'test ports free again before the source daemon', 'FAIL', o.wsPort + '/' + o.mcpPort);
+  if (o.sourceDaemon && packaged && freeAgain) {
     const sd = await startDaemon(path.resolve(o.sourceDaemon), 'index.js', 'source');
     row('R4', 'source index.js reaches listening (same runtime)', PF(sd.w.ok), sd.w.ok ? sd.w.ms + ' ms' : sd.w.why + '; log: ' + fs.readFileSync(sd.logPath, 'utf8').slice(0, 300));
     if (sd.w.ok) {

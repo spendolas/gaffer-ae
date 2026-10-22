@@ -23,7 +23,7 @@ test('resolvePort honours only a plain integer from 1 to 65535', () => {
   assert.equal(resolvePort('27831', 9823), 27831);
   assert.equal(resolvePort('1', 9823), 1);
   assert.equal(resolvePort('65535', 9823), 65535);
-  for (const bad of ['0', '65536', '70000', 'abc', '9824x', ' 9824', '9824 ', '-1', '1e4', '0x10', '12.5', '123456']) {
+  for (const bad of ['0', '65536', '70000', 'abc', '9824x', ' 9824', '9824 ', '-1', '1e4', '0x10', '12.5', '123456', '09824', '00080', '+9824']) {
     assert.equal(resolvePort(bad, 9823), 9823, 'should ignore ' + JSON.stringify(bad));
   }
 });
