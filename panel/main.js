@@ -2,6 +2,8 @@
   var cs = new CSInterface();
   // Pure update-check logic (panel/update-state.js, loaded before this file).
   var UpdateState = window.GafferUpdateState;
+  // Pure daemon-launch decisions (panel/daemon-launch.js, loaded before this file).
+  var Launch = window.GafferLaunch;
 
   // Single source of truth for the install links. The daemon can run Claude
   // Code from the Claude desktop app or from a standalone CLI, so the
@@ -387,44 +389,115 @@
   }
 
   // ── Daemon auto-start ──
+  //
+  // Zero-dependency install (spec section 4): the daemon is <ext>/daemon/
+  // daemon.mjs run by the bundled runtime <ext>/daemon/runtime/node(.exe).
+  // The decisions (stamp check, first-run hash, exec bit, dev/system-node
+  // probe, Windows path normalisation, env cleaning) live in the pure
+  // GafferLaunch module; this file only does the I/O.
 
+  var daemonLaunchError = null; // notice text while the launch is refused
+
+  function daemonLogPath() {
+    return process.platform === 'win32'
+      ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-daemon.log'
+      : '/tmp/gaffer-daemon.log';
+  }
+
+  function appendDaemonLog(fs, lines) {
+    if (!lines || !lines.length) return;
+    var stamp = new Date().toISOString();
+    var text = '';
+    for (var i = 0; i < lines.length; i++) text += stamp + ' Gaffer panel: ' + lines[i] + '\n';
+    try { fs.appendFileSync(daemonLogPath(), text); } catch (e) { /* ignore */ }
+  }
+
+  // sha256 of a file, read in chunks so the 90 to 125 MB runtime is never held
+  // in memory at once. Only called on a stamp-less first run.
+  function sha256FileSync(fs, crypto, p) {
+    var h = crypto.createHash('sha256');
+    var fd = fs.openSync(p, 'r');
+    try {
+      var buf = require('buffer').Buffer.alloc(4 * 1024 * 1024); // CEP may not expose a global Buffer
+      var n;
+      while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(n === buf.length ? buf : buf.subarray(0, n));
+    } finally { fs.closeSync(fd); }
+    return h.digest('hex');
+  }
+
+  // Dev install = the panel is symlinked out of a git checkout. Same test as
+  // detectDevInstall (kernel path resolution follows the symlink, so
+  // <ext>/../.git is the repo's), done synchronously because the launch
+  // decision cannot wait for evalScript. Windows: never dev, as there.
+  function isDevCheckoutSync(fs, extPath) {
+    if (process.platform === 'win32') return false;
+    try { return fs.existsSync(extPath + '/../.git'); } catch (e) { return false; }
+  }
+
+  function readRuntimePins(fs, daemonDir) {
+    try { return JSON.parse(String(fs.readFileSync(daemonDir + '/runtime-pins.json', 'utf8'))); }
+    catch (e) { return null; }
+  }
+
+  // launch = { bin, args, cwd } from Launch.resolveDaemonLaunch. Spawn shape
+  // per spec: detached, log opened in append mode for stdout and stderr,
+  // no console window on Windows, cleaned env.
+  function launchDaemon(cp, fs, launch) {
+    var fd = fs.openSync(daemonLogPath(), 'a');
+    var env = Launch.cleanDaemonEnv(process.env, process.platform);
+    var child = cp.spawn(launch.bin, launch.args, {
+      cwd: launch.cwd,
+      detached: true,
+      stdio: ['ignore', fd, fd],
+      windowsHide: true,
+      env: env,
+    });
+    child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
+    child.unref();
+    try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
+    return child;
+  }
+
+  function showLaunchError(code) {
+    daemonLaunchError = Launch.launchNotice(code);
+    console.error('Gaffer: daemon not launched: ' + code);
+    setStatus('disconnected', daemonLaunchError);
+    try { showToast('error', daemonLaunchError, { duration: 0 }); } catch (e) { /* ignore */ }
+  }
+
+  // Returns 'started', 'refused' (a notice is showing), or false when CEP Node
+  // integration is unavailable (then the ExtendScript route runs).
   function spawnViaNode() {
     // Direct Node spawn — works on Apple Silicon AE where system.callSystem
-    // silently fails. Returns true on success, false if Node integration
-    // unavailable (legacy CEP context).
-    if (typeof require === 'undefined') return false;
+    // silently fails.
+    if (typeof require === 'undefined' || !Launch) return false;
     try {
       var cp = require('child_process');
       var fs = require('fs');
+      var crypto = require('crypto');
       var extPath = cs.getSystemPath(SystemPath.EXTENSION);
       var daemonDir = extPath + '/daemon';
-      var isWin = process.platform === 'win32';
-
-      var nodeBin = null;
-      var candidates = isWin
-        ? []
-        : ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
-      for (var i = 0; i < candidates.length; i++) {
-        try { if (fs.existsSync(candidates[i])) { nodeBin = candidates[i]; break; } } catch (e) {}
-      }
-      if (!nodeBin) nodeBin = isWin ? 'node' : '/usr/bin/env';
-      var args = (nodeBin === '/usr/bin/env') ? ['node', 'index.js'] : ['index.js'];
-
-      var logPath = isWin
-        ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-daemon.log'
-        : '/tmp/gaffer-daemon.log';
-      var out = fs.openSync(logPath, 'a');
-
-      var child = cp.spawn(nodeBin, args, {
-        cwd: daemonDir,
-        detached: true,
-        stdio: ['ignore', out, out],
-        windowsHide: true,
+      var launch = Launch.resolveDaemonLaunch({
+        daemonDir: daemonDir,
+        platform: process.platform,
+        fs: fs,
+        pins: readRuntimePins(fs, daemonDir),
+        env: process.env,
+        detectDev: function () { return isDevCheckoutSync(fs, extPath); },
+        hashFile: function (p) { return sha256FileSync(fs, crypto, p); },
       });
-      child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
-      child.unref();
-      console.log('Gaffer: daemon spawned via Node, pid=' + child.pid + ' bin=' + nodeBin);
-      return true;
+      appendDaemonLog(fs, launch.notes);
+      if (launch.error) {
+        // Never fall through to the ExtendScript route: its launcher would
+        // reach the same verdict, and a damaged runtime must not be bypassed.
+        appendDaemonLog(fs, ['daemon not launched: err:' + launch.error + (launch.reason ? ' (' + launch.reason + ')' : '')]);
+        showLaunchError(launch.error);
+        return 'refused';
+      }
+      appendDaemonLog(fs, ['launching daemon via ' + launch.kind + ': ' + launch.bin + ' ' + launch.args.join(' ') + ' (cwd ' + launch.cwd + ')']);
+      var child = launchDaemon(cp, fs, launch);
+      console.log('Gaffer: daemon spawned, pid=' + child.pid + ' ' + launch.kind + ' bin=' + launch.bin);
+      return 'started';
     } catch (e) {
       console.error('Gaffer: spawnViaNode failed:', e);
       return false;
@@ -438,26 +511,34 @@
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
       + 'if (isWin) {'
-      + '  return system.callSystem("powershell -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"");'
+      // -NoProfile: a user profile could re-introduce NODE_OPTIONS or change
+      // the PATH that start.ps1's system-node search sees. powershell -File
+      // accepts the forward slashes.
+      + '  return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"");'
       + '} else {'
       + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"");'
       + '}'
       + '})()';
     cs.evalScript(jsx, function (result) {
       console.log('Gaffer: daemon spawn via ExtendScript: ' + result);
+      // Launcher contract: pid:<N> runtime|node, or err:<code>.
+      var m = String(result).match(/err:(runtime-damaged|runtime-missing)/);
+      if (m) showLaunchError(m[1]);
     });
   }
 
   function startDaemon() {
     if (daemonStartAttempted) return;
     daemonStartAttempted = true;
-    setStatus('starting', 'Starting daemon...');
+    daemonLaunchError = null;
 
     // Prefer Node spawn (works on Apple Silicon). Fall back to ExtendScript
-    // system.callSystem if Node integration isn't available.
-    if (!spawnViaNode()) {
-      spawnViaExtendScript();
-    }
+    // system.callSystem if Node integration isn't available. A refused
+    // launch already shows its notice instead of "Starting daemon...".
+    var res = spawnViaNode();
+    if (res === 'refused') return;
+    setStatus('starting', 'Starting daemon...');
+    if (!res) spawnViaExtendScript();
   }
 
   // ── WebSocket ──
@@ -1147,7 +1228,7 @@
 
     ws.onclose = function () {
       console.log('Gaffer: disconnected from daemon');
-      setStatus('disconnected', 'Disconnected');
+      setStatus('disconnected', daemonLaunchError || 'Disconnected');
       // If daemon crashed after being connected, allow restart
       if (wasConnected) {
         daemonStartAttempted = false;
