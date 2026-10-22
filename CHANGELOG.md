@@ -6,6 +6,11 @@
 - The install also checks the Gaffer package itself against the checksum list published with each release.
 - Updates no longer run npm. They download the Node.js runtime again only when a release moves to a new Node.js version.
 - The install still registers Gaffer's tools with Claude Code by default, and now tells you that it does and how to remove the entry.
+- If Gaffer's runtime is damaged or missing (for example because antivirus software removed it), or macOS blocks it, the panel tells you so instead of just showing "Disconnected", and Settings shows a Repair button. Repair downloads and checks the runtime again and puts the current version's files back in place. Your chats and settings are kept.
+- When an update or a repair fails, the panel now says why, for example that the runtime could not be downloaded, and where the updater log is.
+- Gaffer's background service and the panel's connection to it still listen only on your own computer, never on your network, so Windows Firewall does not ask about Gaffer's runtime.
+- If your company network inspects encrypted traffic and you set `NODE_EXTRA_CA_CERTS` for Claude Code, Gaffer still passes it on to Claude Code, so chat keeps working. Gaffer's own background service no longer uses it, so on such a network the live model list and the icons of your MCP servers may not load, and anonymous usage statistics may not be sent.
+- Known risks: this release has not been tested with third-party antivirus software, on Windows 10, or on Windows on ARM (which runs Gaffer's runtime through Windows' built-in x64 emulation). If something goes wrong there, please tell us.
 
 ## v0.11.3 - 2026-10-18
 
