@@ -102,7 +102,8 @@ function sandbox(opts = {}) {
     sha = sha256(buf);
     if (o.stamp !== null) writeFileSync(join(dir, 'runtime', 'VERIFIED'), o.stamp.replace('<size>', String(size)).replace('<sha>', sha));
   }
-  const pinSha = o.pinSha === 'real' ? sha : o.pinSha === 'wrong' ? 'f'.repeat(64) : PLACEHOLDER;
+  const pinSha = o.pinSha === 'real' ? sha : o.pinSha === 'wrong' ? 'f'.repeat(64)
+    : o.pinSha === 'placeholder' ? PLACEHOLDER : o.pinSha; // any other string is used as is
   const pinBytes = o.pinSize === 'match' ? size : size + 1;
   // Same layout as the committed runtime-pins.json (pretty-printed).
   writeFileSync(join(dir, 'runtime-pins.json'), JSON.stringify({
@@ -131,6 +132,7 @@ function run(sb, extraEnv = {}) {
   const env = {
     HOME: sb.root,
     PATH: sb.tools + ':' + sb.sysbin,
+    GAFFER_TEST: '1',
     GAFFER_DAEMON_LOG: sb.log,
     GAFFER_START_TEST_NODE_CANDIDATES: '',
     ...extraEnv,
@@ -238,14 +240,42 @@ test('stamp absent, size matches no pin: damaged', opts, async () => {
   assert.match(logText(sb), /matches no pinned binary/);
 });
 
-test('stamp absent, placeholder pin sha: skips the hash, records unhashed', opts, async () => {
+test('stamp absent, exact placeholder pin: skips the hash, writes no stamp', opts, async () => {
   const sb = sandbox({ stamp: null, pinSha: 'placeholder' });
   const r = run(sb);
   if (!IS_MAC) { assert.equal(r.stdout.trim(), 'err:runtime-damaged'); return; }
   assert.match(r.stdout.trim(), /^pid:\d+ runtime$/);
-  assert.equal(readFileSync(join(sb.dir, 'runtime', 'VERIFIED'), 'utf8'), `${sb.size} unhashed\n`);
-  assert.match(logText(sb), /is a placeholder \(PENDING-FIRST-ACCEPTANCE-RUN\)/);
+  assert.equal(existsSync(join(sb.dir, 'runtime', 'VERIFIED')), false, 'no stamp written');
+  assert.match(logText(sb), /is the placeholder PENDING-FIRST-ACCEPTANCE-RUN, skipping the hash check, size matched, no stamp written/);
   assert.ok(await marker(sb));
+});
+
+for (const [label, bad] of [['empty', ''], ['truncated', 'abc123'], ['near-placeholder', 'PENDING-FIRST-ACCEPTANCE-RUN '], ['63 hex', 'a'.repeat(63)]]) {
+  test(`stamp absent, garbage pin sha (${label}): err:runtime-damaged`, opts, async () => {
+    const sb = sandbox({ stamp: null, pinSha: bad, sysNode: true });
+    const r = run(sb);
+    assert.equal(r.stdout.trim(), 'err:runtime-damaged');
+    assert.equal(existsSync(join(sb.dir, 'runtime', 'VERIFIED')), false);
+    assert.equal(await marker(sb, 400), null);
+    if (IS_MAC) assert.match(logText(sb), /pinned sha256 for darwin-arm64 is not a sha256 \(/);
+  });
+}
+
+test('a 20+ digit stamp is a mismatch: err:runtime-damaged', opts, async () => {
+  const sb = sandbox({ stamp: '123456789012345678901234 x\n', sysNode: true });
+  const r = run(sb);
+  assert.equal(r.stdout.trim(), 'err:runtime-damaged');
+  assert.match(logText(sb), /does not match the stamp 123456789012345678901234/);
+});
+
+test('glob characters in PATH and candidates are never expanded', opts, async () => {
+  const sb = sandbox({ runtime: false, sysNode: false });
+  // "<root>/g*" would glob-match "<root>/glob dir" if expanded.
+  const globDir = join(sb.root, 'glob dir');
+  mkdirSync(globDir);
+  fakeNode(join(globDir, 'node'), 'glob');
+  const r = run(sb, { PATH: sb.tools + ':' + join(sb.root, 'g*'), GAFFER_START_TEST_NODE_CANDIDATES: join(sb.root, '*', 'node') });
+  assert.equal(r.stdout.trim(), 'err:runtime-missing');
 });
 
 test('macOS: lost exec bit is restored with chmod 755', { skip: IS_MAC ? false : 'darwin only' }, async () => {
@@ -360,4 +390,9 @@ test('static: the GAFFER_USE_BINARY / SEA binary branch is gone', opts, () => {
   assert.match(src, /env -u NODE_OPTIONS -u NODE_PATH -u NODE_EXTRA_CA_CERTS nohup/);
   assert.match(src, /\/tmp\/gaffer-daemon\.log/);
   assert.match(src, /shasum -a 256/);
+  assert.doesNotMatch(src, /unhashed/);
+  // Test seams honoured only with GAFFER_TEST=1.
+  assert.match(src, /if \[ "\$GAFFER_TEST" = "1" \]; then\n  TESTING=1\n  \[ -n "\$GAFFER_DAEMON_LOG" \] && LOG="\$GAFFER_DAEMON_LOG"/);
+  assert.match(src, /\[ -n "\$TESTING" \] && \[ -n "\$\{GAFFER_START_TEST_NODE_CANDIDATES\+set\}" \]/);
+  assert.match(src, /^LOG="\/tmp\/gaffer-daemon\.log"$/m);
 });

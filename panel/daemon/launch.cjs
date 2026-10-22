@@ -6,7 +6,7 @@
 // daemon log, cleaned env; prints pid:<N> <kind> and exits. Node hands the
 // child only the named handles, so the caller's pipe is never inherited
 // (Start-Process -Redirect* hung the caller and truncated the log).
-// GAFFER_DAEMON_LOG moves the log (tests).
+// Test seam: GAFFER_DAEMON_LOG moves the log, only when GAFFER_TEST=1.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -36,7 +36,8 @@ function main() {
     console.log('err:launch-usage');
     return 2;
   }
-  const log = process.env.GAFFER_DAEMON_LOG || path.join(process.env.TEMP || os.tmpdir(), 'gaffer-daemon.log');
+  const testLog = process.env.GAFFER_TEST === '1' && process.env.GAFFER_DAEMON_LOG;
+  const log = testLog || path.join(process.env.TEMP || os.tmpdir(), 'gaffer-daemon.log');
   const fd = fs.openSync(log, 'a');
   fs.writeSync(fd, `${new Date().toISOString()} Gaffer launch.cjs: launching daemon via ${kind}: ${process.execPath} ${entry} (cwd ${__dirname})\n`);
   const child = cp.spawn(process.execPath, [entry], {

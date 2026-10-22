@@ -60,7 +60,7 @@ function sandbox() {
 }
 
 function run(sb, args, extraEnv = {}) {
-  const env = { ...process.env, GAFFER_DAEMON_LOG: sb.log, ...extraEnv };
+  const env = { ...process.env, GAFFER_TEST: '1', GAFFER_DAEMON_LOG: sb.log, ...extraEnv };
   const t0 = Date.now();
   // spawnSync with pipes: returns only when stdout and stderr hit EOF, i.e.
   // when every holder of the write end (including a leaked daemon) closed it.
@@ -181,6 +181,7 @@ test('launch.cjs source: detached, windowsHide, explicit stdio, plain CommonJS',
   assert.match(src, /stdio:\s*\[\s*'ignore',\s*fd,\s*fd\s*\]/);
   assert.match(src, /openSync\([^)]*'a'\)/);
   assert.doesNotMatch(src, /^\s*import\s/m);
+  assert.match(src, /GAFFER_TEST === '1' && process\.env\.GAFFER_DAEMON_LOG/, 'log seam gated on GAFFER_TEST=1');
 });
 
 // ---- start.ps1, static (PowerShell 5.1 cannot run here) ----
@@ -207,7 +208,7 @@ test('start.ps1: mirrors resolveDaemonLaunch (paths, stamp, pins, codes)', () =>
   for (const s of [
     'runtime\\node.exe', 'daemon.mjs', 'index.js', 'VERIFIED', 'runtime-pins.json', 'win-x64',
     'binaryBytes', 'binarySha256', 'Get-FileHash', "'runtime-damaged'", "'runtime-missing'", "Write-Output ('err:' + $code)",
-    'nodejs\\node.exe', 'Programs\\nodejs\\node.exe', "'runtime'", "'node'", 'unhashed',
+    'nodejs\\node.exe', 'Programs\\nodejs\\node.exe', "'runtime'", "'node'",
   ]) {
     assert.ok(ps1Code.includes(s), `start.ps1 mentions ${s}`);
   }
@@ -228,6 +229,27 @@ test('start.ps1: mirrors resolveDaemonLaunch (paths, stamp, pins, codes)', () =>
   assert.doesNotMatch(branch, /Find-SystemNode/);
   // Forward slashes from CSInterface become backslashes.
   assert.match(ps1Code, /-replace\s+'\/',\s*'\\'/);
+  // Placeholder rule mirrors daemon-launch.js: only the exact literal skips
+  // the hash and writes no stamp; any other non-sha256 pin is damaged.
+  assert.match(ps1Code, /\$sha -ceq 'PENDING-FIRST-ACCEPTANCE-RUN'/);
+  assert.match(ps1Code, /no stamp written/);
+  assert.match(ps1Code, /'pinned sha256 for win-x64 is not a sha256 \(' \+ \$sha \+ '\)'/);
+  assert.ok(!ps1Code.includes('unhashed'), 'no unhashed stamp');
+  const ph = ps1Code.indexOf("-ceq 'PENDING-FIRST-ACCEPTANCE-RUN'");
+  const phBlock = ps1Code.slice(ph, ps1Code.indexOf('}', ph));
+  assert.match(phBlock, /return/, 'placeholder branch returns before the stamp write');
+  // Caught cmdlet failures must be terminating.
+  assert.match(ps1Code, /Get-Item -LiteralPath \$bin -ErrorAction Stop/);
+  assert.match(ps1Code, /Get-FileHash -LiteralPath \$bin -Algorithm SHA256 -ErrorAction Stop/);
+  assert.match(ps1Code, /ConvertFrom-Json -ErrorAction Stop/);
+  // Stamp compared as a digit string, never an [int64] cast.
+  assert.doesNotMatch(ps1Code, /\[int64\]\s*\$Matches/);
+  assert.match(ps1Code, /\$stamped -cne \(\[string\] \$size\)/);
+  // launch.cjs outcome checked: no pid line or a bad exit ends in err:launch-failed.
+  assert.match(ps1Code, /\$global:LASTEXITCODE = \$null/);
+  assert.match(ps1Code, /Write-Output 'err:launch-failed'/);
+  // Test seam gated.
+  assert.match(ps1Code, /\$env:GAFFER_TEST -eq '1' -and \$env:GAFFER_DAEMON_LOG/);
   // Output uses Write-Output (stdout), never Write-Host / Write-Error for the contract line.
   assert.doesNotMatch(ps1Code, /Write-(Host|Error)[^\n]*err:/);
 });
