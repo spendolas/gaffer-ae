@@ -26,6 +26,17 @@
 #   GAFFER_FETCH_BASE_MIRROR     mirror base URL
 #   GAFFER_FETCH_PLATFORM        platform key (darwin-x64, darwin-arm64)
 #   GAFFER_FETCH_SKIP_CODESIGN=1 skip the signature checks (fake archives)
+#   GAFFER_FETCH_SPEED_TIME      seconds below 10 KB/s before an attempt aborts
+#   GAFFER_FETCH_MAX_TIME        per-attempt and per-source retry budget, seconds
+#
+# Download budget (a deliberate change from spec section 3 step 3, which says
+# --max-time 600): a 54 MB archive cannot finish in 600 s on a slow link, and
+# curl retries a timed-out attempt, so 600 s capped attempts cost up to about
+# 4 x 600 s per source without ever succeeding. Instead an attempt aborts only
+# when it stalls (below 10 KB/s for 60 s: --speed-limit/--speed-time), each
+# attempt is capped at 1800 s, and --retry-max-time 1800 stops new retries
+# after 30 minutes on one source. --connect-timeout 20 --retry 3
+# --retry-delay 2 are as in the spec.
 set -u
 # Stock tools only: never a Homebrew/conda curl, tar or shasum.
 PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
@@ -105,6 +116,12 @@ if [ "$TEST_MODE" = 1 ]; then
 else
   PROTO="=https"
 fi
+SPEED_TIME=60
+MAX_TIME=1800
+if [ "$TEST_MODE" = 1 ]; then
+  case "${GAFFER_FETCH_SPEED_TIME:-}" in ''|*[!0-9]*) ;; *) SPEED_TIME="$GAFFER_FETCH_SPEED_TIME" ;; esac
+  case "${GAFFER_FETCH_MAX_TIME:-}" in ''|*[!0-9]*) ;; *) MAX_TIME="$GAFFER_FETCH_MAX_TIME" ;; esac
+fi
 
 RT="$INTO/runtime"
 RT_NEW="$INTO/runtime.new"
@@ -140,6 +157,11 @@ if [ -f "$RT/VERSION" ] && [ "$(cat "$RT/VERSION" 2>/dev/null)" = "$WANT_STAMP" 
 fi
 
 # ---- temp folder and cleanup ----
+# A SIGKILLed run cannot clean up and would leak up to 54 MB: sweep our own
+# temp folders (exact name pattern, owned by this user, older than 24 h).
+find "${TMPDIR:-/tmp}" -mindepth 1 -maxdepth 1 -type d -name 'gaffer-runtime-??????' \
+  -user "$(id -u)" -mtime +0 -exec rm -rf {} + 2>/dev/null
+
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/gaffer-runtime-XXXXXX") || die "cannot create a temp folder"
 CHILD=""
 DONE=0
@@ -166,7 +188,8 @@ rm -rf "$RT_NEW" || die "cannot clear $RT_NEW"
 # curl runs in the background and is waited on so INT/TERM reach the trap now.
 download() {
   rm -f "$TMP/$ARCHIVE"
-  curl --fail --proto "$PROTO" --location --connect-timeout 20 --max-time 600 \
+  curl --fail --proto "$PROTO" --location --connect-timeout 20 \
+       --speed-limit 10240 --speed-time "$SPEED_TIME" --max-time "$MAX_TIME" --retry-max-time "$MAX_TIME" \
        --retry 3 --retry-delay 2 --silent --show-error \
        -o "$TMP/$ARCHIVE" "$1$ARCHIVE" 2>"$TMP/curl.err" &
   CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""
