@@ -65,8 +65,8 @@
 # update.sh stops whatever listens on port 9823, so this refuses to run while
 # a Gaffer daemon is up. Close the Gaffer panel (or get the owner's OK to stop
 # the daemon) first. To run next to a live daemon without touching it, set
-# GAFFER_TEST_SHIM_DAEMON_STOP=1: the updater then runs with no-op lsof/pkill
-# shims on its PATH, so its stop_daemon finds nothing to stop. Everything else
+# GAFFER_TEST_SHIM_DAEMON_STOP=1: the updater then runs with a no-op lsof
+# shim on its PATH, so its stop_daemon finds nothing to stop. Everything else
 # (download, rsync, npm install, lock) is exercised for real.
 #
 # Usage (from the repo root): bash scripts/test-update-sh.sh
@@ -111,15 +111,15 @@ if [ "$RSYNC_IN_USE" != "/usr/bin/rsync" ]; then
   echo "WARN: rsync does not resolve to /usr/bin/rsync under the pinned PATH"
 fi
 if [ -n "$SHIM_DAEMON_STOP" ]; then
-  # No-op lsof (prints nothing, exit 1 = no listener) and pkill, ahead of the
-  # real ones, so update.sh's stop_daemon never reaches a live daemon.
+  # No-op lsof (prints nothing, exit 1 = no listener) ahead of the real one,
+  # so update.sh's stop_daemon (lsof on the port, its only stop path) never
+  # reaches a live daemon.
   SHIM_DIR="$SCRATCH/shim"
   mkdir -p "$SHIM_DIR"
   printf '#!/bin/bash\nexit 1\n' > "$SHIM_DIR/lsof"
-  printf '#!/bin/bash\nexit 0\n' > "$SHIM_DIR/pkill"
-  chmod +x "$SHIM_DIR/lsof" "$SHIM_DIR/pkill"
+  chmod +x "$SHIM_DIR/lsof"
   UPDATE_PATH="$SHIM_DIR:$UPDATE_PATH"
-  echo "GAFFER_TEST_SHIM_DAEMON_STOP set: lsof/pkill shimmed, the live daemon is left alone"
+  echo "GAFFER_TEST_SHIM_DAEMON_STOP set: lsof shimmed, the live daemon is left alone"
 fi
 
 LOCK_DIR="$TMPDIR/gaffer-update.lock"

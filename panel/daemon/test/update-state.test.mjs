@@ -291,3 +291,25 @@ test('readUpdateLogSlice: no log file yet is empty, any other failure is unreada
   assert.equal(U.readUpdateLogSlice(null, '/x.log', 0, alloc), null);
   assert.equal(U.readUpdateLogSlice(fakeFs('a'), null, 0, alloc), null);
 });
+
+test('updateFailureText err:runtime-swap: the install may be unfinished, points at Repair, no dashes', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const u = plain(U.updateFailureText('update', 'runtime-swap', log));
+  assert.equal(u.banner, 'Update did not complete');
+  assert.equal(u.notice, 'Update did not complete. Your Gaffer folder may be in an unfinished state. Open Settings and click Repair, or reinstall.');
+  const r = plain(U.updateFailureText('repair', 'runtime-swap', log));
+  assert.equal(r.banner, 'Repair did not complete');
+  assert.equal(r.notice, 'Repair did not complete. Your Gaffer folder may be in an unfinished state. Open Settings and click Repair, or reinstall.');
+  assert.ok(!/[–—]/.test(u.notice + r.notice));
+  assert.ok(!/still works/.test(u.notice + r.notice), 'never claims the current version still works');
+});
+
+test('failureNeedsRepair: only err:runtime-swap leaves the install needing a Repair', () => {
+  assert.equal(U.failureNeedsRepair('runtime-swap'), true);
+  for (const c of ['runtime', 'download', 'sync', 'lock', 'dev-install', null, undefined]) assert.equal(U.failureNeedsRepair(c), false, String(c));
+});
+
+test('updateWaitStep: err:runtime-swap fails at once with its own code', () => {
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:runtime-swap\n', exited: true })),
+    { action: 'fail', code: 'runtime-swap' });
+});

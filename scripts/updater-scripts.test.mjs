@@ -833,3 +833,39 @@ test('the shipped v0.11.3 update.sh accepts the new archive and its npm install 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---- whole-branch review fixes (fix brief A) ----
+
+test('update.sh has no pkill fallback left: the lsof-on-port stop is the only daemon stop', () => {
+  const code = sh.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.ok(!/\bpkill\b/.test(code), 'a code line still calls pkill: ' + (code.split('\n').find((l) => /\bpkill\b/.test(l)) || '').trim());
+  assert.ok(!sh.includes('gaffer-daemon"'), 'no pattern on the retired SEA binary name');
+  const stop = sh.slice(sh.indexOf('stop_daemon() {'), sh.indexOf('\n}\n', sh.indexOf('stop_daemon() {')));
+  assert.ok(stop.includes('lsof -nP -iTCP:9823 -sTCP:LISTEN -t'), 'stops whatever listens on 9823');
+});
+
+test('update.sh: a failure after the install may have changed ends with err:runtime-swap, a stage failure keeps err:runtime', () => {
+  assert.ok(sh.includes('if ! recover_runtime; then\n  echo "ERROR: could not repair daemon/runtime from an earlier interrupted update"\n  echo "err:runtime-swap"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! swap_runtime; then\n  echo "ERROR: could not move the new runtime into place"\n  echo "err:runtime-swap"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  echo "err:runtime"\n  exit 1\nfi'));
+  assert.ok(sh.includes('err:runtime-swap'), 'the contract comment names err:runtime-swap');
+  assert.ok(/#   err:<code>[^\n]*err:runtime-swap/.test(sh) || /\n#[^\n]*err:runtime-swap/.test(sh.slice(0, sh.indexOf('REPAIR=""'))), 'named in the header contract');
+});
+
+test('update.sh documents that GAFFER_UPDATE_ASSET also enables the GAFFER_FETCH_* seams, in its header', () => {
+  const header = sh.slice(0, sh.indexOf('LOG='));
+  assert.ok(/GAFFER_UPDATE_ASSET[\s\S]*GAFFER_FETCH_\*/.test(header), 'the header note next to GAFFER_UPDATE_ASSET');
+});
+
+test('update.ps1: a failed move of runtime.new into place ends with err:runtime-swap', () => {
+  assert.ok(ps1Body.includes('Exit-Update "could not move the new runtime into place: $reason" "runtime-swap"'));
+  assert.ok(ps1.includes('err:runtime-swap'), 'the contract comment names err:runtime-swap');
+});
+
+test('update.sh swap_runtime failing mid-swap really ends the run with err:runtime-swap (run under bash)', () => {
+  // The block from the swap call to its fi. swap_runtime is not defined in
+  // the snippet, so the call fails (127), as a failed swap would.
+  const r = runShSnippet(sh, 'if ! swap_runtime; then', 'fi', '', {});
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout.split('\n').pop(), 'err:runtime-swap');
+});

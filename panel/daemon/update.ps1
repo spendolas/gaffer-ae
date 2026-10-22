@@ -40,7 +40,9 @@ if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if 
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download,
 #                           err:sync, err:runtime) after an ERROR line
-#                           (err:runtime before the swap: install untouched)
+#                           (err:runtime before the swap: install untouched;
+#                           err:runtime-swap: moving the new runtime into
+#                           place failed, the install may be unfinished)
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -904,7 +906,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
                 try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}
             }
             Remove-Tree $runtimeNew
-            Exit-Update "could not move the new runtime into place: $reason" "runtime"
+            Exit-Update "could not move the new runtime into place: $reason" "runtime-swap"
         }
         Remove-Tree $runtimeOld
         if (Test-Path -LiteralPath $runtimeOld) { Write-Host "  daemon\runtime.old is still in use, it will be removed by the next update" }
