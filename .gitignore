@@ -35,3 +35,7 @@ assets/
 .claude/worktrees/
 
 .npm-cache/
+panel/daemon/runtime*/
+panel/daemon/daemon.mjs
+panel/daemon/daemon.mjs.map
+.npmrc-dev

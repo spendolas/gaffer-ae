@@ -13,6 +13,7 @@ export const REQUIRED_ASSETS = [
   'gaffer-install-win.zip',
   'gaffer-update-mac.tar.gz',
   'gaffer-update-win.zip',
+  'SHA256SUMS.txt',
 ];
 
 export class GateError extends Error {}
