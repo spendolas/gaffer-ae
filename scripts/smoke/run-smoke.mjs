@@ -277,7 +277,7 @@ async function main() {
     GAFFER_BUFFER_PATH: path.join(state, 'buffer.json'),
     GAFFER_MODEL_CACHE_PATH: path.join(state, 'model-cache.json'),
   };
-  const daemonEnv = strippedEnv(o.platform, process.env, Object.assign({}, isolation, { GAFFER_WS_PORT: String(o.wsPort), GAFFER_MCP_PORT: String(o.mcpPort) }));
+  const daemonEnv = strippedEnv(o.platform, process.env, Object.assign({}, isolation, { GAFFER_TEST: '1', GAFFER_WS_PORT: String(o.wsPort), GAFFER_MCP_PORT: String(o.mcpPort) }));
   const run = (cmd, args, opts) => spawnSync(cmd, args, Object.assign({ encoding: 'utf8', windowsHide: true, timeout: 120000 }, opts || {}));
 
   // ---- R1 runtime
