@@ -530,6 +530,17 @@ test('install-win.ps1 runs claude through a Continue-preference wrapper and name
   assert.ok(installWin.includes('($cmd.Source -like "*.cmd") -or ($cmd.Source -like "*.ps1")'));
 });
 
+test('install-win.ps1 Assert-SystemNode looks node up before calling it, so a missing node prints the Node.js 20+ message', () => {
+  const fn = installWin.split('function Assert-SystemNode {')[1].split('\n}')[0];
+  assert.ok(fn, 'Assert-SystemNode not found');
+  const lookup = fn.indexOf('if (Get-Command node -ErrorAction SilentlyContinue) {');
+  const call = fn.indexOf('& node --version');
+  assert.ok(lookup !== -1, 'no Get-Command lookup before & node');
+  assert.ok(call > lookup, '& node runs before (or without) the lookup');
+  assert.ok(fn.includes('$ErrorActionPreference = "Continue"'), 'node stderr would still terminate under Stop');
+  assert.ok(fn.includes('needs Node.js 20+ and npm.'), 'the friendly message is gone');
+});
+
 test('the v0.11.3 changelog entry states the measured size saving, the tested-version heads-up and the updater claims without overstating, and has no em or en dashes', () => {
   const changelog = read('../CHANGELOG.md');
   const entry = changelog.split('## v0.11.3')[1].split('\n## ')[0];
