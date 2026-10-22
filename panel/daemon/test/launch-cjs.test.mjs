@@ -130,7 +130,7 @@ test('hostile NODE_OPTIONS / NODE_PATH / NODE_EXTRA_CA_CERTS never reach the dae
   const evil = join(sb.root, 'evil.cjs');
   writeFileSync(evil, `require('fs').writeFileSync(${JSON.stringify(join(sb.root, 'pwned-'))} + process.pid, 'x');`);
   const r = run(sb, ['runtime', 'daemon.mjs'], {
-    NODE_OPTIONS: `--require "${evil}"`,
+    NODE_OPTIONS: `--require ${JSON.stringify(evil)}`, // JSON-escaped: NODE_OPTIONS treats a backslash inside quotes as an escape (Windows paths)
     NODE_PATH: join(sb.root, 'evil modules'),
     NODE_EXTRA_CA_CERTS: '/corp/ca.pem',
     GAFFER_CLAUDE_EXTRA_CA_CERTS: '',
@@ -248,6 +248,18 @@ test('start.ps1: mirrors resolveDaemonLaunch (paths, stamp, pins, codes)', () =>
   // launch.cjs outcome checked: no pid line or a bad exit ends in err:launch-failed.
   assert.match(ps1Code, /\$global:LASTEXITCODE = \$null/);
   assert.match(ps1Code, /Write-Output 'err:launch-failed'/);
+  // Handle inheritance cleared before running node (VM: the caller's pipes
+  // otherwise reach the detached daemon and callSystem never sees EOF).
+  const clear = ps1Code.indexOf('SetHandleInformation([IntPtr]$h, 1, 0)');
+  assert.ok(clear > -1, 'clears HANDLE_FLAG_INHERIT on every handle');
+  assert.match(ps1Code, /\[DllImport\("kernel32\.dll"\)\] public static extern bool SetHandleInformation/);
+  assert.ok(clear < ps1Code.indexOf('& $node'), 'before & $node');
+  // Notes are written while a daemon holds the log.
+  const wn = ps1Code.slice(ps1Code.indexOf('function Write-Note'), ps1Code.indexOf('function Stop-Launch'));
+  assert.match(wn, /\[IO\.FileShare\]::ReadWrite/);
+  assert.match(wn, /\[IO\.FileMode\]::Append/);
+  assert.doesNotMatch(wn, /AppendAllText/);
+  assert.doesNotMatch(wn, /catch \{ \}\s*\n\}/, 'failure not silently swallowed');
   // Test seam gated.
   assert.match(ps1Code, /\$env:GAFFER_TEST -eq '1' -and \$env:GAFFER_DAEMON_LOG/);
   // Output uses Write-Output (stdout), never Write-Host / Write-Error for the contract line.

@@ -18,7 +18,7 @@ var bridge = new PanelBridge(WS_PORT);
 // Handle port conflicts — if daemon is already running, exit gracefully
 bridge.start().catch((err) => {
   if (err.code === 'EADDRINUSE') {
-    console.log('Gaffer: port ' + WS_PORT + ' in use — daemon already running. Exiting.');
+    console.log('Gaffer: port ' + WS_PORT + ' in use, daemon already running. Exiting.');
     process.exit(0);
   }
   console.error('Gaffer: failed to start panel bridge', err);
@@ -192,7 +192,7 @@ startMcpServer(MCP_PORT, queue, {
   isCancelled: () => loopCancelled,        // runJSXLoop honors the chat-cancel gesture
 }).catch((err) => {
   if (err.code === 'EADDRINUSE') {
-    console.log('Gaffer: port ' + MCP_PORT + ' in use — daemon already running. Exiting.');
+    console.log('Gaffer: port ' + MCP_PORT + ' in use, daemon already running. Exiting.');
     process.exit(0);
   }
   console.error('Gaffer: failed to start MCP server', err);
@@ -235,7 +235,7 @@ var reloadTimer = setInterval(() => {
   var idle = !chatRegistry.anyBusy() && !signInInFlight && !activeSignIn && queue.isIdle();
   if (shouldReload({ changed: sigChanged(reloadBaseline, reloadLastSig), lastChangeAt: reloadLastChangeAt, settleMs: 1500, idle: idle }, Date.now())) {
     clearInterval(reloadTimer);
-    console.log('Gaffer: code changed — reloading daemon');
+    console.log('Gaffer: code changed, reloading daemon');
     bridge.broadcast({ type: 'daemon_reloading', message: 'Reloading Gaffer for updated code…' });
     setTimeout(() => process.exit(0), 250); // let the notice flush, then let the panel relaunch us
   }
@@ -265,12 +265,12 @@ var draining = false;
 process.on('SIGTERM', () => {
   if (draining) return;
   draining = true;
-  console.log('Gaffer: SIGTERM — draining in-flight work before exit');
+  console.log('Gaffer: SIGTERM, draining in-flight work before exit');
   var deadline = Date.now() + 65000;
   (function waitIdle() {
     var idle = !chatRegistry.anyBusy() && !signInInFlight && !activeSignIn && queue.isIdle();
     if (idle || Date.now() > deadline) {
-      if (!idle) console.log('Gaffer: drain timed out — exiting anyway');
+      if (!idle) console.log('Gaffer: drain timed out, exiting anyway');
       try { bridge.stop(); } catch (e) { /* ignore */ }
       flushTelemetryThen(() => process.exit(0));
       return;
