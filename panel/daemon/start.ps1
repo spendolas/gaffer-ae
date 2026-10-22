@@ -15,7 +15,7 @@
 # Output contract, one line on stdout (panel/main.js parses it):
 #   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
 # Keep this file ASCII-only with a UTF-8 BOM (Windows PowerShell 5.1).
-# GAFFER_DAEMON_LOG moves the log (tests).
+# Test seam: GAFFER_DAEMON_LOG moves the log, only when GAFFER_TEST=1.
 
 # CSInterface paths arrive with forward slashes; work on one native path.
 $dir = (Split-Path -Parent $MyInvocation.MyCommand.Path) -replace '/', '\'
@@ -24,7 +24,7 @@ if ($dir -match '^[A-Za-z]:$') { $dir += '\' }
 Set-Location -LiteralPath $dir
 
 $log = Join-Path $env:TEMP 'gaffer-daemon.log'
-if ($env:GAFFER_DAEMON_LOG) { $log = $env:GAFFER_DAEMON_LOG }
+if ($env:GAFFER_TEST -eq '1' -and $env:GAFFER_DAEMON_LOG) { $log = $env:GAFFER_DAEMON_LOG }
 $bin = Join-Path $dir 'runtime\node.exe'
 $bundle = Join-Path $dir 'daemon.mjs'
 $stamp = Join-Path $dir 'runtime\VERIFIED'
@@ -44,47 +44,56 @@ function Stop-Launch([string] $code, [string] $reason) {
     exit 1
 }
 
-# Recorded size from the stamp, $null when absent, unreadable or garbled.
-# Spec form "<size> <sha256>"; the PoC wrote "size=<n>" lines, read both.
+# Recorded size from the stamp as a digit string, $null when absent,
+# unreadable or garbled. Spec form "<size> <sha256>"; the PoC wrote
+# "size=<n>" lines, read both. Compared as text (leading zeros dropped), so a
+# 20+ digit stamp is a mismatch, never an [int64] overflow.
 function Get-StampSize {
     if (-not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return $null }
     try { $raw = [IO.File]::ReadAllText($stamp) } catch { return $null }
-    if ($raw -match '^\s*(\d+)(?:\s|$)') { return [int64] $Matches[1] }
-    if ($raw -match 'size=(\d+)') { return [int64] $Matches[1] }
-    return $null
+    $digits = $null
+    if ($raw -match '^\s*(\d+)(?:\s|$)') { $digits = $Matches[1] }
+    elseif ($raw -match 'size=(\d+)') { $digits = $Matches[1] }
+    if ($null -eq $digits) { return $null }
+    $digits = $digits.TrimStart('0')
+    if (-not $digits) { $digits = '0' }
+    return $digits
 }
 
 function Test-BundledRuntime {
     if (-not (Test-Path -LiteralPath $bundle)) { Stop-Launch 'runtime-damaged' 'daemon.mjs missing next to the runtime' }
-    try { $size = [int64] (Get-Item -LiteralPath $bin).Length }
+    try { $size = [int64] (Get-Item -LiteralPath $bin -ErrorAction Stop).Length }
     catch { Stop-Launch 'runtime-damaged' ('cannot stat runtime: ' + $_.Exception.Message) }
 
     $stamped = Get-StampSize
     if ($null -ne $stamped) {
-        if ($stamped -ne $size) { Stop-Launch 'runtime-damaged' ('runtime size ' + $size + ' does not match the stamp ' + $stamped) }
+        if ($stamped -cne ([string] $size)) { Stop-Launch 'runtime-damaged' ('runtime size ' + $size + ' does not match the stamp ' + $stamped) }
         return
     }
     # Stamp-less first run (README install): verify once against the pin.
     $pin = $null
     try {
-        $pins = [IO.File]::ReadAllText($pinsPath) | ConvertFrom-Json
+        $pins = [IO.File]::ReadAllText($pinsPath) | ConvertFrom-Json -ErrorAction Stop
         $p = $pins.node.platforms.'win-x64'
-        if ($p -and ([int64] $p.binaryBytes) -eq $size) { $pin = $p }
+        if ($p -and ([string] $p.binaryBytes) -ceq ([string] $size)) { $pin = $p }
     } catch { $pin = $null }
     if (-not $pin) { Stop-Launch 'runtime-damaged' ('no stamp and runtime size ' + $size + ' matches no pinned binary') }
     $sha = [string] $pin.binarySha256
-    if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
-        Write-Note ('runtime: pinned sha256 for win-x64 is a placeholder (' + $sha + '), skipping the hash check, size matched')
-        $recorded = 'unhashed'
-    } else {
-        try { $got = (Get-FileHash -LiteralPath $bin -Algorithm SHA256).Hash.ToLowerInvariant() }
-        catch { Stop-Launch 'runtime-damaged' ('cannot hash runtime: ' + $_.Exception.Message) }
-        if ($got -ne $sha.ToLowerInvariant()) { Stop-Launch 'runtime-damaged' ('runtime sha256 ' + $got + ' does not match the pin for win-x64') }
-        $recorded = $got
-        Write-Note 'runtime: first run, sha256 matches the pin for win-x64'
+    if ($sha -ceq 'PENDING-FIRST-ACCEPTANCE-RUN') {
+        # Only this exact literal skips the hash. No stamp is written, so a
+        # later stamp-less run re-evaluates once the real pin ships.
+        Write-Note 'runtime: pinned sha256 for win-x64 is the placeholder PENDING-FIRST-ACCEPTANCE-RUN, skipping the hash check, size matched, no stamp written'
+        return
     }
+    if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
+        Stop-Launch 'runtime-damaged' ('pinned sha256 for win-x64 is not a sha256 (' + $sha + ')')
+    }
+    try { $got = (Get-FileHash -LiteralPath $bin -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() }
+    catch { Stop-Launch 'runtime-damaged' ('cannot hash runtime: ' + $_.Exception.Message) }
+    if ($got -ne $sha.ToLowerInvariant()) { Stop-Launch 'runtime-damaged' ('runtime sha256 ' + $got + ' does not match the pin for win-x64') }
+    Write-Note 'runtime: first run, sha256 matches the pin for win-x64'
     try {
-        [IO.File]::WriteAllText($stamp, ([string] $size) + ' ' + $recorded + "`n")
+        [IO.File]::WriteAllText($stamp, ([string] $size) + ' ' + $got + "`n")
         Write-Note ('runtime: wrote stamp ' + $stamp)
     } catch {
         Write-Note ('runtime: could not write the stamp (' + $_.Exception.Message + '), will verify again next launch')
@@ -134,6 +143,22 @@ if (Test-Path -LiteralPath $bin) {
 }
 
 # launch.cjs prints the contract line (pid:<N> runtime|node) and exits at
-# once; the daemon holds only the log, never this script's stdout.
-& $node "$dir\launch.cjs" $kind $entry
-exit $LASTEXITCODE
+# once; the daemon holds only the log, never this script's stdout. Capture
+# its output so a node that could not start (no output, a stale or null
+# $LASTEXITCODE) still ends in one contract line.
+$global:LASTEXITCODE = $null
+$out = $null
+$started = $true
+try { $out = & $node "$dir\launch.cjs" $kind $entry 2>$null }
+catch { $started = $false; Write-Note ('daemon not launched: node could not start: ' + $_.Exception.Message) }
+$code = $LASTEXITCODE
+$line = $null
+foreach ($l in @($out)) { if ([string] $l -match '^(pid:\d+ (runtime|node)|err:[a-z-]+)\s*$') { $line = ([string] $l).Trim() } }
+if ($started -and $line -and $line.StartsWith('pid:') -and $code -eq 0) {
+    Write-Output $line
+    exit 0
+}
+if ($line -and $line.StartsWith('err:')) { Write-Output $line; exit 1 }
+Write-Note ('daemon not launched: err:launch-failed (launch.cjs exit ' + $code + ', output: ' + (@($out) -join ' ') + ')')
+Write-Output 'err:launch-failed'
+exit 1

@@ -15,13 +15,19 @@
 #   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
 # Decisions and notes go to the daemon log, like the panel's.
 #
-# Test seams (panel/daemon/test/start-sh.test.mjs): GAFFER_DAEMON_LOG moves
-# the log; GAFFER_START_TEST_NODE_CANDIDATES (set, even empty) replaces the
-# fixed system-node candidates.
+# Test seams (panel/daemon/test/start-sh.test.mjs), honoured only when
+# GAFFER_TEST=1: GAFFER_DAEMON_LOG moves the log;
+# GAFFER_START_TEST_NODE_CANDIDATES (set, even empty) replaces the fixed
+# system-node candidates.
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR" || { echo "err:runtime-missing"; exit 1; }
-LOG="${GAFFER_DAEMON_LOG:-/tmp/gaffer-daemon.log}"
+LOG="/tmp/gaffer-daemon.log"
+TESTING=""
+if [ "$GAFFER_TEST" = "1" ]; then
+  TESTING=1
+  [ -n "$GAFFER_DAEMON_LOG" ] && LOG="$GAFFER_DAEMON_LOG"
+fi
 BIN="$DIR/runtime/node"
 BUNDLE="$DIR/daemon.mjs"
 STAMP="$DIR/runtime/VERIFIED"
@@ -41,10 +47,14 @@ fail() { # $1 = error code, $2 = reason (optional)
 
 # Value of "<field>" inside the "<platform>" object of runtime-pins.json.
 # The file is pretty-printed, one key per line (no jq on a stock Mac).
+# A string value is returned exactly as written (no trimming: the placeholder
+# check is an exact match); a bare number is returned as its digits.
 pin_field() { # $1 = platform key, $2 = field
   sed -n "/\"$1\"[[:space:]]*:/,/}/p" "$PINS" 2>/dev/null \
-    | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" \
-    | head -n 1 | tr -d '[:space:]'
+    | sed -n -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+             -e "t" \
+             -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" \
+    | head -n 1
 }
 
 # Recorded size from the stamp, empty when absent, unreadable or garbled.
@@ -68,11 +78,16 @@ check_runtime() {
 
   stamped="$(stamp_size)"
   if [ -n "$stamped" ]; then
+    # More than 15 digits cannot be a real size (and would overflow the
+    # shell's arithmetic): a mismatch, like parseInt in the reference.
+    if [ "${#stamped}" -gt 15 ]; then
+      fail runtime-damaged "runtime size $size does not match the stamp $stamped"
+    fi
     [ "$((10#$stamped))" = "$size" ] || fail runtime-damaged "runtime size $size does not match the stamp $((10#$stamped))"
   else
     # Stamp-less first run (README install): verify once against the pin.
     # On macOS both darwin entries are candidates and the size picks one.
-    local key="" k sha got recorded
+    local key="" k sha got
     if [ "$OS" = "Darwin" ]; then
       for k in darwin-arm64 darwin-x64; do
         if [ "$(pin_field "$k" binaryBytes)" = "$size" ]; then key="$k"; break; fi
@@ -80,20 +95,22 @@ check_runtime() {
     fi
     [ -n "$key" ] || fail runtime-damaged "no stamp and runtime size $size matches no pinned binary"
     sha="$(pin_field "$key" binarySha256)"
-    if ! [[ $sha =~ ^[0-9a-fA-F]{64}$ ]]; then
-      note "runtime: pinned sha256 for $key is a placeholder ($sha), skipping the hash check, size matched"
-      recorded="unhashed"
+    if [ "$sha" = "PENDING-FIRST-ACCEPTANCE-RUN" ]; then
+      # Only this exact literal skips the hash. No stamp is written, so a
+      # later stamp-less run re-evaluates once the real pin ships.
+      note "runtime: pinned sha256 for $key is the placeholder PENDING-FIRST-ACCEPTANCE-RUN, skipping the hash check, size matched, no stamp written"
+    elif ! [[ $sha =~ ^[0-9a-fA-F]{64}$ ]]; then
+      fail runtime-damaged "pinned sha256 for $key is not a sha256 ($sha)"
     else
       got="$(shasum -a 256 "$BIN" 2>/dev/null | cut -d ' ' -f 1 | tr 'A-F' 'a-f')"
       [ -n "$got" ] || fail runtime-damaged "cannot hash runtime"
       [ "$got" = "$(printf '%s' "$sha" | tr 'A-F' 'a-f')" ] || fail runtime-damaged "runtime sha256 $got does not match the pin for $key"
-      recorded="$got"
       note "runtime: first run, sha256 matches the pin for $key"
-    fi
-    if printf '%s %s\n' "$size" "$recorded" > "$STAMP" 2>/dev/null; then
-      note "runtime: wrote stamp $STAMP"
-    else
-      note "runtime: could not write the stamp, will verify again next launch"
+      if printf '%s %s\n' "$size" "$got" > "$STAMP" 2>/dev/null; then
+        note "runtime: wrote stamp $STAMP"
+      else
+        note "runtime: could not write the stamp, will verify again next launch"
+      fi
     fi
   fi
 
@@ -108,7 +125,10 @@ check_runtime() {
 # Same candidates and order as findSystemNode: fixed paths, then PATH.
 find_system_node() {
   local c d IFS
-  if [ -n "${GAFFER_START_TEST_NODE_CANDIDATES+set}" ]; then
+  # set -f: the unquoted splits below must never expand globs (this runs in
+  # a \$(...) subshell, so it does not leak).
+  set -f
+  if [ -n "$TESTING" ] && [ -n "${GAFFER_START_TEST_NODE_CANDIDATES+set}" ]; then
     IFS=':'; set -- $GAFFER_START_TEST_NODE_CANDIDATES; unset IFS
   else
     set -- /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node
