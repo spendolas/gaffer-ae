@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     # Three archives (about 145 MB) from each of nodejs.org and the mirror.
     timeout-minutes: 20
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +54,9 @@ jobs:
           curl --fail --silent --show-error --location --proto '=https' --retry 3 -o "$D/SHASUMS256.txt.sig" "${BASE}SHASUMS256.txt.sig"
           git clone --quiet --depth 1 https://github.com/nodejs/release-keys.git "$RUNNER_TEMP/release-keys"
           echo "release-keys at $(git -C "$RUNNER_TEMP/release-keys" rev-parse HEAD)"
-          GNUPGHOME="$RUNNER_TEMP/release-keys/gpg" gpg --batch --verify "$D/SHASUMS256.txt.sig" "$D/SHASUMS256.txt"
+          # --status-fd 1 puts the machine-readable VALIDSIG line (full signing
+          # key fingerprint) into the log.
+          GNUPGHOME="$RUNNER_TEMP/release-keys/gpg" gpg --batch --status-fd 1 --verify "$D/SHASUMS256.txt.sig" "$D/SHASUMS256.txt"
 
       # GITHUB_TOKEN is this job's automatic token (contents: read, above),
       # used only for the api.github.com releases/latest call so the shared

@@ -131,7 +131,12 @@ jobs:
           P="$RUNNER_TEMP/smoke-deps"
           mkdir -p "$P"
           cp panel/daemon/package.json panel/daemon/package-lock.json "$P/"
-          (cd "$P" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund && tar -czf "$RUNNER_TEMP/daemon-node-modules.tgz" node_modules)
+          # --no-bin-links: no node_modules/.bin symlinks, so the tarball holds
+          # plain files only and Windows tar.exe never has to create a link.
+          (cd "$P" && npm ci --omit=dev --ignore-scripts --no-bin-links --no-audit --no-fund)
+          LINKS="$(find "$P/node_modules" -type l)"
+          if [ -n "$LINKS" ]; then echo "::error::symlinks in the smoke node_modules:"; echo "$LINKS"; exit 1; fi
+          (cd "$P" && tar -czf "$RUNNER_TEMP/daemon-node-modules.tgz" node_modules)
           ls -l "$RUNNER_TEMP/daemon-node-modules.tgz"
 
       - name: Upload smoke dependencies
@@ -177,6 +182,9 @@ jobs:
         include:
           - runner: macos-15
             platform: darwin-arm64
+          # macos-15-intel is GitHub's last Intel macOS runner image; when it
+          # is retired, darwin-x64 loses CI coverage (the owner's Intel Mac
+          # and acceptance runs remain).
           - runner: macos-15-intel
             platform: darwin-x64
           - runner: windows-latest
@@ -214,8 +222,10 @@ jobs:
           EXT="$RUNNER_TEMP/Gaffer Smoke/com.gaffer.panel"
           mkdir -p "$EXT"
           tar -xzf gaffer-update-mac.tar.gz -C "$EXT"
-          OUT="$(/bin/bash "$EXT/daemon/fetch-runtime.sh" --into "$EXT/daemon" 2>&1)" || true
+          # stdout only for the contract line; stderr is shown, never compared.
+          OUT="$(/bin/bash "$EXT/daemon/fetch-runtime.sh" --into "$EXT/daemon" 2> "$RUNNER_TEMP/fetch-runtime.stderr.txt")" || true
           echo "$OUT"
+          cat "$RUNNER_TEMP/fetch-runtime.stderr.txt" >&2
           WANT="runtime:installed $(jq -r '.node.version' "$EXT/daemon/runtime-pins.json") ${{ matrix.platform }}"
           LAST="$(printf '%s\n' "$OUT" | tail -n 1)"
           if [ "$LAST" != "$WANT" ]; then echo "::error::fetch-runtime.sh ended with '$LAST', want '$WANT'"; exit 1; fi
@@ -238,12 +248,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "tar.exe exit $LASTEXITCODE" }
           $daemon = Join-Path $ext 'daemon'
           # Windows PowerShell 5.1, what end users run.
-          # Continue: a stderr line from the child must not abort this step;
-          # the contract is the last output line, checked below.
+          # stdout only for the contract line; stderr goes to its own file so a
+          # late stderr line can never become the "last line". Continue: a
+          # stderr line from the child must not abort this step.
+          $errFile = Join-Path $env:RUNNER_TEMP 'fetch-runtime.stderr.txt'
           $ErrorActionPreference = 'Continue'
-          $out = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $daemon 'fetch-runtime.ps1') -Into $daemon 2>&1 | ForEach-Object { "$_" }
+          $out = @(& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $daemon 'fetch-runtime.ps1') -Into $daemon 2> $errFile | ForEach-Object { "$_" })
           $ErrorActionPreference = 'Stop'
           $out | ForEach-Object { Write-Host $_ }
+          if ((Test-Path $errFile) -and (Get-Item $errFile).Length) { Write-Host '--- fetch-runtime.ps1 stderr ---'; Get-Content $errFile | ForEach-Object { Write-Host $_ } }
           $pins = Get-Content (Join-Path $daemon 'runtime-pins.json') -Raw | ConvertFrom-Json
           $wantLine = "runtime:installed $($pins.node.version) ${{ matrix.platform }}"
           $last = ($out | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()

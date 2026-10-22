@@ -12,16 +12,23 @@ import {
 const pins = JSON.parse(readFileSync(fileURLToPath(new URL('../panel/daemon/runtime-pins.json', import.meta.url)), 'utf8'));
 const PIN = pins.node.version;
 const P = pins.node.platforms;
+// Versions derived from the pin, so a routine Node bump never breaks this file.
+const [MAJ, MIN, PAT] = PIN.slice(1).split('.').map(Number);
+const v = (a, b, c) => 'v' + a + '.' + b + '.' + c;
+const NEXT_PATCH = v(MAJ, MIN, PAT + 1);
+const NEXT_MINOR = v(MAJ, MIN + 1, 0);
+const PREV = PAT > 0 ? v(MAJ, MIN, PAT - 1) : v(MAJ, MIN - 1, 0);
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SIG_HASH = { sha256: 'a'.repeat(64), bytes: 566 };
 const SUMS_HASH = { sha256: 'b'.repeat(64), bytes: 6123 };
 
 // index.json as nodejs.org serves it: newest first, lts false or a codename.
 function indexFixture(extra) {
   return (extra || []).concat([
-    { version: 'v25.2.0', date: '2026-10-14', lts: false, security: true },
-    { version: PIN, date: '2026-09-30', lts: 'Krypton', security: false },
-    { version: 'v24.22.0', date: '2026-09-10', lts: 'Krypton', security: true },
-    { version: 'v22.30.0', date: '2026-10-01', lts: 'Jod', security: true },
+    { version: v(MAJ + 1, 2, 0), date: '2026-10-14', lts: false, security: true },
+    { version: PIN, date: '2026-09-30', lts: pins.node.codename, security: false },
+    { version: PREV, date: '2026-09-10', lts: pins.node.codename, security: true },
+    { version: v(MAJ - 2, 30, 0), date: '2026-10-01', lts: 'Older', security: true },
   ]);
 }
 function shasumsFixture(overrides) {
@@ -68,21 +75,23 @@ test('happy path passes and fetches every mirror file', async () => {
 });
 
 test('a security release newer than the pin on the pinned line fails', async () => {
-  const r = await run(fakeNet({ index: indexFixture([{ version: 'v24.23.0', date: '2026-10-20', lts: 'Krypton', security: true }]) }));
+  const r = await run(fakeNet({ index: indexFixture([{ version: NEXT_MINOR, date: '2026-10-20', lts: pins.node.codename, security: true }]) }));
   assert.equal(r.failures.length, 1);
-  assert.match(r.failures[0], /security release\(s\) newer than the pin v24\.22\.1: v24\.23\.0/);
+  assert.match(r.failures[0], new RegExp('security release\\(s\\) newer than the pin ' + reEsc(PIN) + ': ' + reEsc(NEXT_MINOR)));
+  const p = await run(fakeNet({ index: indexFixture([{ version: NEXT_PATCH, lts: pins.node.codename, security: true }]) }));
+  assert.match(p.failures.join(), new RegExp(reEsc(NEXT_PATCH)));
 });
 
 test('newer non-security releases and other lines only produce notes', async () => {
-  const r = await run(fakeNet({ index: indexFixture([{ version: 'v24.23.0', lts: 'Krypton', security: false }]) }));
+  const r = await run(fakeNet({ index: indexFixture([{ version: NEXT_MINOR, lts: pins.node.codename, security: false }]) }));
   assert.deepEqual(r.failures, []);
-  assert.ok(r.notes.some((n) => /v24\.23\.0/.test(n)));
+  assert.ok(r.notes.some((n) => n.includes(NEXT_MINOR)));
 });
 
 test('a non-LTS line, or a pin missing from index.json, fails', () => {
-  const notLts = checkIndex([{ version: 'v24.22.2', lts: false, security: false }, { version: PIN, lts: false }], pins);
+  const notLts = checkIndex([{ version: NEXT_PATCH, lts: false, security: false }, { version: PIN, lts: false }], pins);
   assert.match(notLts.failures.join(), /not LTS/);
-  const missing = checkIndex([{ version: 'v24.22.2', lts: 'Krypton', security: false }], pins);
+  const missing = checkIndex([{ version: NEXT_PATCH, lts: pins.node.codename, security: false }], pins);
   assert.match(missing.failures.join(), /not listed in index\.json/);
   assert.match(checkIndex({}, pins).failures[0], /not an array/);
 });
@@ -97,7 +106,7 @@ test('hash drift against SHASUMS256.txt fails', async () => {
   const drifted = shasumsFixture({ [P['win-x64'].archive]: 'f'.repeat(64) });
   const r = await run(fakeNet(), { shasumsText: drifted });
   assert.equal(r.failures.length, 1);
-  assert.match(r.failures[0], /win-x64: pinned archiveSha256 d2046d28.* differs from SHASUMS256\.txt f{64}/);
+  assert.match(r.failures[0], new RegExp('win-x64: pinned archiveSha256 ' + P['win-x64'].archiveSha256 + ' differs from SHASUMS256\\.txt f{64}'));
   const gone = checkShasums(shasumsFixture().split('\n').filter((l) => !l.includes('darwin-arm64')).join('\n'), pins);
   assert.match(gone.failures[0], /darwin-arm64: .* is not listed/);
 });
@@ -128,6 +137,11 @@ test('a missing mirror file fails', async () => {
   const url = pins.node.mirror + P['win-x64'].archive;
   const r = await run(fakeNet({ missing: [url] }));
   assert.match(r.failures.join(), /win-x64\.zip: mirror download failed: HTTP 404/);
+  const hint = r.failures[r.failures.length - 1];
+  assert.match(hint, new RegExp('create the mirror release per spec section 11: gh release create node-' + reEsc(PIN) + ' --latest=false'));
+  assert.match(hint, /SHASUMS256\.txt and SHASUMS256\.txt\.sig/);
+  const mismatch = await run(fakeNet({ hashes: { [pins.node.mirror + P['win-x64'].archive]: { sha256: 'e'.repeat(64), bytes: 1 } } }));
+  assert.ok(!mismatch.failures.some((f) => /create the mirror release/.test(f)), 'no hint for a non-404 failure');
   assert.deepEqual(compareMirrorFile('x', { sha256: 'a', bytes: 1 }, { sha256: 'a', bytes: 1 }, 'a'), []);
 });
 
@@ -139,9 +153,9 @@ test('--skip-mirror skips the mirror downloads', async () => {
 });
 
 test('releases/latest resolving to the mirror (or any non-v* tag) fails', async () => {
-  const r = await run(fakeNet({ latest: { tag_name: 'node-v24.22.1' } }));
+  const r = await run(fakeNet({ latest: { tag_name: 'node-' + PIN } }));
   assert.equal(r.failures.length, 1);
-  assert.match(r.failures[0], /releases\/latest resolves to "node-v24\.22\.1"/);
+  assert.match(r.failures[0], new RegExp('releases/latest resolves to "node-' + reEsc(PIN) + '"'));
   for (const bad of [undefined, '', 'v0.12', 'v0.12.0-beta.1', 'release-1']) assert.equal(checkLatest({ tag_name: bad }).failures.length, 1, String(bad));
   assert.deepEqual(checkLatest({ tag_name: 'v0.12.0' }).failures, []);
 });
