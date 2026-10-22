@@ -5,6 +5,16 @@
 # run by daemon\runtime\node.exe.
 # Windows PowerShell 5.1 compatible. Keep this file ASCII-only with a UTF-8
 # BOM (node scripts/check-ps-encoding.mjs).
+#
+# -Repair (the panel's Repair button, shown while the daemon launch is
+# refused because the runtime is damaged or missing): the runtime is
+# downloaded and verified again even when its stamps say it is current (the
+# archive's fetch-runtime.ps1 gets -Force), then the release's files are
+# synced as in any update. The version need not change; the panel waits for
+# ok:<version>. Same lock and last-line contract as a plain update.
+param(
+    [switch] $Repair
+)
 $ErrorActionPreference = "Stop"
 # PS 5.1 redraws a progress bar per downloaded chunk, which makes
 # Invoke-WebRequest many times slower. Nothing here reads it.
@@ -24,6 +34,7 @@ $logPath = Join-Path $env:TEMP "gaffer-update.log"
 
 Start-Transcript -Path $logPath -Append
 Write-Host "=== Update started: $(Get-Date) ==="
+if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if it looks current" }
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
@@ -824,9 +835,14 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # also collected for the last-line parse below.
     $fetchLines = @()
     $fetchExit = -1
+    # Repair: -Force makes fetch-runtime.ps1 skip its "already current" check.
+    # Splatted, so a plain update passes no extra argument at all (PS 5.1
+    # drops an empty string argument to a native command anyway).
+    $fetchExtra = @()
+    if ($Repair) { $fetchExtra = @('-Force') }
     $ErrorActionPreference = "Continue"
     try {
-        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1 |
+        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir @fetchExtra 2>&1 |
             ForEach-Object { $l = "$_".Trim(); if ($l) { Write-Host $l; $l } })
         $fetchExit = $LASTEXITCODE
     } catch {

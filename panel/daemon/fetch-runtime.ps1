@@ -4,7 +4,7 @@
 # contract (spec section 3 of the zero-dependency install design).
 #
 # Usage (Windows PowerShell 5.1 or later):
-#   powershell -NoProfile -ExecutionPolicy Bypass -File fetch-runtime.ps1 [-Into <daemon-dir>] [-StageOnly]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File fetch-runtime.ps1 [-Into <daemon-dir>] [-StageOnly] [-Force]
 #
 #   -Into       the daemon folder to provision (default: this script's folder).
 #               Through -File, do not end a quoted -Into with a backslash:
@@ -13,6 +13,10 @@
 #   -StageOnly  steps 1 to 7 only: leave the verified runtime in
 #               <daemon-dir>\runtime.new and stop (the updater swaps it in
 #               after it has stopped the daemon)
+#   -Force      skip the step 2 skip check: a runtime that looks current is
+#               downloaded, verified and swapped in again (the updater's
+#               repair mode, update.ps1 -Repair, from the panel's Repair
+#               button; same as fetch-runtime.sh --force)
 #
 # Last output line (the contract; progress lines "runtime: ..." come before):
 #   runtime:current                         already installed, nothing done
@@ -64,7 +68,8 @@
 
 param(
     [string] $Into = "",
-    [switch] $StageOnly
+    [switch] $StageOnly,
+    [switch] $Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -307,7 +312,9 @@ try {
     $curExe = Join-Path $runtimeDir $binaryName
     $curVersionFile = Join-Path $runtimeDir "VERSION"
     $curVerifiedFile = Join-Path $runtimeDir "VERIFIED"
-    if ((Test-Path -LiteralPath $curExe -PathType Leaf) -and (Test-Path -LiteralPath $curVersionFile -PathType Leaf) -and (Test-Path -LiteralPath $curVerifiedFile -PathType Leaf)) {
+    if ($Force) {
+        Write-Step "-Force: re-provisioning $expectedVersionLine whatever is installed"
+    } elseif ((Test-Path -LiteralPath $curExe -PathType Leaf) -and (Test-Path -LiteralPath $curVersionFile -PathType Leaf) -and (Test-Path -LiteralPath $curVerifiedFile -PathType Leaf)) {
         $curVersion = ([System.IO.File]::ReadAllText($curVersionFile)).Trim()
         $stampFields = ([System.IO.File]::ReadAllText($curVerifiedFile)).Trim() -split '\s+'
         $curSize = (Get-Item -LiteralPath $curExe).Length

@@ -23,6 +23,23 @@ echo "=== Update started: $(date) ==="
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
+# --repair (the panel's Repair button, shown while the daemon launch is
+# refused because the runtime is damaged, missing or blocked): the runtime
+# is downloaded and verified again even when its stamps say it is current
+# (the archive's fetch-runtime.sh gets --force), then the release's files are
+# synced as in any update. The version need not change; the panel waits for
+# ok:<version>. A plain update already re-provisions a runtime whose stamp
+# check fails; --repair also covers one that passes it but still will not
+# run. Unknown arguments are logged and ignored, as before this option.
+REPAIR=""
+for arg in "$@"; do
+  case "$arg" in
+    --repair) REPAIR=1 ;;
+    *) echo "Ignoring unknown argument: $arg" ;;
+  esac
+done
+if [ -n "$REPAIR" ]; then echo "Repair mode: the runtime is downloaded again even if it looks current"; fi
+
 # Single-updater lock. Two updaters interleaving (the panel's "Force stop &
 # retry" after its 180s give-up, or a manual run next to the panel's) would
 # rsync over each other and corrupt the install, so the whole run holds
@@ -482,7 +499,7 @@ stage_runtime() {
     return 1
   fi
   echo "Checking Gaffer's runtime..."
-  bash "$script" --stage-only --into "$DAEMON_DIR" > "$out" 2>&1 || rc=$?
+  bash "$script" --stage-only --into "$DAEMON_DIR" ${REPAIR:+--force} > "$out" 2>&1 || rc=$?
   cat "$out"
   last="$(tail -n 1 "$out")"
   if [ "$rc" = 0 ] && [ "$last" = "runtime:current" ]; then

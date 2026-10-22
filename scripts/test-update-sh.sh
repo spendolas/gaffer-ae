@@ -50,7 +50,11 @@
 # for byte as it was, daemon never stopped; an updater killed between the two
 # swap renames is recovered by the next run; runtime.old restored at start
 # (and a damaged one is not); an archive without daemon/daemon.mjs (pre-bundle
-# layout) is refused; the shipped v0.11.3 updater still accepts the new
+# layout) is refused; repair (update.sh --repair, the panel's Repair button)
+# at the same version downloads a current runtime again and swaps in a fresh
+# folder, a damaged runtime at the same version is re-provisioned by a plain
+# update (stamp check), a repair whose download fails ends with err:runtime
+# and leaves the install untouched; the shipped v0.11.3 updater still accepts the new
 # archive (index.js shim, npm with no dependencies; a missing v0.11.3 tag
 # or npm is a FAILURE unless GAFFER_TEST_ALLOW_NO_TAG=1, so ALL PASS never
 # hides that case; scripts/updater-scripts.test.mjs checks the same in CI).
@@ -519,6 +523,62 @@ else
 fi
 if grep -q 'Restoring daemon/runtime from runtime.old' "$LOG"; then fail "damaged runtime.old: it was restored"; else pass "damaged runtime.old: not restored"; fi
 if [ "$("$RT_DAMAGED/daemon/runtime/node" --version 2>/dev/null)" = "$RT_V1" ] && [ ! -e "$RT_DAMAGED/daemon/runtime.old" ]; then pass "damaged runtime.old: a fresh runtime was provisioned and runtime.old removed"; else fail "damaged runtime.old: runtime state wrong ($(ls "$RT_DAMAGED/daemon" | grep runtime | tr '\n' ' ' || true))"; fi
+
+# ---------- Case R6: repair (--repair, the panel's Repair button) at the same version ----------
+# The runtime is current, yet --repair downloads it again (fetch-runtime.sh
+# --force) and swaps in a fresh folder; the release's files are synced and
+# version.json keeps its content.
+RT_REPAIR="$SCRATCH/Application Support/rt-répair/com.gaffer.panel"
+new_install "$RT_REPAIR"
+seed_runtime "$RT_REPAIR" "$RT_V1"
+tar -xzf "$ASSET" -C "$SCRATCH" ./version.json 2>/dev/null || tar -xzf "$ASSET" -C "$SCRATCH" version.json
+cp "$SCRATCH/version.json" "$RT_REPAIR/version.json"
+VER_BEFORE="$(file_sha "$RT_REPAIR/version.json")"
+echo old > "$RT_REPAIR/daemon/runtime/old-folder-marker.txt"
+: > "$LOG"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$RT_REPAIR/daemon/update.sh" --repair; then
+  pass "repair: update.sh --repair exited 0"
+else
+  fail "repair: update.sh --repair failed (log: $(tail -n5 "$LOG" | tr '\n' '|'))"
+fi
+if [ "$(tail -n1 "$LOG")" = "ok:9.9.9" ]; then pass "repair: log ends with ok:9.9.9"; else fail "repair: last log line: $(tail -n1 "$LOG")"; fi
+if grep -q '^Repair mode: ' "$LOG" && grep -q '^runtime: --force: re-provisioning' "$LOG"; then pass "repair: logged, and fetch-runtime.sh ran with --force"; else fail "repair: no repair or --force line in the log"; fi
+if [ ! -e "$RT_REPAIR/daemon/runtime/old-folder-marker.txt" ] && [ "$("$RT_REPAIR/daemon/runtime/node" --version 2>/dev/null)" = "$RT_V1" ] && [ ! -e "$RT_REPAIR/daemon/runtime.old" ] && [ ! -e "$RT_REPAIR/daemon/runtime.new" ]; then
+  pass "repair: a fresh runtime folder is in place, no leftovers"
+else
+  fail "repair: runtime state wrong ($(ls "$RT_REPAIR/daemon/runtime" | tr '\n' ' ' || true))"
+fi
+if [ "$(file_sha "$RT_REPAIR/version.json")" = "$VER_BEFORE" ]; then pass "repair: version.json content unchanged (same release)"; else fail "repair: version.json changed"; fi
+if [ -e "$LOCK_DIR" ]; then fail "repair: lock left behind"; else pass "repair: lock released"; fi
+
+# ---------- Case R7: a damaged runtime at the same version, plain update ----------
+# No --repair: the stamp check alone (size against VERIFIED) re-provisions it.
+RT_TRUNC="$SCRATCH/Application Support/rt-trunc/com.gaffer.panel"
+new_install "$RT_TRUNC"
+seed_runtime "$RT_TRUNC" "$RT_V1"
+cp "$SCRATCH/version.json" "$RT_TRUNC/version.json"
+printf '#!/bin/sh\n' > "$RT_TRUNC/daemon/runtime/node"   # truncated
+: > "$LOG"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$RT_TRUNC/daemon/update.sh" && [ "$(tail -n1 "$LOG")" = "ok:9.9.9" ]; then
+  pass "damaged runtime, same version: plain update ends ok:9.9.9"
+else
+  fail "damaged runtime, same version: last log line: $(tail -n1 "$LOG")"
+fi
+if [ "$("$RT_TRUNC/daemon/runtime/node" --version 2>/dev/null)" = "$RT_V1" ]; then pass "damaged runtime, same version: the stamp check re-provisioned it"; else fail "damaged runtime, same version: runtime still damaged"; fi
+
+# ---------- Case R8: a repair whose download fails leaves the install untouched ----------
+RT_REPFAIL="$SCRATCH/Application Support/rt-repfail/com.gaffer.panel"
+new_install "$RT_REPFAIL"
+seed_runtime "$RT_REPFAIL" "$RT_V1"
+BEFORE="$(full_tree_hash "$RT_REPFAIL")"
+: > "$LOG"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" GAFFER_FETCH_BASE_OFFICIAL="$NOWHERE" GAFFER_FETCH_BASE_MIRROR="$NOWHERE" bash "$RT_REPFAIL/daemon/update.sh" --repair
+REPFAIL_EXIT=$?
+set -e
+if [ "$REPFAIL_EXIT" -eq 1 ] && [ "$(tail -n1 "$LOG")" = "err:runtime" ]; then pass "failed repair: exit 1, log ends with err:runtime"; else fail "failed repair: exit $REPFAIL_EXIT, last log line: $(tail -n1 "$LOG")"; fi
+if [ "$BEFORE" = "$(full_tree_hash "$RT_REPFAIL")" ]; then pass "failed repair: install byte for byte unchanged"; else fail "failed repair: the install changed"; fi
+if grep -q '^Stopping daemon' "$LOG"; then fail "failed repair: the daemon was stopped"; else pass "failed repair: the daemon was never stopped"; fi
 
 # ---------- Case R5: an archive without daemon/daemon.mjs (pre-bundle layout) is refused ----------
 RT_NOBUNDLE="$SCRATCH/Application Support/rt-no-bundle/com.gaffer.panel"

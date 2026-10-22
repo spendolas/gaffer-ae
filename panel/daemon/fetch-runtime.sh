@@ -1,5 +1,5 @@
 #!/bin/bash
-# fetch-runtime.sh [--into <daemon-dir>] [--stage-only]
+# fetch-runtime.sh [--into <daemon-dir>] [--stage-only] [--force]
 #
 # Puts the pinned, official, unmodified Node runtime at <daemon-dir>/runtime/node
 # (spec section 3). Pins come from runtime-pins.json next to this script.
@@ -12,6 +12,12 @@
 #
 # --stage-only stops after step 7 and leaves a verified runtime.new (with its
 # VERSION and VERIFIED stamps already written) for the updater to swap in.
+#
+# --force skips the step 2 skip check: a runtime that looks current is
+# downloaded and verified again and swapped in as a new file. The updater's
+# repair mode (update.sh --repair, from the panel's Repair button) uses it for
+# a runtime the launch refused although its stamps match (macOS killing it at
+# exec, an exec bit chmod could not restore).
 #
 # Output: progress lines, then exactly one last line:
 #   runtime:current | runtime:installed <version> <platform> | err:runtime
@@ -44,6 +50,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INTO="$SCRIPT_DIR"
 STAGE_ONLY=0
+FORCE=0
 PLACEHOLDER="PENDING-FIRST-ACCEPTANCE-RUN"
 
 say() { echo "runtime: $*"; }
@@ -53,6 +60,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --into) [ $# -ge 2 ] || die "--into needs a folder"; INTO="$2"; shift 2 ;;
     --stage-only) STAGE_ONLY=1; shift ;;
+    --force) FORCE=1; shift ;;
     *) die "unknown argument $1" ;;
   esac
 done
@@ -149,7 +157,9 @@ if [ ! -e "$RT" ] && [ ! -L "$RT" ] && size_ok "$RT_OLD"; then
 fi
 
 # ---- step 2: skip check (VERSION is the only key for "download or not") ----
-if [ -f "$RT/VERSION" ] && [ "$(cat "$RT/VERSION" 2>/dev/null)" = "$WANT_STAMP" ] && size_ok "$RT"; then
+if [ "$FORCE" = 1 ]; then
+  say "--force: re-provisioning $WANT_STAMP whatever is installed"
+elif [ -f "$RT/VERSION" ] && [ "$(cat "$RT/VERSION" 2>/dev/null)" = "$WANT_STAMP" ] && size_ok "$RT"; then
   # A stale staged runtime.new must not be swapped in later by an updater.
   rm -rf "$RT_NEW"
   echo "runtime:current"
