@@ -84,9 +84,12 @@ export function extractNotes(changelog, version) {
 // SHA256SUMS.txt is required only from 0.12.0 on. v0.11.x releases are already
 // published with four assets; requiring a fifth would class them as "recover"
 // and a manual retry would overwrite the live assets with new-layout archives.
+// Only major.minor.patch counts: a prerelease of 0.12.0 (0.12.0-beta.1) is
+// built by the 0.12 packaging and ships SHA256SUMS.txt too.
 export const CHECKSUMS_FROM = '0.12.0';
 export function requiredAssets(version) {
-  if (parseVersion(version) && compareVersions(version, CHECKSUMS_FROM) < 0) {
+  const p = parseVersion(version);
+  if (p && compareVersions(p.nums.join('.'), CHECKSUMS_FROM) < 0) {
     return REQUIRED_ASSETS.filter((n) => n !== 'SHA256SUMS.txt');
   }
   return REQUIRED_ASSETS;
