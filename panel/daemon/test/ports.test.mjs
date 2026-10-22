@@ -1,15 +1,43 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { WS_PORT, MCP_PORT, mcpUrl } from '../ports.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { WS_PORT, MCP_PORT, DEFAULT_WS_PORT, DEFAULT_MCP_PORT, mcpUrl, resolvePort } from '../ports.js';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 test('port values and MCP url', () => {
-  assert.equal(WS_PORT, 9823);
-  assert.equal(MCP_PORT, 9824);
-  assert.equal(mcpUrl(), 'http://127.0.0.1:9824/mcp');
+  assert.equal(DEFAULT_WS_PORT, 9823);
+  assert.equal(DEFAULT_MCP_PORT, 9824);
+  // The suite itself may run under a port override (never in practice, but
+  // the assertion must not depend on the caller's shell).
+  assert.equal(WS_PORT, resolvePort(process.env.GAFFER_WS_PORT, 9823));
+  assert.equal(MCP_PORT, resolvePort(process.env.GAFFER_MCP_PORT, 9824));
+  assert.equal(mcpUrl(), 'http://127.0.0.1:' + MCP_PORT + '/mcp');
+});
+
+test('resolvePort honours only a plain integer from 1 to 65535', () => {
+  assert.equal(resolvePort(undefined, 9823), 9823);
+  assert.equal(resolvePort('', 9823), 9823);
+  assert.equal(resolvePort('27831', 9823), 27831);
+  assert.equal(resolvePort('1', 9823), 1);
+  assert.equal(resolvePort('65535', 9823), 65535);
+  for (const bad of ['0', '65536', '70000', 'abc', '9824x', ' 9824', '9824 ', '-1', '1e4', '0x10', '12.5', '123456']) {
+    assert.equal(resolvePort(bad, 9823), 9823, 'should ignore ' + JSON.stringify(bad));
+  }
+});
+
+test('GAFFER_WS_PORT / GAFFER_MCP_PORT reach the exported ports and mcpUrl()', () => {
+  const url = pathToFileURL(fileURLToPath(new URL('../ports.js', import.meta.url))).href;
+  const script = "import(" + JSON.stringify(url) + ").then(m => console.log(JSON.stringify([m.WS_PORT, m.MCP_PORT, m.mcpUrl()])))";
+  const run = (env) => JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    env: Object.assign({}, process.env, { GAFFER_WS_PORT: '', GAFFER_MCP_PORT: '' }, env),
+    encoding: 'utf8', windowsHide: true,
+  }));
+  assert.deepEqual(run({ GAFFER_WS_PORT: '27831', GAFFER_MCP_PORT: '27832' }), [27831, 27832, 'http://127.0.0.1:27832/mcp']);
+  assert.deepEqual(run({ GAFFER_WS_PORT: 'nope', GAFFER_MCP_PORT: '99999' }), [9823, 9824, 'http://127.0.0.1:9824/mcp']);
+  assert.deepEqual(run({}), [9823, 9824, 'http://127.0.0.1:9824/mcp']);
 });
 
 test('chat-handler builds --mcp-config from mcpUrl(), no hardcoded port', () => {
