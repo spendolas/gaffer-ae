@@ -106,9 +106,10 @@ $stuckAfter = 900
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
 #   GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames (runtime
 #                                   moved aside, runtime.new not yet in), so
-#                                   the harness can kill an updater there;
-#                                   honoured only next to GAFFER_UPDATE_ASSET,
-#                                   like the stuck-age knob below
+#                                   the harness can kill an updater there
+# Like the stuck-age knob below, every gate counts only next to
+# GAFFER_UPDATE_ASSET (the harness sets both, the panel sets neither): a
+# stray gate variable in a real environment never pauses an update.
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder created after the lock,
@@ -126,6 +127,7 @@ $script:testFailList = [bool] ($env:GAFFER_UPDATE_ASSET -and $env:GAFFER_UPDATE_
 function Get-FileAgeSeconds($item) { return ([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalSeconds }
 function Wait-TestGate([string] $gate) {
     if (-not $gate) { return }
+    if (-not $env:GAFFER_UPDATE_ASSET) { return }
     try { [System.IO.File]::WriteAllText("$gate.ready", "$PID") } catch {}
     for ($i = 0; $i -lt 600; $i++) {
         if (Test-Path -LiteralPath $gate) { return }
@@ -903,7 +905,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
                 Exit-Update "could not move the current runtime aside: $reason. Your current version still works." "runtime"
             }
         }
-        if ($env:GAFFER_UPDATE_ASSET) { Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE }
+        Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE
         try { [System.IO.Directory]::Move($runtimeNew, $runtimeDir) } catch {
             $reason = $_.Exception.Message
             if ($hadRuntime -and -not (Test-Path -LiteralPath $runtimeDir)) {

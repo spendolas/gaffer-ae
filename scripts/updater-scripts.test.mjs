@@ -26,6 +26,7 @@ function runShSnippet(text, first, last, body, env) {
   return { status: r.status, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
 }
 const sh = read('../panel/daemon/update.sh');
+const shCode = sh.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const ps1 = read('../panel/daemon/update.ps1');
 const mainJs = read('../panel/main.js');
 const installMac = read('../scripts/install-mac.sh');
@@ -284,6 +285,41 @@ test('update.sh clears a stale takeover marker by atomic rename and treats futur
     assert.ok(sh.includes('test_gate "${' + gate + ':-}"'), 'deterministic test gate ' + gate);
   }
   assert.ok(!sh.includes('GAFFER_UPDATE_TEST_DELAY'), 'the sleep-based race hook is gone');
+});
+
+test('update.sh test gates count only next to GAFFER_UPDATE_ASSET, like the stuck-age knob (run under bash)', () => {
+  const fn = sh.slice(sh.indexOf('test_gate() {'), sh.indexOf('\n}\n', sh.indexOf('test_gate() {')) + 3);
+  assert.ok(fn.includes('[ -n "${GAFFER_UPDATE_ASSET:-}" ] || return 0'), 'test_gate returns at once without GAFFER_UPDATE_ASSET');
+  // Every gate read goes through test_gate.
+  for (const l of shCode.split('\n').filter((x) => /GAFFER_UPDATE_TEST_(GATE|MARKER_GATE|HOLD_GATE|SWAP_GATE)/.test(x))) {
+    assert.match(l, /^\s*test_gate "\$\{GAFFER_UPDATE_TEST_[A-Z_]*GATE:-\}"\s*$/, 'gate read outside test_gate: ' + l.trim());
+  }
+  const run = (asset) => {
+    const env = { PATH: process.env.PATH };
+    if (asset) env.GAFFER_UPDATE_ASSET = asset;
+    const script = 'set -euo pipefail\nT="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT\n' + fn +
+      'S=$(date +%s); test_gate "$T/gate"; E=$(date +%s)\nif [ -e "$T/gate.ready" ]; then echo ready; else echo no-ready; fi; echo "waited:$((E - S))"';
+    return spawnSync('/bin/bash', ['-c', script], { encoding: 'utf8', env, timeout: 90000 });
+  };
+  const stray = run('');
+  assert.equal(stray.status, 0, stray.stderr);
+  assert.match(stray.stdout, /^no-ready\nwaited:0\n$/, 'a stray gate without GAFFER_UPDATE_ASSET neither signals nor waits: ' + stray.stdout);
+  // With the asset set the gate is honoured: release it from outside after .ready.
+  const env = { PATH: process.env.PATH, GAFFER_UPDATE_ASSET: '/nonexistent/asset.tar.gz' };
+  const script = 'set -euo pipefail\nT="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT\n' + fn +
+    '( for i in $(seq 1 100); do [ -e "$T/gate.ready" ] && { : > "$T/gate"; break; }; sleep 0.05; done ) &\ntest_gate "$T/gate"; wait\nif [ -e "$T/gate.ready" ]; then echo ready; else echo no-ready; fi';
+  const honoured = spawnSync('/bin/bash', ['-c', script], { encoding: 'utf8', env, timeout: 90000 });
+  assert.equal(honoured.stdout.trim(), 'ready', 'next to GAFFER_UPDATE_ASSET the gate signals and waits: ' + honoured.stdout + honoured.stderr);
+});
+
+test('update.ps1 test gates count only next to GAFFER_UPDATE_ASSET, every one through Wait-TestGate', () => {
+  const fn = ps1.slice(ps1.indexOf('function Wait-TestGate([string] $gate) {'), ps1.indexOf('\n}\n', ps1.indexOf('function Wait-TestGate([string] $gate) {')));
+  assert.ok(fn.includes('if (-not $env:GAFFER_UPDATE_ASSET) { return }'), 'Wait-TestGate returns at once without GAFFER_UPDATE_ASSET');
+  assert.ok(fn.indexOf('if (-not $env:GAFFER_UPDATE_ASSET) { return }') < fn.indexOf('.ready'), 'before it signals .ready');
+  for (const l of ps1.split('\n').filter((x) => !/^\s*#/.test(x) && /GAFFER_UPDATE_TEST_(GATE|MARKER_GATE|HOLD_GATE|SWAP_GATE)/.test(x))) {
+    assert.match(l, /^\s*Wait-TestGate \$env:GAFFER_UPDATE_TEST_[A-Z_]*GATE\s*$/, 'gate read outside Wait-TestGate: ' + l.trim());
+  }
+  assert.ok(/every gate counts only next to\n# GAFFER_UPDATE_ASSET/.test(ps1), 'documented in the header');
 });
 
 test('update.sh exit trap only deletes a lock that still holds its own pid', () => {
@@ -623,10 +659,10 @@ test('update.ps1 swaps by renaming aside (never copying), puts the old runtime b
   const swap = ps1Body.split('if ($stagedRuntime) {')[1].split('\n    }\n')[0];
   assert.ok(swap.indexOf('Remove-Tree $runtimeOld') < swap.indexOf('[System.IO.Directory]::Move($runtimeDir, $runtimeOld)'), 'a leftover runtime.old is cleared first');
   assert.ok(swap.includes('daemon\\runtime.old is still in use by a running node.exe'), 'a runtime.old that cannot be cleared stops the update before any rename');
-  const gate = swap.indexOf('if ($env:GAFFER_UPDATE_ASSET) { Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE }');
-  assert.ok(gate !== -1, 'the swap gate is honoured only next to GAFFER_UPDATE_ASSET (like the stuck-age knob)');
+  const gate = swap.indexOf('Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE');
+  assert.ok(gate !== -1, 'the swap gate goes through Wait-TestGate (honoured only next to GAFFER_UPDATE_ASSET, like every gate)');
   const gateLines = ps1Code.split('\n').filter((l) => l.includes('GAFFER_UPDATE_TEST_SWAP_GATE'));
-  assert.ok(gateLines.length > 0 && gateLines.every((l) => l.includes('$env:GAFFER_UPDATE_ASSET')), 'every read of the swap gate is gated on GAFFER_UPDATE_ASSET');
+  assert.ok(gateLines.length > 0 && gateLines.every((l) => /^\s*Wait-TestGate \$env:GAFFER_UPDATE_TEST_SWAP_GATE\s*$/.test(l)), 'the swap gate is only ever read by Wait-TestGate');
   assert.ok(swap.indexOf('Move($runtimeDir, $runtimeOld)') < gate && gate < swap.indexOf('Move($runtimeNew, $runtimeDir)'), 'the swap gate sits between the two renames');
   assert.ok(swap.includes('try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}'), 'a failed second rename puts the old runtime back');
   assert.ok(swap.includes('it will be removed by the next update'), 'a locked runtime.old after the swap is left and logged');

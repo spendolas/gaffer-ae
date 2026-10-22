@@ -32,8 +32,9 @@
 # lock is gone after success and after a failure, a broken download ends the
 # log with err:download, an unwritable panel dir ends it with err:sync, the
 # stuck-age knob is ignored without GAFFER_UPDATE_ASSET, at 0 and at a huge
-# value (no crash), and the dev-install refusal still ends the log with
-# err:dev-install. The races are made deterministic with the script's
+# value (no crash), the test gates are ignored without GAFFER_UPDATE_ASSET,
+# and the dev-install refusal still ends the log with err:dev-install. The
+# races are made deterministic with the script's
 # GAFFER_UPDATE_TEST_*_GATE files, never with sleeps.
 #
 # Runtime cases (zero-dependency install, spec sections 6 to 8): the release
@@ -1045,6 +1046,23 @@ fi
 if [ "$(tail -n1 "$LOG")" = "err:dev-install" ]; then pass "log ends with err:dev-install"; else fail "last log line is not err:dev-install: $(tail -n1 "$LOG")"; fi
 if [ "$BEFORE" = "$(tree_hash "$DEV_INSTALL")" ]; then pass "dev install left untouched"; else fail "dev install was modified"; fi
 if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the dev-install refusal"; else pass "lock released after the dev-install refusal"; fi
+# The test gates count only next to GAFFER_UPDATE_ASSET: the same dev
+# install, run the way the panel runs it (no asset) with every gate set to a
+# file that never appears. The hold gate sits before the dev-install check,
+# so an honoured gate would signal .ready and wait 60 s. The refusal comes
+# before any download, so nothing leaves this machine.
+rm -f "$SCRATCH"/stray-gate-*
+: > "$LOG"
+GATE_T0="$(date +%s)"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_TEST_GATE="$SCRATCH/stray-gate-a" GAFFER_UPDATE_TEST_MARKER_GATE="$SCRATCH/stray-gate-m" \
+  GAFFER_UPDATE_TEST_HOLD_GATE="$SCRATCH/stray-gate-h" GAFFER_UPDATE_TEST_SWAP_GATE="$SCRATCH/stray-gate-s" \
+  bash "$DEV_INSTALL/daemon/update.sh"
+set -e
+GATE_SECS=$(( $(date +%s) - GATE_T0 ))
+if [ "$(tail -n1 "$LOG")" = "err:dev-install" ]; then pass "stray gates without GAFFER_UPDATE_ASSET: the run still ends err:dev-install"; else fail "stray gates: last log line $(tail -n1 "$LOG")"; fi
+if ! ls "$SCRATCH"/stray-gate-*.ready >/dev/null 2>&1 && [ "$GATE_SECS" -lt 30 ]; then pass "stray gates without GAFFER_UPDATE_ASSET were ignored (no .ready, ${GATE_SECS}s)"; else fail "a stray gate was honoured without GAFFER_UPDATE_ASSET ($(ls "$SCRATCH"/stray-gate-*.ready 2>/dev/null | tr '\n' ' '), ${GATE_SECS}s)"; fi
+if [ -e "$LOCK_DIR" ]; then fail "lock left behind after the stray-gate run"; else pass "lock released after the stray-gate run"; fi
 
 # ---------- Case M1: the shipped v0.11.3 updater still accepts the new archive (spec 7) ----------
 # Existing users run THEIR updater for the first zero-dependency release. It
