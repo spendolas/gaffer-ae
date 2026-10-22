@@ -6,7 +6,9 @@
 // on the platform a developer is not running.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -680,5 +682,68 @@ test('update.ps1 keeps the v0.11.3 lock, process-tree and hand-run-terminal rule
   const rt = ps1.slice(ps1.indexOf('$runtimeDir = Join-Path $daemonDir "runtime"'));
   for (const l of rt.split('\n').filter((x) => !/^\s*#/.test(x) && /\b(Test-Path|Remove-Item|Get-Item)\b/.test(x) && /runtime|\$path|\$exe|\$stamp|fetchScript|daemon\.mjs/.test(x))) {
     assert.ok(l.includes('-LiteralPath'), 'path cmdlet without -LiteralPath: ' + l.trim());
+  }
+});
+
+// ---- migration guarantee (spec 7, Review Focus c) ----
+// Existing users install the first zero-dependency release with THEIR
+// updater (0.11.x). The shipped v0.11.3 update.sh is taken from its tag, and
+// its archive check and npm step run against the package that
+// package-release.sh builds (stub bundle, same shim and package.json code
+// path). CI checks out with fetch-depth: 0, so the tag must exist; a
+// missing tag fails unless GAFFER_TEST_ALLOW_NO_TAG=1.
+test('the shipped v0.11.3 update.sh accepts the new archive and its npm install --omit=dev succeeds offline (run under bash)', (t) => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  const tag = 'v0.11.3';
+  const has = spawnSync('git', ['rev-parse', '-q', '--verify', tag + '^{commit}'], { cwd: repoRoot, encoding: 'utf8' });
+  if (has.status !== 0) {
+    if (process.env.GAFFER_TEST_ALLOW_NO_TAG === '1') { t.skip('tag ' + tag + ' missing, GAFFER_TEST_ALLOW_NO_TAG=1'); return; }
+    assert.fail('tag ' + tag + ' is missing (shallow clone?). Fetch tags (fetch-depth: 0) or set GAFFER_TEST_ALLOW_NO_TAG=1 to skip the migration check knowingly.');
+  }
+  const oldSh = spawnSync('git', ['show', tag + ':panel/daemon/update.sh'], { cwd: repoRoot, encoding: 'utf8' }).stdout;
+  assert.ok(oldSh.includes('[ ! -f "$EXTRACT_DIR/daemon/index.js" ]'), 'the v0.11.3 archive check is the one this test models');
+  const root = mkdtempSync(join(tmpdir(), 'gaffer migrate '));
+  try {
+    const dist = join(root, 'dist');
+    spawnSync('bash', ['scripts/package-release.sh', '9.9.9', 'deadbeefcafe', dist], {
+      cwd: repoRoot, encoding: 'utf8',
+      env: { ...process.env, GAFFER_BUNDLE_SCRIPT: join(repoRoot, 'scripts/test-fixtures/stub-bundle.sh') },
+    });
+    assert.ok(existsSync(join(dist, 'gaffer-update-mac.tar.gz')), 'package-release.sh built the update asset');
+    const npmDir = join(root, 'npm');
+    const body = [
+      'EXTRACT_DIR="$ROOT/extract"; INSTALL="$ROOT/inst all/com.gaffer.panel"',
+      'mkdir -p "$EXTRACT_DIR" "$INSTALL/daemon/node_modules/ws"',
+      'tar -xzf "$ROOT/dist/gaffer-update-mac.tar.gz" -C "$EXTRACT_DIR"',
+      `echo '{"name":"ws","version":"8.0.0"}' > "$INSTALL/daemon/node_modules/ws/package.json"`,
+      'archive_check',
+      'echo "check:passed"',
+      'cp -R "$EXTRACT_DIR/daemon/." "$INSTALL/daemon/"',
+      'cd "$INSTALL/daemon"',
+      'NODE="$NODE_BIN"',
+      'if install_deps > "$ROOT/npm.log" 2>&1; then echo "npm:ok"; else echo "npm:failed"; cat "$ROOT/npm.log"; fi',
+      'if [ -e node_modules/ws ]; then echo "ws:kept"; else echo "ws:pruned"; fi',
+    ].join('\n');
+    const check = oldSh.slice(oldSh.indexOf('if [ ! -f "$EXTRACT_DIR/version.json" ]'));
+    const checkFn = 'archive_check() {\n' + check.slice(0, check.indexOf('\nfi\n') + 3) + '\n}\n';
+    const deps = oldSh.slice(oldSh.indexOf('install_deps() {'));
+    const depsFn = deps.slice(0, deps.indexOf('\n}\n') + 3);
+    const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + checkFn + depsFn + body], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH, HOME: join(root, 'home'), ROOT: root, NODE_BIN: process.execPath,
+        npm_config_cache: join(npmDir, 'cache'), npm_config_userconfig: join(npmDir, 'no-userconfig'),
+        npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
+        // Any registry request would fail: the dependency-free package must not need one.
+        npm_config_registry: 'http://127.0.0.1:9/', npm_config_fetch_retries: '0',
+      },
+    });
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    const lines = r.stdout.trim().split('\n');
+    assert.ok(lines.includes('check:passed'), 'v0.11.3 archive check passed on the new archive: ' + r.stdout);
+    assert.ok(lines.includes('npm:ok'), 'v0.11.3 npm install --omit=dev succeeded with no registry: ' + r.stdout);
+    assert.ok(lines.includes('ws:pruned'), 'npm pruned the old dependency tree: ' + r.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
