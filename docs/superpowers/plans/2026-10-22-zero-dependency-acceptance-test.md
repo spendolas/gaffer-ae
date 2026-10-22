@@ -143,7 +143,7 @@ Evidence: `run.jsonl` per session, the agent's final message, the footprint verd
 ### A2. Fresh install on Windows VM by a clean Claude agent [gate]
 
 Prep: E1, E2, E4, E5, E6 in the VM. Same as A1 with PowerShell, at least Sonnet auto and Opus manual, PATH as in E4 step 3 plus the Claude folder.
-Expect: as A1, plus the agent used `curl.exe` and `tar.exe` (no `Invoke-WebRequest` with progress, no `Expand-Archive` of the Node zip), the signature step reports `Valid` and `OpenJS Foundation`, the agent ran `node.exe --version` once (warm-up). `Get-Item <ext>\daemon\runtime\node.exe -Stream *` shows no `Zone.Identifier`.
+Expect: as A1, plus the agent used `curl.exe` and `tar.exe` (no `Invoke-WebRequest` with progress, no `Expand-Archive` of the Node zip), the signature step reports `Valid` and `OpenJS Foundation`, the agent ran `node.exe --version` once (warm-up). `Get-Item <ext>\daemon\runtime\node.exe -Stream *` shows no `Zone.Identifier`. Record which shell the agent's tool used (Claude Code often runs Git Bash on Windows): every Windows block must have run in PowerShell, directly or through `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command`/`-File` as the README rule says; a block run by bash is a fail.
 
 ### A3. Footprint after install [gate]
 
@@ -200,7 +200,7 @@ Expect: `ok:0.12.2-test`; log contains `runtime:current` and no download line; r
 ### A9. Migration leftovers are cleaned
 
 Prep: after A5 and A7 (and A6 plus its A7 on Windows).
-Expect: after A5, `daemon/node_modules` is either empty of the old 95 packages (npm pruned it) or still present (record which; the design expects pruned); after A7, `daemon/node_modules` and `daemon/package-lock.json` do not exist. `du -sh "$EXT"` is about the runtime size plus 3 MB.
+Expect: after A5, `daemon/node_modules` is either empty of the old 95 packages (npm pruned it) or still present (record which; the design expects it still present: measured with a real 0.11.3 install, npm trusts its hidden lockfile and leaves the tree); after A7, `daemon/node_modules` and `daemon/package-lock.json` do not exist. `du -sh "$EXT"` is about the runtime size plus 3 MB.
 
 ### A10. Runtime version change [gate]
 
@@ -247,7 +247,7 @@ Prep: owner's OK; daemon stopped; `cp -p runtime/node "$WORK/node.bak"`. Run eac
 2. Missing, no system node: `mv runtime/node "$WORK/"`, `env PATH="$CLEAN_PATH" bash start.sh`.
 3. Not executable: `chmod 644 runtime/node`, `bash start.sh`.
 4. Stamp missing: `rm runtime/VERIFIED`, `bash start.sh`.
-Expect: 1 prints `err:runtime-damaged`, the panel shows "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall.", no daemon starts, no system node is used. 2 prints `err:runtime-missing` and the matching notice. 3 prints `pid:<N> runtime` and the log says the exec bit was restored. 4 hashes once, writes `VERIFIED`, starts (`pid:<N> runtime`). Then a normal update on the damaged state of 1 re-provisions the runtime and ends `ok:`. Windows: 1, 2, 4 with `start.ps1`.
+Expect: 1 prints `err:runtime-damaged`, the panel shows "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall.", no daemon starts, no system node is used. 2 prints `err:runtime-missing` and "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall.". 3 prints `pid:<N> runtime` and the log says the exec bit was restored. 4 hashes once, writes `VERIFIED`, starts (`pid:<N> runtime`). Then a normal update on the damaged state of 1 re-provisions the runtime and ends `ok:` (the Repair button path is case A27). Windows: 1, 2, 4 with `start.ps1`.
 
 ### A17. Quarantine on a browser-downloaded package (Mac)
 
@@ -255,7 +255,7 @@ Prep: Apple Silicon and Intel if available.
 1. In Safari, download `gaffer-install-mac.tar.gz` from the prerelease page; double-click it (Archive Utility).
 2. `xattr -l <extracted>/main.js` shows `com.apple.quarantine`.
 3. Copy the extracted folder to the extension path, run the README runtime steps (runtime by curl, no quarantine), then also `xattr -w com.apple.quarantine "0083;$(printf %x $(date +%s));Safari;" runtime/node` for the worst case.
-Expect: AE loads the panel; the daemon starts from the runtime; no Gatekeeper dialog, or if one appears, record its exact text and whether "Open" lets it run (that result goes to the owner before release).
+Expect: AE loads the panel; the daemon starts from the runtime; no Gatekeeper dialog, or if one appears, record its exact text and whether "Open" lets it run (that result goes to the owner before release). If macOS kills the runtime instead (SIGKILL soon after launch), the panel shows "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer." and Settings shows Repair; record whether Repair (a fresh download into a new folder) clears it.
 
 ### A18. arm64 and Intel on CI [gate]
 
@@ -342,6 +342,49 @@ Prep: the VM; a unit test plus one real run.
 Expect: all three as stated.
 Evidence: test output, CIM output.
 
+### A27. Repair from Settings fixes a damaged runtime [gate]
+
+Run on: Mac and the VM. Prep: an install on `C+1` or later running from the runtime, with no newer release offered (the panel shows no update banner). Owner's OK to stop the daemon. Start AE from a terminal (as in A28) with `GAFFER_UPDATE_ASSET` at the installed version's update asset: Repair installs `releases/latest`, which before the push is v0.11.3, and the new updater refuses that archive (no `daemon/daemon.mjs`). Truncate the runtime as in A16 step 1 (Windows: overwrite `node.exe` with its first 1,000,000 bytes), then reload the panel.
+1. Expect the notice "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall." and the status stays disconnected (no system node).
+2. Open Settings. Expect a button labelled Repair (not Update). Click it.
+3. Expect the update pill with "Repairing..." while it runs; the updater log (`${TMPDIR:-/tmp}/gaffer-update.log`, `%TEMP%\gaffer-update.log`) shows `Repair mode`, a fresh runtime download (no `runtime:current`), the hash and signature checks, the swap, and ends `ok:<installed version>`.
+4. Expect the panel reloads once, connects, and the daemon runs from `runtime/node` (A4 step 3). `version.json` is unchanged; chat history and settings markers (A5) are byte-identical.
+5. Repeat with both runtime sources blocked for the repair: start AE from a terminal (as in A28) with `GAFFER_UPDATE_ASSET` at the local update asset and `HTTPS_PROXY=http://127.0.0.1:9`; on Windows the system-proxy fallback ignores `HTTPS_PROXY`, so disconnect the VM's network adapter for this step instead. Expect "Repair failed: could not download Gaffer's runtime. Check your network and try again.", the daemon never stopped by the updater, and `runtime/` exactly as before the click.
+Evidence: screenshots of the notice, the Repair button and the result, the log tail, marker check.
+
+### A28. Updater result codes are shown in the panel [gate]
+
+Run on: Mac and the VM. A test build is never offered as an update, so this case drives the updater through the Repair button (A27 prep: a damaged runtime, no newer release), which uses the same codes. The Update-mode texts are pinned by unit tests (`panel/daemon/test/update-state.test.mjs`); check them here too if a real newer release happens to be offered. Start AE from a terminal with the test variables exported, so the updater the panel starts inherits them (it inherits the panel's environment on the Node route): `GAFFER_UPDATE_ASSET` pointing at the installed version's update asset (the test gates count only next to it). Record how AE was started.
+1. `err:runtime`: covered by A27 step 5 ("Repair failed: could not download Gaffer's runtime. Check your network and try again.").
+2. `err:runtime-swap`: also export `GAFFER_UPDATE_TEST_SWAP_GATE` so the updater pauses after `runtime` was renamed to `runtime.old`; while it pauses, make the second rename fail (macOS: `chmod -w` the `daemon/` folder; Windows: hold `runtime.new\node.exe` open with a handle), then release the gate. Expect "Repair did not complete. Your Gaffer folder may be in an unfinished state. Open Settings and click Repair, or reinstall.", no reload, and Settings offers Repair again; after undoing the block, a second Repair ends `ok:` and the daemon runs from the runtime.
+3. Any other code (for example `err:download` with `GAFFER_UPDATE_ASSET=/nonexistent`): expect "Repair did not complete. The updater log has details: <the real log path>."
+4. `busy:already-running`: start a second updater by hand while the first runs. Expect the panel keeps waiting and then reports the first run's result.
+Expect overall: the text matches the code exactly, never a reload on a failure, no em or en dash in any text.
+Evidence: screenshot and log tail per step.
+
+### A29. A second panel during a runtime swap waits, it never starts a system node
+
+Run on: Mac and the VM, with a system Node present (the race only matters when one exists). Prep: two After Effects versions with the panel installed, or one panel plus a hand-run launcher. Owner's OK.
+Act: run an update with a runtime change (A10 shape) with `GAFFER_UPDATE_TEST_SWAP_GATE` set, so the updater pauses after `runtime` was renamed to `runtime.old`. While it pauses, open (or reload) the second panel.
+Expect: the second panel shows no error notice and does not start a daemon; the daemon log shows the swap-window retry (no `launch: system node` line); once the gate is released and the swap finishes, the second panel starts the daemon from the new `runtime/node` within a few seconds, or connects to the one the first panel started. No two daemons, no daemon running on a system node.
+Evidence: daemon log lines with timestamps, `ps`/CIM output after the swap.
+
+### A30. A runtime that cannot be executed is reported, not left at "Disconnected" [gate]
+
+Run on: an Intel Mac (required) and the VM (record only). Prep: owner's OK; daemon stopped; back up `runtime/`.
+1. Mac, EBADARCH: put the darwin-arm64 `node` (extracted from the pinned arm64 archive) in place of `runtime/node` and write a `VERIFIED` stamp with its size, so the size check passes and only the exec fails. Reload the panel.
+2. Mac, ENOEXEC: replace `runtime/node` with a file of the same size that is not a program (no `#!` line), stamp its size, reload.
+3. Windows: replace `node.exe` with a same-size file that is not a PE image, stamp its size, reload; record what the panel shows.
+Expect (1, 2): the daemon log has `daemon not launched: err:runtime-damaged (...)` naming the error; the panel shows "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall." (never only "Disconnected"); Settings shows Repair; Repair (A27 steps 2 to 4) restores a working runtime. A spawn failure that is not about the runtime (for example a removed `daemon/` working folder) shows "Gaffer could not start its daemon. Open Settings and click Repair, or reinstall.".
+Evidence: log lines, screenshots, the Repair result.
+
+### A31. Release sequencing: README installs during the publish window stop cleanly [gate, part 1 before the push]
+
+Part 1, before the bump push (now: `releases/latest` is v0.11.3, which has no `SHA256SUMS.txt`). Prep: E3, E5. Give a clean agent (Sonnet auto, as in A1) the candidate README UNCHANGED (pointing at `releases/latest`), with the prompt from A1.
+Expect: step 4 downloads the v0.11.3 package, the `SHA256SUMS.txt` download fails with 404, the agent says a release is still being published, waits a few minutes and reruns step 4 unchanged, and after 15 minutes stops and tells the user. It never skips the checksum, never takes the package from another release URL, never extracts it. Afterwards no `com.gaffer.panel` folder exists, the download folders are gone, and the A3 footprint diff is clean. A run that installs anything is a fail.
+Part 2, at the push (owner present): merge and bump in one push to `main`, then `gh run watch` the release run. Record the time from push to publish. Expect the run publishes `v<C>` with five assets and `gh api repos/spendolas/gaffer-ae/releases/latest --jq .tag_name` prints `v<C>`; then run README step 4 once by hand in a scratch HOME and expect `gaffer-install-mac.tar.gz: OK`. If the run fails: recover at once with `gh workflow run release.yml -f dry_run=false` on `main` and record how long installs were blocked.
+Evidence: the agent transcript and final message (part 1), the run URL and times, the step 4 output (part 2).
+
 ## Release gates (run last, in this order, before the bump push)
 
 | Gate | Run | Evidence to attach |
@@ -350,9 +393,9 @@ Evidence: test output, CIM output.
 | G2 | full Linux test set: the dry run's ubuntu `build` log, and locally `docker run --rm -v "$PWD":/w -w /w node:24 bash -c 'cd panel/daemon && npm ci && npm test && cd /w && node scripts/check-ps-encoding.mjs && node --test <the script test list from release.yml>'` (the same commands, in the same order, as the workflow's test step) | job log link, local output tail with the pass counts |
 | G3 | real update on a Mac with only published-style assets: A5, A7, A8, A10, A11 | update logs, marker checks, runtime stamps, panel screenshot after each |
 | G4 | same on `gaffer-winvm`: A6, A7, A8, A10, A11, plus A23 and A24 on the first launch | same, from the VM, plus the listener list, the firewall rule query and the owner's no-prompt and no-console notes |
-| G5 | every case marked [gate] above (A1 to A26) | the results table, filled, with the E6 sign-in time for every chat case |
+| G5 | every case marked [gate] above (A1 to A31; for A31 only part 1) | the results table, filled, with the E6 sign-in time for every chat case |
 
-Only after G1 to G5 pass: bump `panel/version.json`, add the `CHANGELOG.md` section, push to `main`. Then confirm the published release has five assets and that `releases/latest` resolves to it. Delete the test prerelease (owner's OK), restore the VM's Node folder and snapshot state as noted in E4.
+Only after G1 to G5 pass, and with the mirror release `node-v24.22.1` in place (E2): merge the branch and bump `panel/version.json` in ONE push to `main`, never the README first. The same push turns `## Unreleased` in `CHANGELOG.md` into `## v<C> - <date>` with a bold one-line summary; the release gate throws without a `## v<C>` heading. Until the run publishes, `releases/latest` stays v0.11.3 and README installs wait at step 4 (A31). Watch the run (`gh run watch`) until it publishes; if it fails, recover at once with `gh workflow run release.yml -f dry_run=false` on `main`. Then confirm the published release has five assets and that `releases/latest` resolves to it (A31 part 2). Delete the test prerelease (owner's OK), restore the VM's Node folder and snapshot state as noted in E4.
 
 ## Results table template
 
@@ -362,8 +405,8 @@ Only after G1 to G5 pass: bump `panel/version.json`, add the `CHANGELOG.md` sect
 | A1 | Mac Intel | Opus auto | | | | |
 | A1 | Mac Intel | Sonnet manual | | | | first prompt: |
 | A1 | Mac Intel | Opus manual | | | | first prompt: |
-| A2 | Windows VM | Sonnet auto | | | | |
-| A2 | Windows VM | Opus manual | | | | |
+| A2 | Windows VM | Sonnet auto | | | | shell: |
+| A2 | Windows VM | Opus manual | | | | shell: |
 | A3 | Mac / Windows | | | | | host noise listed: |
 | A4 | Mac Intel / Mac arm64 / Windows VM | | | | | sign-in time (E6): |
 | A5 | Mac | | | | | |
@@ -390,4 +433,10 @@ Only after G1 to G5 pass: bump `panel/version.json`, add the `CHANGELOG.md` sect
 | A24 | Windows VM | | | | | docked or floating: |
 | A25 | Mac / Windows VM | | | | | daemon after AE quit: |
 | A26 | Windows VM | | | | | |
+| A27 | Mac / Windows VM | | | | | |
+| A28 | Mac / Windows VM | | | | | codes seen: |
+| A29 | Mac / Windows VM | | | | | |
+| A30 | Mac Intel / Windows VM | | | | | Windows notice: |
+| A31 part 1 | Mac | Sonnet auto | | | | minutes waited: |
+| A31 part 2 | GitHub | | | | | push to publish: |
 | G1 to G5 | | | | | | |
