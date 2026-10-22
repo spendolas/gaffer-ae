@@ -27,8 +27,10 @@
 #   GAFFER_FETCH_PLATFORM        platform key (darwin-x64, darwin-arm64)
 #   GAFFER_FETCH_SKIP_CODESIGN=1 skip the signature checks (fake archives)
 set -u
+# Stock tools only: never a Homebrew/conda curl, tar or shasum.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INTO="$SCRIPT_DIR"
 STAGE_ONLY=0
 PLACEHOLDER="PENDING-FIRST-ACCEPTANCE-RUN"
@@ -45,7 +47,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -d "$INTO" ] || die "folder not found: $INTO"
-INTO=$(cd "$INTO" && pwd) || die "cannot open $INTO"
+INTO=$(CDPATH= cd -- "$INTO" && pwd) || die "cannot open $INTO"
 
 TEST_MODE=0
 [ "${GAFFER_FETCH_TEST:-}" = "1" ] && TEST_MODE=1
@@ -71,7 +73,7 @@ pin_num() {
 # ---- step 1: platform ----
 if [ "$TEST_MODE" = 1 ] && [ -n "${GAFFER_FETCH_PLATFORM:-}" ]; then
   PLAT="$GAFFER_FETCH_PLATFORM"
-elif [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+elif [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
   PLAT="darwin-arm64"   # uname -m says x86_64 under Rosetta, sysctl does not
 else
   PLAT="darwin-x64"
@@ -109,30 +111,51 @@ RT_NEW="$INTO/runtime.new"
 RT_OLD="$INTO/runtime.old"
 WANT_STAMP="$VER $PLAT"
 
-file_size() { /usr/bin/stat -f %z "$1" 2>/dev/null; }
-file_sha() { /usr/bin/shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'; }
+# GNU stat first: on Linux (CI) 'stat -f' means filesystem status.
+file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null; }
+file_sha() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+  else sha256sum "$1" 2>/dev/null | awk '{print $1}'; fi
+}
+# size_ok <dir>: <dir>/node exists and its size equals the first field of <dir>/VERIFIED
+size_ok() {
+  [ -f "$1/node" ] && [ -f "$1/VERIFIED" ] || return 1
+  local want
+  want=$(awk '{print $1; exit}' "$1/VERIFIED" 2>/dev/null)
+  [ -n "$want" ] && [ "$want" = "$(file_size "$1/node")" ]
+}
+
+# Recovery (spec 6.8): a run killed between the two renames leaves no
+# runtime but a good runtime.old. Put it back before anything else.
+if [ ! -e "$RT" ] && [ ! -L "$RT" ] && size_ok "$RT_OLD"; then
+  mv "$RT_OLD" "$RT" && say "restored runtime from runtime.old"
+fi
 
 # ---- step 2: skip check (VERSION is the only key for "download or not") ----
-if [ -f "$RT/node" ] && [ -f "$RT/VERSION" ] && [ -f "$RT/VERIFIED" ]; then
-  have_ver=$(cat "$RT/VERSION" 2>/dev/null)
-  stamp_size=$(awk '{print $1; exit}' "$RT/VERIFIED" 2>/dev/null)
-  if [ "$have_ver" = "$WANT_STAMP" ] && [ -n "$stamp_size" ] && [ "$stamp_size" = "$(file_size "$RT/node")" ]; then
-    echo "runtime:current"
-    exit 0
-  fi
+if [ -f "$RT/VERSION" ] && [ "$(cat "$RT/VERSION" 2>/dev/null)" = "$WANT_STAMP" ] && size_ok "$RT"; then
+  # A stale staged runtime.new must not be swapped in later by an updater.
+  rm -rf "$RT_NEW"
+  echo "runtime:current"
+  exit 0
 fi
 
 # ---- temp folder and cleanup ----
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/gaffer-runtime-XXXXXX") || die "cannot create a temp folder"
 CHILD=""
 DONE=0
+SWAPPING=0
 cleanup() {
   [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
   rm -rf "$TMP"
-  # A failed or interrupted run never leaves a half-staged runtime.new.
-  [ "$DONE" = 1 ] || rm -rf "$RT_NEW"
+  # A failed or interrupted run never leaves a half-staged runtime.new, except
+  # mid-swap: then runtime.new is the verified runtime and must survive (the
+  # next run restores runtime.old if runtime is missing).
+  [ "$DONE" = 1 ] || [ "$SWAPPING" = 1 ] || rm -rf "$RT_NEW"
 }
-trap 'cleanup; echo "err:runtime"; exit 130' INT TERM
+on_signal() { cleanup; echo "err:runtime"; trap - EXIT; exit "$1"; }
+trap 'on_signal 129' HUP
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 trap cleanup EXIT
 
 say "need $VER $PLAT"
@@ -218,10 +241,14 @@ fi
 # ---- step 8: swap ----
 if [ -e "$RT" ] || [ -L "$RT" ]; then
   rm -rf "$RT_OLD" || die "cannot clear $RT_OLD"
-  mv "$RT" "$RT_OLD" || die "cannot move the old runtime aside"
+  # From here a signal keeps runtime.new (cleanup checks SWAPPING).
+  SWAPPING=1
+  mv "$RT" "$RT_OLD" || { SWAPPING=0; die "cannot move the old runtime aside"; }
 fi
+SWAPPING=1
 if ! mv "$RT_NEW" "$RT"; then
   [ -e "$RT_OLD" ] && mv "$RT_OLD" "$RT"
+  SWAPPING=0
   die "cannot move the new runtime into place"
 fi
 DONE=1

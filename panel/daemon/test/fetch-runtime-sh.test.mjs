@@ -12,7 +12,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync,
-  readdirSync, rmSync, chmodSync, utimesSync,
+  readdirSync, rmSync, chmodSync, utimesSync, copyFileSync, renameSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -263,11 +263,23 @@ test('both sources unreachable gives err:runtime', (t) => {
   assert.deepEqual(readdirSync(sb.tmp), []);
 });
 
-test('binary with the wrong size or hash is rejected', (t) => {
+test('binary with the wrong hash is rejected', (t) => {
   const sb = sandbox({ binaryShaOverride: 'b'.repeat(64) });
   t.after(sb.cleanup);
   const r = run(sb);
   assert.equal(r.last, 'err:runtime', r.stdout);
+  assert.match(r.stdout, /binary checksum/);
+  assert.deepEqual(listTree(sb.into), []);
+});
+
+test('binary with the wrong size is rejected', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  sb.pins.node.platforms[PLAT].binaryBytes += 1;
+  writeFileSync(sb.pinsPath, JSON.stringify(sb.pins));
+  const r = run(sb);
+  assert.equal(r.last, 'err:runtime', r.stdout);
+  assert.match(r.stdout, /binary size/);
   assert.deepEqual(listTree(sb.into), []);
 });
 
@@ -401,26 +413,165 @@ test('a missing --into directory fails cleanly', (t) => {
   assert.ok(!existsSync(join(sb.root, 'nope')));
 });
 
-test('test seams are ignored without GAFFER_FETCH_TEST=1', (t) => {
-  // Without the flag the script must read the real runtime-pins.json next to
-  // it, so a runtime stamped for the real pin is "current" (no network).
+// The platform the script detects with no seam: sysctl on macOS, and on
+// Linux (no hw.optional.arm64) the darwin-x64 fallback.
+function detectedPlatform() {
+  let arm = '';
+  try {
+    arm = execFileSync('sysctl', ['-n', 'hw.optional.arm64'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    }).toString().trim();
+  } catch {}
+  return arm === '1' ? 'darwin-arm64' : 'darwin-x64';
+}
+
+// A copy of the script beside its own "real" pins whose sources are closed
+// loopback ports, so a regression that ignored the flag check can never
+// reach nodejs.org: at worst it fails fast against 127.0.0.1.
+function isolatedScript(sb, realVer) {
+  const dir = join(sb.root, 'script dir');
+  mkdirSync(dir);
+  copyFileSync(SCRIPT, join(dir, 'fetch-runtime.sh'));
+  const real = JSON.parse(JSON.stringify(sb.pins));
+  real.node.version = realVer;
+  real.node.official = 'https://127.0.0.1:9/official/';
+  real.node.mirror = 'https://127.0.0.1:9/mirror/';
+  real.node.platforms['darwin-arm64'] = { ...real.node.platforms[PLAT] };
+  writeFileSync(join(dir, 'runtime-pins.json'), JSON.stringify(real, null, 2));
+  return join(dir, 'fetch-runtime.sh');
+}
+
+function runScript(script, sb, envExtra) {
+  const env = {
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: sb.root, TMPDIR: sb.tmp,
+    GAFFER_FETCH_PINS: sb.pinsPath,
+    GAFFER_FETCH_BASE_OFFICIAL: urlOf(sb.official),
+    GAFFER_FETCH_BASE_MIRROR: urlOf(sb.mirror),
+    GAFFER_FETCH_SKIP_CODESIGN: '1',
+    GAFFER_FETCH_PLATFORM: 'darwin-sparc',
+    ...envExtra,
+  };
+  const r = spawnSync('/bin/bash', [script, '--into', sb.into], { env, encoding: 'utf8', timeout: 30000 });
+  return { ...r, last: r.stdout.trim().split('\n').pop() };
+}
+
+test('test seams are ignored without GAFFER_FETCH_TEST=1 (pins, platform)', (t) => {
+  // Without the flag the script reads the pins next to it and detects the
+  // platform itself, so a runtime stamped for those is "current". Honouring
+  // GAFFER_FETCH_PINS (other version) or GAFFER_FETCH_PLATFORM (darwin-sparc)
+  // would not be.
   const sb = sandbox();
   t.after(sb.cleanup);
-  const real = readFileSync(join(HERE, '..', 'runtime-pins.json'), 'utf8');
-  const realVer = JSON.parse(real).node.version;
-  let arm = '';
-  try { arm = execFileSync('/usr/sbin/sysctl', ['-n', 'hw.optional.arm64'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
-  const realPlat = arm === '1' ? 'darwin-arm64' : 'darwin-x64';
+  const script = isolatedScript(sb, 'v77.0.0');
   const rt = join(sb.into, 'runtime');
   mkdirSync(rt);
   writeFileSync(join(rt, 'node'), 'x'.repeat(10));
-  writeFileSync(join(rt, 'VERSION'), `${realVer} ${realPlat}`);
+  writeFileSync(join(rt, 'VERSION'), `v77.0.0 ${detectedPlatform()}`);
   writeFileSync(join(rt, 'VERIFIED'), `10 ${'c'.repeat(64)}`);
-  const r = run(sb, [], { GAFFER_FETCH_TEST: undefined });
+  const r = runScript(script, sb, {});
   assert.equal(r.last, 'runtime:current', r.stdout + r.stderr);
 });
 
-test('HTTP 503 HTML error page from official falls back to the mirror (curl --fail)', async (t) => {
+test('test seams are ignored without GAFFER_FETCH_TEST=1 (base URLs, codesign skip)', (t) => {
+  // No runtime: the script must try the pinned 127.0.0.1 sources (closed
+  // port, fails fast), never the file:// bases from the seam variables.
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  const script = isolatedScript(sb, VERSION);
+  const t0 = Date.now();
+  const r = runScript(script, sb, { GAFFER_FETCH_PLATFORM: undefined });
+  assert.equal(r.last, 'err:runtime', r.stdout + r.stderr);
+  assert.match(r.stdout, /https:\/\/127\.0\.0\.1:9\/official\//);
+  assert.match(r.stdout, /official download failed, using the mirror/);
+  assert.ok(!r.stdout.includes('file://'), r.stdout);
+  assert.ok(Date.now() - t0 < 20000, 'fails fast');
+  assert.deepEqual(listTree(sb.into), []);
+});
+
+test('recovery: runtime missing and a good runtime.old is restored (spec 6.8)', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  run(sb);
+  // Simulate a kill between the two renames.
+  renameSync(join(sb.into, 'runtime'), join(sb.into, 'runtime.old'));
+  mkdirSync(join(sb.into, 'runtime.new'));
+  writeFileSync(join(sb.into, 'runtime.new', 'node'), 'staged');
+  rmSync(join(sb.official, sb.archiveName));
+  rmSync(join(sb.mirror, sb.archiveName));
+  const r = run(sb);
+  assert.equal(r.last, 'runtime:current', r.stdout + r.stderr);
+  assert.match(r.stdout, /restored runtime from runtime.old/);
+  assert.deepEqual(readFileSync(join(sb.into, 'runtime', 'node')), sb.binBuf);
+  assert.deepEqual(listTree(sb.into), ['runtime', 'runtime/VERIFIED', 'runtime/VERSION', 'runtime/node']);
+});
+
+test('recovery does not restore a runtime.old that fails the size check', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  mkdirSync(join(sb.into, 'runtime.old'));
+  writeFileSync(join(sb.into, 'runtime.old', 'node'), 'short');
+  writeFileSync(join(sb.into, 'runtime.old', 'VERIFIED'), `999 ${'d'.repeat(64)}`);
+  writeFileSync(join(sb.into, 'runtime.old', 'VERSION'), `${VERSION} ${PLAT}`);
+  const r = run(sb);
+  assert.equal(r.last, `runtime:installed ${VERSION} ${PLAT}`, r.stdout);
+  assert.ok(!r.stdout.includes('restored'));
+  assert.deepEqual(readFileSync(join(sb.into, 'runtime', 'node')), sb.binBuf);
+  assert.ok(!existsSync(join(sb.into, 'runtime.old')));
+});
+
+test('--stage-only on a current runtime removes a stale runtime.new', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  run(sb);
+  mkdirSync(join(sb.into, 'runtime.new'));
+  writeFileSync(join(sb.into, 'runtime.new', 'node'), 'stale');
+  const r = run(sb, ['--stage-only']);
+  assert.equal(r.last, 'runtime:current');
+  assert.ok(!existsSync(join(sb.into, 'runtime.new')));
+});
+
+for (const [sig, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) {
+  test(`${sig} during the download cleans up and exits ${code}`, async (t) => {
+    const { createServer } = await import('node:http');
+    const { spawn } = await import('node:child_process');
+    const sb = sandbox();
+    t.after(sb.cleanup);
+    installOld(sb);
+    const before = snapshot(sb.into);
+    let resolveHit;
+    const hit = new Promise((r) => { resolveHit = r; });
+    // A server that starts a response and never finishes it.
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'content-length': '1000000' });
+      res.write('partial');
+      resolveHit();
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    t.after(() => { server.closeAllConnections?.(); server.close(); });
+    const env = {
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: sb.root, TMPDIR: sb.tmp,
+      GAFFER_FETCH_TEST: '1', GAFFER_FETCH_PINS: sb.pinsPath,
+      GAFFER_FETCH_BASE_OFFICIAL: `http://127.0.0.1:${server.address().port}/`,
+      GAFFER_FETCH_BASE_MIRROR: urlOf(sb.mirror),
+      GAFFER_FETCH_SKIP_CODESIGN: '1', GAFFER_FETCH_PLATFORM: PLAT,
+    };
+    const c = spawn('/bin/bash', [SCRIPT, '--into', sb.into], { env });
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    const closed = new Promise((r) => c.on('close', (codeV) => r(codeV)));
+    await hit;
+    await new Promise((r) => setTimeout(r, 200));
+    c.kill(sig);
+    const exit = await closed;
+    assert.equal(exit, code, out);
+    assert.equal(out.trim().split('\n').pop(), 'err:runtime');
+    assert.deepEqual(snapshot(sb.into), before);
+    assert.deepEqual(readdirSync(sb.tmp), []);
+  });
+}
+
+test('HTTP 404 HTML error page from official falls back to the mirror (curl --fail)', async (t) => {
   const { createServer } = await import('node:http');
   const { spawn } = await import('node:child_process');
   const sb = sandbox();
