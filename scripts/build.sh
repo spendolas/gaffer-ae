@@ -8,6 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DAEMON_DIR="$REPO_DIR/panel/daemon"
+export npm_config_cache="${npm_config_cache:-$REPO_DIR/.npm-cache}"
+export npm_config_logs_dir="${npm_config_logs_dir:-$REPO_DIR/.npm-cache/_logs}"
+export npm_config_userconfig="${npm_config_userconfig:-$REPO_DIR/.npm-cache/no-userconfig}"
 STAGE="$DAEMON_DIR/dist/stage"
 
 echo "=== Gaffer Build ==="

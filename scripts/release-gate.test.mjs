@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { decide, compareVersions, extractNotes, GateError, REQUIRED_ASSETS } from './release-gate.mjs';
+import { requiredAssets, decide, compareVersions, extractNotes, GateError, REQUIRED_ASSETS } from './release-gate.mjs';
 
 const CHANGELOG = [
   '# Changelog',
@@ -55,10 +55,22 @@ test('the required asset list is the four archives plus SHA256SUMS.txt', () => {
   ]);
 });
 
-test('published release missing only SHA256SUMS.txt -> recover', () => {
-  const assets = allAssets().filter((a) => a.name !== 'SHA256SUMS.txt');
-  const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets }, changelog: CHANGELOG });
+const four = () => requiredAssets('0.11.3').map((name) => ({ name }));
+
+test('v0.11.3 published with four assets (no SHA256SUMS.txt) -> skip', () => {
+  assert.equal(requiredAssets('0.11.3').length, 4);
+  const r = decide({ version: '0.11.3', tags: ['v0.11.3'], release: { isDraft: false, assets: four() }, changelog: '' });
+  assert.equal(r.action, 'skip');
+});
+
+test('0.12.0 with four assets -> recover', () => {
+  const r = decide({ version: '0.12.0', tags: ['v0.12.0'], release: { isDraft: false, assets: four() }, changelog: CHANGELOG.replace('0.11.0', '0.12.0') });
   assert.equal(r.action, 'recover');
+});
+
+test('0.12.0 with five assets -> skip', () => {
+  const r = decide({ version: '0.12.0', tags: ['v0.12.0'], release: { isDraft: false, assets: allAssets() }, changelog: '' });
+  assert.equal(r.action, 'skip');
 });
 
 test('recover skips the version check even when a higher tag exists', () => {

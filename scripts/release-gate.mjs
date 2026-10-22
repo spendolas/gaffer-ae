@@ -81,10 +81,21 @@ export function extractNotes(changelog, version) {
   return body.join('\n') + '\n';
 }
 
-export function isCompleteRelease(release) {
+// SHA256SUMS.txt is required only from 0.12.0 on. v0.11.x releases are already
+// published with four assets; requiring a fifth would class them as "recover"
+// and a manual retry would overwrite the live assets with new-layout archives.
+export const CHECKSUMS_FROM = '0.12.0';
+export function requiredAssets(version) {
+  if (parseVersion(version) && compareVersions(version, CHECKSUMS_FROM) < 0) {
+    return REQUIRED_ASSETS.filter((n) => n !== 'SHA256SUMS.txt');
+  }
+  return REQUIRED_ASSETS;
+}
+
+export function isCompleteRelease(release, version) {
   if (!release || release.isDraft) return false;
   const names = (release.assets || []).map((a) => a.name);
-  return REQUIRED_ASSETS.every((n) => names.includes(n));
+  return requiredAssets(version).every((n) => names.includes(n));
 }
 
 // version: string from panel/version.json. tags: array of tag names.
@@ -94,7 +105,7 @@ export function decide({ version, tags, release, changelog }) {
   if (!parseVersion(version)) {
     throw new GateError(`panel/version.json version "${version}" is not major.minor.patch[-prerelease]`);
   }
-  if (isCompleteRelease(release)) return { action: 'skip', notes: null };
+  if (isCompleteRelease(release, version)) return { action: 'skip', notes: null };
   let action = 'recover';
   if (!release) {
     for (const tag of tags) {
