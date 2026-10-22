@@ -32,6 +32,38 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 const install = section(readme, /^## Install Instructions for Claude/m, /^<\/details>/m);
 const step = (n) => section(install, new RegExp('^' + n + '\\. \\*\\*', 'm'), new RegExp('^(' + (n + 1) + '\\. |### )', 'm'));
 
+// ---- One download budget: README (CURL_OPTS) and both fetch-runtime scripts ----
+
+test('the README curl budget equals the defaults in fetch-runtime.sh and fetch-runtime.ps1', () => {
+  const n = (flag) => {
+    const m = CURL_OPTS.match(new RegExp('--' + flag + ' (\\d+)(?:\\s|$)'));
+    assert.ok(m, 'CURL_OPTS has --' + flag);
+    return m[1];
+  };
+  const v = { connect: n('connect-timeout'), limit: n('speed-limit'), speed: n('speed-time'), max: n('max-time'), retryMax: n('retry-max-time'), retry: n('retry'), delay: n('retry-delay') };
+  assert.equal(v.retryMax, v.max, 'README: --retry-max-time equals --max-time, like the scripts');
+  assert.ok(CURL_OPTS.includes("--proto '=https'"));
+
+  const sh = read('../panel/daemon/fetch-runtime.sh');
+  assert.ok(sh.includes('\nSPEED_TIME=' + v.speed + '\n'), 'fetch-runtime.sh SPEED_TIME default');
+  assert.ok(sh.includes('\nMAX_TIME=' + v.max + '\n'), 'fetch-runtime.sh MAX_TIME default');
+  const shCurl = sh.slice(sh.indexOf('  curl --fail'), sh.indexOf('-o "$TMP/$ARCHIVE"')).replace(/\\\n\s*/g, ' ');
+  for (const s of ['--proto "$PROTO"', '--connect-timeout ' + v.connect, '--speed-limit ' + v.limit, '--speed-time "$SPEED_TIME"',
+    '--max-time "$MAX_TIME"', '--retry-max-time "$MAX_TIME"', '--retry ' + v.retry + ' ', '--retry-delay ' + v.delay]) {
+    assert.ok(shCurl.includes(s), 'fetch-runtime.sh curl line lacks ' + s + ': ' + shCurl);
+  }
+  assert.ok(/\n {2}PROTO="=https"\n/.test(sh), 'fetch-runtime.sh is https-only outside test mode');
+
+  const ps1 = read('../panel/daemon/fetch-runtime.ps1');
+  assert.ok(ps1.includes('$speedTime = ' + v.speed + '\r\n') || ps1.includes('$speedTime = ' + v.speed + '\n'), 'fetch-runtime.ps1 $speedTime default');
+  assert.ok(ps1.includes('$maxTime = ' + v.max + '\r\n') || ps1.includes('$maxTime = ' + v.max + '\n'), 'fetch-runtime.ps1 $maxTime default');
+  const psCurl = ps1.slice(ps1.indexOf('$curlArgs = @('), ps1.indexOf('"-o", $archive'));
+  for (const s of ['"--connect-timeout", "' + v.connect + '"', '"--speed-limit", "' + v.limit + '"', '"--speed-time", [string] $speedTime',
+    '"--max-time", [string] $maxTime', '"--retry-max-time", [string] $maxTime', '"--retry", "' + v.retry + '"', '"--retry-delay", "' + v.delay + '"']) {
+    assert.ok(psCurl.includes(s), 'fetch-runtime.ps1 curl args lack ' + s);
+  }
+});
+
 // ---- README runtime values come from runtime-pins.json ----
 
 test('README runtime steps equal the rendering of runtime-pins.json, and nothing drifts', () => {
