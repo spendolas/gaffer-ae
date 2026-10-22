@@ -545,8 +545,8 @@
     cs.evalScript(jsx, function (result) {
       console.log('Gaffer: daemon spawn via ExtendScript: ' + result);
       // Launcher contract: pid:<N> runtime|node, or err:<code>.
-      var m = String(result).match(/err:(runtime-damaged|runtime-missing)/);
-      if (m) showLaunchError(m[1]);
+      var m = String(result).match(/err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)/);
+      if (m) showLaunchError(m[1] === 'launch-usage' ? 'launch-failed' : m[1]);
     });
   }
 
