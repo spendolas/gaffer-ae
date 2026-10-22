@@ -198,12 +198,25 @@
     return { action: 'wait' };
   }
 
+  // err:runtime-swap: the updater failed recovering or swapping the runtime
+  // after the daemon was stopped (or found an earlier run's half-done swap it
+  // could not undo). Unlike err:runtime the install may have changed, so the
+  // panel offers Repair afterwards (main.js showUpdateFailure).
+  function failureNeedsRepair(code) {
+    return code === 'runtime-swap';
+  }
+
   // Banner and chat-notice text for a failed update or repair. err:runtime
   // has its own text (spec Failure modes, "Both sources unreachable /
-  // update"); every other code, or none, gets the generic text naming the
-  // updater log (logPath when known, else both platforms' usual place).
+  // update"), and so does err:runtime-swap (the install may be unfinished);
+  // every other code, or none, gets the generic text naming the updater log
+  // (logPath when known, else both platforms' usual place).
   function updateFailureText(mode, code, logPath) {
     var repair = mode === 'repair';
+    if (failureNeedsRepair(code)) {
+      var h = repair ? 'Repair did not complete' : 'Update did not complete';
+      return { banner: h, notice: h + '. Your Gaffer folder may be in an unfinished state. Open Settings and click Repair, or reinstall.' };
+    }
     if (code === 'runtime') {
       return repair
         ? { banner: 'Repair failed', notice: "Repair failed: could not download Gaffer's runtime. Check your network and try again." }
@@ -222,6 +235,7 @@
     readUpdateLogSlice: readUpdateLogSlice,
     updateWaitStep: updateWaitStep,
     updateFailureText: updateFailureText,
+    failureNeedsRepair: failureNeedsRepair,
     isNewerVersion: isNewerVersion,
     parseRelease: parseRelease,
     parseReleaseCache: parseReleaseCache,

@@ -11,6 +11,8 @@ EXTRACT_DIR="$TMP_DIR/extract"
 ASSET_NAME="gaffer-update-mac.tar.gz"
 # GAFFER_UPDATE_ASSET overrides the download source with another URL or a
 # local file path. Only scripts/test-update-sh.sh and pre-release checks set it.
+# It also enables the test seams below: GAFFER_UPDATE_TEST_* and the
+# GAFFER_FETCH_* variables passed on to fetch-runtime.sh.
 ASSET_SOURCE="${GAFFER_UPDATE_ASSET:-https://github.com/spendolas/gaffer-ae/releases/latest/download/$ASSET_NAME}"
 
 LOG="${TMPDIR:-/tmp}/gaffer-update.log"
@@ -20,6 +22,9 @@ echo "=== Update started: $(date) ==="
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download, err:runtime, err:sync) or a bare ERROR line
+#                           err:runtime: the runtime could not be staged, the install is untouched
+#                           err:runtime-swap: recovering or swapping the runtime failed after the
+#                           daemon was stopped (or an earlier run left it half done): the install may be unfinished
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -402,18 +407,16 @@ acquire_lock
 test_gate "${GAFFER_UPDATE_TEST_HOLD_GATE:-}"
 
 # Stop whatever holds the daemon's WebSocket port (9823), reliable regardless
-# of how it was launched (`node index.js`, `env node index.js`, or the SEA
-# binary, or the bundled runtime running daemon.mjs). The old pattern kills (pkill -f "node.*daemon/index.js") never matched
-# the real `node index.js` cmdline, so every update left a stale daemon running.
+# of how it was launched (`node index.js`, `env node index.js`, or the
+# bundled runtime running daemon.mjs). Nothing else is stopped: no process
+# name patterns (a pattern also matches unrelated command lines, such as a
+# `tail -f /tmp/gaffer-daemon.log`).
 # Graceful first: SIGTERM lets a v0.9.5+ daemon drain in-flight work then exit;
 # SIGKILL only if it outlives the window.
 stop_daemon() {
   local pids i
   pids="$(lsof -nP -iTCP:9823 -sTCP:LISTEN -t 2>/dev/null || true)"
-  if [ -z "$pids" ]; then
-    pkill -f "gaffer-daemon" 2>/dev/null || true   # SEA binary fallback
-    return 0
-  fi
+  [ -n "$pids" ] || return 0
   echo "Stopping daemon (pids: $pids)"
   kill -TERM $pids 2>/dev/null || true
   # Wait for a graceful drain, past the 60s JSX cap the daemon honours.
@@ -536,7 +539,7 @@ swap_runtime() {
 
 if ! recover_runtime; then
   echo "ERROR: could not repair daemon/runtime from an earlier interrupted update"
-  echo "err:runtime"
+  echo "err:runtime-swap"
   exit 1
 fi
 
@@ -634,7 +637,7 @@ stop_daemon
 
 if ! swap_runtime; then
   echo "ERROR: could not move the new runtime into place"
-  echo "err:runtime"
+  echo "err:runtime-swap"
   exit 1
 fi
 

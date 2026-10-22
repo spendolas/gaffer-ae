@@ -174,3 +174,9 @@ test('readUpdateLogSince delegates to the pure slice, and the wait also checks t
   assert.ok(wait.includes('!UpdateState.lastUpdaterResult(logText)') && wait.includes('UpdateState.lastUpdaterResult(run.output)'),
     'a log with no result line must fall back to the callSystem output');
 });
+
+test('err:runtime-swap leaves the panel offering Repair (Settings button and the next run)', () => {
+  assert.ok(/if \(UpdateState\.failureNeedsRepair\(code\)\) \{\s*updateLeftUnfinished = true;/.test(fnBody('showUpdateFailure')), 'showUpdateFailure does not remember an unfinished install');
+  assert.ok(fnBody('syncSettingsUpdateButton').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
+  assert.ok(fnBody('updateRunPlan').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
+});

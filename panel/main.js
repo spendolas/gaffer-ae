@@ -2918,6 +2918,10 @@
   // what the log gains after that), and whether the updater the panel
   // started has exited. Taken BEFORE the updater starts.
   var updateRun = null;
+  // Set by an updater result err:runtime-swap (the runtime swap or recovery
+  // failed after the daemon was stopped): the install may be unfinished, so
+  // Settings offers Repair and the next run repairs. A reload clears it.
+  var updateLeftUnfinished = false;
   function beginUpdateRun(mode) {
     var run = { mode: mode, logPath: updaterLogPath(), logStart: 0, exited: false };
     if (run.logPath) {
@@ -2946,6 +2950,9 @@
   // rather than making the user hand-run a PowerShell command over chat.
   function showUpdateFailure(run, code, actionsEl) {
     updateRun = null;
+    if (UpdateState.failureNeedsRepair(code)) {
+      updateLeftUnfinished = true;
+    }
     window.__gafferUpdating = false;
     syncSettingsUpdateButton();
     var text = UpdateState.updateFailureText(run.mode, code, run.logPath);
@@ -3038,7 +3045,7 @@
   // when no newer release is there (the version will not change), else
   // 'update' (a newer release, which then also repairs).
   function updateRunPlan() {
-    var repair = UpdateState.isRepairableLaunchError(daemonLaunchCode);
+    var repair = UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished;
     var available = !!availableUpdateVersion
       && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version);
     return { repair: repair, mode: repair && !available ? 'repair' : 'update' };
@@ -4009,7 +4016,7 @@
     var action = UpdateState.settingsUpdateAction({
       available: !!availableUpdateVersion
         && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version),
-      repairable: UpdateState.isRepairableLaunchError(daemonLaunchCode),
+      repairable: UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished,
       updating: !!window.__gafferUpdating,
       dev: !!isDevInstall
     });
