@@ -195,7 +195,17 @@ test('no stamp, placeholder pin (darwin-arm64): skips the hash, logs it, still c
   assert.equal(r.kind, 'runtime');
   assert.equal(hashed(), 0);
   assert.ok(r.notes.some((n) => /placeholder|pending/i.test(n)), JSON.stringify(r.notes));
-  assert.match(writes[MAC_STAMP], /^122545856 /);
+  assert.equal(writes[MAC_STAMP], undefined, "no stamp for a placeholder pin, so a later run re-evaluates");
+});
+
+test("no stamp, pin that is neither 64 hex nor the exact placeholder: runtime-damaged", () => {
+  for (const bad of ["pending", "PENDING-FIRST-ACCEPTANCE-RUN ", "<6f320694...f329>", "", null]) {
+    const pins = { node: { platforms: { "darwin-x64": { binaryBytes: 125715808, binarySha256: bad } } } };
+    const { r, writes, hashed } = mac({ [MAC_BIN]: { size: 125715808 }, [MAC_BUNDLE]: { size: 10 } }, { pins });
+    assert.equal(r.error, "runtime-damaged", String(bad));
+    assert.equal(hashed(), 0);
+    assert.equal(writes[MAC_STAMP], undefined);
+  }
 });
 
 test('no stamp and no pins available: runtime-damaged (cannot verify)', () => {
@@ -383,7 +393,8 @@ test('cleanDaemonEnv on POSIX is case-sensitive (a lower-case name is a differen
 test('launchNotice: Failure-modes texts, no em or en dashes', () => {
   assert.equal(L.launchNotice('runtime-damaged'), "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall.");
   assert.equal(L.launchNotice('runtime-missing'), "Gaffer's runtime is missing. Open Settings and run Update, or reinstall.");
-  for (const c of ['runtime-damaged', 'runtime-missing', 'other']) assert.ok(!/[\u2013\u2014]/.test(L.launchNotice(c)));
+  assert.match(L.launchNotice('launch-failed'), /^Gaffer could not start its daemon\./);
+  for (const c of ['runtime-damaged', 'runtime-missing', 'launch-failed', 'other']) assert.ok(!/[\u2013\u2014]/.test(L.launchNotice(c)));
 });
 
 // ── main.js / index.html wiring (text-level, main.js has no unit harness) ──
@@ -406,4 +417,9 @@ test('main.js launches through GafferLaunch with the spec spawn shape', () => {
     assert.ok(main.includes(needed), 'main.js is missing ' + needed);
   }
   assert.ok(!/STRICT/.test(main), 'the PoC STRICT switch must not ship');
+  const start = main.slice(main.indexOf('function startDaemon()'));
+  assert.ok(start.indexOf("setStatus('starting'") < start.indexOf('spawnViaNode()'), 'starting status must show before the first-run hash');
+  const launch = main.slice(main.indexOf('function launchDaemon('), main.indexOf('function showLaunchError('));
+  assert.ok(/finally\s*\{[^}]*closeSync\(fd\)/.test(launch), 'log fd closed in finally');
+  assert.ok(main.includes("showLaunchError('launch-failed')"), 'unexpected exceptions show a notice');
 });
