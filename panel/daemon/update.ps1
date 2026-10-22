@@ -1,5 +1,8 @@
 ﻿# Gaffer update script (Windows): downloads the latest GitHub release asset,
-# replaces panel files, preserves user data, restarts daemon.
+# stages the pinned Node runtime when the release needs a new one (with the
+# archive's own fetch-runtime.ps1), replaces panel files, preserves user
+# data, restarts daemon. No npm: the daemon is one bundled file (daemon.mjs)
+# run by daemon\runtime\node.exe.
 # Windows PowerShell 5.1 compatible. Keep this file ASCII-only with a UTF-8
 # BOM (node scripts/check-ps-encoding.mjs).
 $ErrorActionPreference = "Stop"
@@ -25,7 +28,8 @@ Write-Host "=== Update started: $(Get-Date) ==="
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download,
-#                           err:sync, err:npm) after an ERROR line
+#                           err:sync, err:runtime) after an ERROR line
+#                           (err:runtime before the swap: install untouched)
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
 
@@ -85,6 +89,9 @@ $stuckAfter = 900
 #   GAFFER_UPDATE_TEST_MARKER_GATE  after judging the takeover marker stale,
 #                                   before renaming it away
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
+#   GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames (runtime
+#                                   moved aside, runtime.new not yet in), so
+#                                   the harness can kill an updater there
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder created after the lock,
@@ -235,8 +242,8 @@ function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, 
     return @($found.Values)
 }
 
-# End the holder AND every process it started (its curl.exe, robocopy, npm,
-# and whatever those started); ending only the shell would orphan those.
+# End the holder AND every process it started (its curl.exe, robocopy, the
+# fetch-runtime.ps1 child, and whatever those started); ending only the shell would orphan those.
 # Order: (1) while the holder is still alive, list its descendants from
 # Win32_Process (parent pid plus creation order, see above); (2) if that
 # listing failed, taskkill /T /F the holder right now, while it is alive,
@@ -532,6 +539,43 @@ function Exit-Update([string] $message, [string] $code = "") {
     exit 1
 }
 
+# The bundled Node runtime (spec sections 3 and 6). daemon\runtime holds
+# node.exe plus VERSION ("<version> <platform>") and VERIFIED ("<size>
+# <sha256>"); fetch-runtime.ps1 -StageOnly leaves a verified, stamped copy in
+# runtime.new. All three live inside daemon\ so every rename stays on one
+# volume. A running node.exe cannot be overwritten or deleted, but its folder
+# can be renamed, so the swap is two renames and never a copy.
+$runtimeDir = Join-Path $daemonDir "runtime"
+$runtimeNew = Join-Path $daemonDir "runtime.new"
+$runtimeOld = Join-Path $daemonDir "runtime.old"
+
+function Remove-Tree([string] $path) {
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# $true when $dir\node.exe exists and its size equals the first field of
+# $dir\VERIFIED (the launcher's size check).
+function Test-RuntimeStamp([string] $dir) {
+    $exe = Join-Path $dir "node.exe"
+    $stamp = Join-Path $dir "VERIFIED"
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf) -or -not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return $false }
+    try {
+        $fields = @(([System.IO.File]::ReadAllText($stamp)).Trim() -split '\s+')
+        return ($fields.Count -ge 1 -and $fields[0] -eq [string] (Get-Item -LiteralPath $exe).Length)
+    } catch { return $false }
+}
+
+# The GAFFER_FETCH_* seams of fetch-runtime.ps1 (local archives, skipped
+# signature check) are for the test harness only, which always sets
+# GAFFER_UPDATE_ASSET. Anywhere else a stray one is dropped before the child
+# that would read it starts, so a real update always verifies for real.
+if (-not $env:GAFFER_UPDATE_ASSET) {
+    foreach ($seam in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_PINS",
+        "GAFFER_FETCH_SKIP_CODESIGN", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_NO_TAR", "GAFFER_FETCH_NO_CURL")) {
+        Remove-Item -LiteralPath "Env:\$seam" -ErrorAction SilentlyContinue
+    }
+}
+
 # Download budget: the asset is a few MB. The download goes first through the
 # curl.exe Windows ships (Windows 10 1803+, a Schannel build), with the same
 # limits as update.sh: an attempt is abandoned when the connection takes over
@@ -555,10 +599,13 @@ function Exit-Update([string] $message, [string] $code = "") {
 # budget, checked before every body read (a read may block for 20s, so the
 # last one is only started while at least 20s of the budget remain), so the
 # worst case stays at about 90 + 150 = 240s, under the curl-only worst case
-# of 270s, then extract + robocopy + npm. The panel (main.js
+# of 270s, then extract + the runtime step + robocopy. The runtime step is
+# instant when the runtime is current (no network call); a release that
+# changes the Node pin adds a download of about 30 MB with fetch-runtime.ps1's
+# own limits. The panel (main.js
 # waitForUpdatedVersion) gives up after 180s but extends once by 180s while
-# this lock is held, a 360s window; a worst-case download plus a slow npm
-# install can outlive it, and then the panel offers "Force stop & retry",
+# this lock is held, a 360s window; a worst-case download plus a runtime
+# download on a slow link can outlive it, and then the panel offers "Force stop & retry",
 # whose second updater exits busy against this lock, so a slow run is never
 # corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
 # is final: any other 4xx (403, 407, 429) is what a proxy intercepting
@@ -679,6 +726,23 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         exit 1
     }
 
+    # Recovery first (spec 6.8): an updater stopped between the two runtime
+    # renames leaves runtime.old and no runtime. Rename it back when it
+    # passes the size check; one that does not is left to the runtime step
+    # below, which provisions a fresh runtime and clears it.
+    if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {
+        if (Test-RuntimeStamp $runtimeOld) {
+            try {
+                [System.IO.Directory]::Move($runtimeOld, $runtimeDir)
+                Write-Host "Restored daemon\runtime from runtime.old (an earlier update stopped between its two renames)"
+            } catch {
+                Write-Host "Could not restore daemon\runtime from runtime.old: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Host "Found daemon\runtime.old without a runtime, but it fails the size check; the runtime step provisions a new one"
+        }
+    }
+
     # Download the release asset and extract it into a SUBFOLDER of tmpDir, so
     # the downloaded zip itself is never copied into the panel dir.
     New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
@@ -694,8 +758,15 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     } catch {
         Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
     }
-    if (-not (Test-Path "$extractDir\version.json") -or -not (Test-Path "$extractDir\daemon\index.js")) {
-        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\index.js)"
+    # New archives always carry daemon\daemon.mjs (and, for 0.11.x updaters,
+    # the daemon\index.js shim too); the runtime step needs the archive's own
+    # fetch-runtime.ps1 and runtime-pins.json.
+    if (-not (Test-Path -LiteralPath "$extractDir\version.json" -PathType Leaf) -or -not (Test-Path -LiteralPath "$extractDir\daemon\daemon.mjs" -PathType Leaf)) {
+        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\daemon.mjs)"
+    }
+    $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $extractDir "daemon\runtime-pins.json") -PathType Leaf)) {
+        Exit-Update "the release has no runtime provisioning (missing daemon\fetch-runtime.ps1 or daemon\runtime-pins.json)" "runtime"
     }
 
     # Version and commit come from the archive's own version.json, which the
@@ -730,21 +801,101 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         Copy-Item "$panelDir\.gaffer-config.json" $configBackup
     }
 
-    # Stop daemon
+    # Runtime step, BEFORE any file is replaced and while the daemon still
+    # runs (spec 6.2). The archive's fetch-runtime.ps1 compares daemon\runtime
+    # (VERSION and the VERIFIED size) with the archive's pins: current means
+    # no network call at all; otherwise it downloads, verifies (SHA-256,
+    # size, Authenticode, a smoke run that also warms up Defender) and
+    # leaves the stamped result in runtime.new. Any other outcome deletes
+    # runtime.new and ends with err:runtime, the install untouched.
+    # It runs as a child of the same PowerShell host, sharing this console
+    # (hidden when the panel started the update), so no window opens. -Into
+    # is $daemonDir, which never ends in a backslash (PowerShell quotes an
+    # argument with spaces, and a trailing backslash would escape the quote).
+    Write-Host "Checking the Node runtime..."
+    $psExe = Join-Path $PSHOME "powershell.exe"
+    if (-not (Test-Path -LiteralPath $psExe -PathType Leaf)) { $psExe = Join-Path $PSHOME "pwsh.exe" }
+    $fetchOut = @()
+    $fetchExit = -1
+    $ErrorActionPreference = "Continue"
+    try { $fetchOut = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1) }
+    catch { $fetchOut = @("could not start fetch-runtime.ps1: $($_.Exception.Message)") }
+    $fetchExit = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $fetchLines = @($fetchOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    foreach ($line in $fetchLines) { Write-Host $line }
+    $fetchLast = ""
+    if ($fetchLines.Count -gt 0) { $fetchLast = $fetchLines[$fetchLines.Count - 1] }
+    $stagedRuntime = $false
+    if ($fetchExit -eq 0 -and $fetchLast -eq "runtime:current") {
+        Write-Host "  the runtime is current, nothing to swap"
+    } elseif ($fetchExit -eq 0 -and $fetchLast -match '^runtime:installed \S+ \S+$') {
+        # Staged, swap needed. VERSION and VERIFIED are already inside.
+        if (-not (Test-RuntimeStamp $runtimeNew) -or -not (Test-Path -LiteralPath (Join-Path $runtimeNew "VERSION") -PathType Leaf)) {
+            Remove-Tree $runtimeNew
+            Exit-Update "fetch-runtime.ps1 reported a staged runtime, but daemon\runtime.new is incomplete. Your current version still works." "runtime"
+        }
+        $stagedRuntime = $true
+    } else {
+        Remove-Tree $runtimeNew
+        Exit-Update "could not download Gaffer's runtime (fetch-runtime.ps1 exit $fetchExit, last line '$fetchLast'). Your current version still works." "runtime"
+    }
+
+    # Stop daemon. It must be down before the swap (spec 6.3).
     Write-Host "Stopping daemon..."
     Stop-Daemon
+
+    # Swap the runtime: rename the current one aside, rename runtime.new
+    # into place, delete the old one. A runtime.old that is still there is a
+    # leftover locked by a node.exe that was running from it; with the
+    # daemon stopped it can usually go now. If it cannot, nothing has been
+    # replaced yet, so the update stops with err:runtime rather than mixing
+    # runtimes.
+    if ($stagedRuntime) {
+        Write-Host "Swapping in the new runtime..."
+        Remove-Tree $runtimeOld
+        if (Test-Path -LiteralPath $runtimeOld) {
+            Remove-Tree $runtimeNew
+            Exit-Update "daemon\runtime.old is still in use by a running node.exe; close After Effects and update again. Your current version still works." "runtime"
+        }
+        $hadRuntime = Test-Path -LiteralPath $runtimeDir
+        if ($hadRuntime) {
+            try { [System.IO.Directory]::Move($runtimeDir, $runtimeOld) } catch {
+                $reason = $_.Exception.Message
+                Remove-Tree $runtimeNew
+                Exit-Update "could not move the current runtime aside: $reason. Your current version still works." "runtime"
+            }
+        }
+        Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE
+        try { [System.IO.Directory]::Move($runtimeNew, $runtimeDir) } catch {
+            $reason = $_.Exception.Message
+            if ($hadRuntime -and -not (Test-Path -LiteralPath $runtimeDir)) {
+                try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}
+            }
+            Remove-Tree $runtimeNew
+            Exit-Update "could not move the new runtime into place: $reason" "runtime"
+        }
+        Remove-Tree $runtimeOld
+        if (Test-Path -LiteralPath $runtimeOld) { Write-Host "  daemon\runtime.old is still in use, it will be removed by the next update" }
+        Write-Host "  daemon\runtime is now $($fetchLast.Substring('runtime:installed '.Length))"
+    }
 
     # Replace files (preserve user data). version.json is excluded here and
     # written LAST (below): the panel reloads and the daemon self-restarts the
     # moment it changes. The usage-stats buffer and the icon cache are not in the
     # archive; excluding them also protects them from /PURGE.
+    # The runtime folders are not in the archive either: without /XD for
+    # them /PURGE deletes daemon\runtime (proven). /XD matches a folder name
+    # at any depth; nothing else in the package is called runtime*.
+    # node_modules is deliberately NOT excluded any more, so /PURGE removes
+    # the old dependency tree a 0.11.x install left behind.
     Write-Host "Replacing files..."
     # /R:2 /W:2: two retries, two seconds apart, on a file that is briefly
     # locked (an indexer, a daemon not yet gone), instead of robocopy's
     # default of a million retries at 30 seconds each.
     robocopy $extractDir $panelDir /E /PURGE /R:2 /W:2 `
         /XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json `
-        /XD node_modules dist .gaffer-icons | Out-Null
+        /XD runtime runtime.new runtime.old dist .gaffer-icons | Out-Null
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
     if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync" }
 
@@ -760,31 +911,8 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
     }
 
-    # npm install - CEP spawns this script with a STRIPPED PATH, so bare `npm`
-    # doesn't resolve when launched from the panel's Update button (manual
-    # terminal runs never hit this - which is why they always worked).
-    Write-Host "Installing daemon dependencies..."
-    $nodeDirs = @(
-        "$env:ProgramFiles\nodejs",
-        "${env:ProgramFiles(x86)}\nodejs",
-        "$env:APPDATA\npm",
-        "$env:LOCALAPPDATA\Programs\nodejs",
-        "$env:NVM_SYMLINK"
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    foreach ($d in $nodeDirs) { $env:Path = "$d;$env:Path" }
-    $npmCmd = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-    if (-not $npmCmd) { $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue).Source }
-    if (-not $npmCmd) {
-        Exit-Update "npm not found in known Node.js locations or PATH - run this script from a terminal once"
-    }
-    Write-Host "  npm: $npmCmd"
-    Push-Location $daemonDir
-    try { & $npmCmd install --omit=dev } catch {}
-    $npmExit = $LASTEXITCODE
-    Pop-Location
-    if ($npmExit -ne 0) {
-        Exit-Update "npm install failed (exit $npmExit)" "npm"
-    }
+    # No dependency install step: the release ships the daemon as one bundled
+    # file and its runtime is handled above.
 
     # Stop any daemon that respawned mid-update (panel reloads on version.json
     # change and boots a clean one)
