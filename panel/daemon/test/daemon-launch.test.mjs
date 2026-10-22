@@ -461,3 +461,83 @@ test('main.js watches the spawned runtime for a Gatekeeper kill without holding 
   assert.ok(launch.includes("showLaunchError('runtime-blocked')"), 'the notice is shown');
   assert.ok(/appendDaemonLog\(fs, \[[^\]]*runtime-blocked/.test(launch), 'a log line is written');
 });
+
+// ── whole-branch review fixes ──
+
+test('launchNotice launch-failed: names the Repair button, no em or en dashes', () => {
+  assert.equal(L.launchNotice('launch-failed'), 'Gaffer could not start its daemon. Open Settings and click Repair, or reinstall.');
+});
+
+test('spawnFailureCode: an exec failure of the bundled runtime names the runtime', () => {
+  assert.equal(typeof L.spawnFailureCode, 'function');
+  for (const code of ['EBADARCH', 'ENOEXEC', 'EACCES']) {
+    assert.equal(L.spawnFailureCode({ code }, 'runtime'), 'runtime-damaged', code);
+  }
+  // libuv has no name for these: Node throws code "Unknown system error -N".
+  assert.equal(L.spawnFailureCode({ code: 'Unknown system error -8', errno: -8 }, 'runtime'), 'runtime-damaged');
+  assert.equal(L.spawnFailureCode({ code: 'Unknown system error -86', errno: -86 }, 'runtime'), 'runtime-damaged');
+});
+
+test('spawnFailureCode: anything else, or a system node, is launch-failed', () => {
+  assert.equal(L.spawnFailureCode({ code: 'ENOENT' }, 'runtime'), 'launch-failed');
+  assert.equal(L.spawnFailureCode({ code: 'EBADARCH' }, 'node'), 'launch-failed');
+  assert.equal(L.spawnFailureCode({ code: 'EACCES' }, 'node'), 'launch-failed');
+  assert.equal(L.spawnFailureCode(new Error('x'), 'runtime'), 'launch-failed');
+  assert.equal(L.spawnFailureCode(null, 'runtime'), 'launch-failed');
+});
+
+test('gatekeeperKilled: a kill the panel made itself is not Gatekeeper', () => {
+  assert.equal(L.gatekeeperKilled({ platform: 'darwin', kind: 'runtime', code: null, signal: 'SIGKILL', elapsedMs: 300, panelKilled: true }), false);
+  assert.equal(L.gatekeeperKilled({ platform: 'darwin', kind: 'runtime', code: 137, signal: null, elapsedMs: 300, panelKilled: false }), true);
+});
+
+test('swap window: runtime missing next to runtime.old is a retry, never a system node', () => {
+  const { r } = mac({ [MAC_DIR + '/runtime.old/node']: { size: 1 }, '/usr/local/bin/node': { size: 1 }, [MAC_BUNDLE]: { size: 1 } });
+  assert.equal(r.retry, 'runtime-swapping');
+  assert.equal(r.error, undefined);
+  assert.equal(r.bin, undefined);
+  assert.ok(r.notes.some((n) => /runtime\.old/.test(n)), r.notes.join('\n'));
+});
+
+test('swap window: runtime missing next to runtime.new is a retry too (Windows as well)', () => {
+  assert.equal(mac({ [MAC_DIR + '/runtime.new/node']: { size: 1 }, '/usr/local/bin/node': { size: 1 }, [MAC_BUNDLE]: { size: 1 } }).r.retry, 'runtime-swapping');
+  const { r } = win({ [WIN_DIR + '\\runtime.old\\node.exe']: { size: 1 }, 'C:\\Program Files\\nodejs\\node.exe': { size: 1 } });
+  assert.equal(r.retry, 'runtime-swapping');
+});
+
+test('swap window: once the wait has expired the old probe applies', () => {
+  const { r } = mac({ [MAC_DIR + '/runtime.old/node']: { size: 1 }, '/usr/local/bin/node': { size: 1 }, [MAC_BUNDLE]: { size: 1 } },
+    { swapWaitExpired: true });
+  assert.equal(r.retry, undefined);
+  assert.equal(r.kind, 'node');
+  assert.equal(r.bin, '/usr/local/bin/node');
+});
+
+test('swap window: a dev install never waits', () => {
+  const { r } = mac({ [MAC_DIR + '/runtime.old/node']: { size: 1 }, '/opt/homebrew/bin/node': { size: 1 }, [MAC_INDEX]: { size: 1 } },
+    { detectDev: () => true });
+  assert.equal(r.retry, undefined);
+  assert.equal(r.kind, 'node');
+});
+
+test('main.js: a spawn that fails at exec shows a repairable notice and never claims started', () => {
+  const main = read('../../main.js');
+  const launch = main.slice(main.indexOf('function launchDaemon('), main.indexOf('function showLaunchError('));
+  assert.ok(launch.includes('Launch.spawnFailureCode('), 'the error handler maps the errno');
+  assert.ok(/function spawnFailed\(e\) \{[^}]*showLaunchError\(code\)/.test(launch), 'a failed spawn shows a notice');
+  assert.ok(/child\.on\('error'[\s\S]*?spawnFailed\(e\)/.test(launch), 'the error handler reports it');
+  assert.ok(/appendDaemonLog\(fs, \['daemon not launched: err:'/.test(launch), 'the error handler logs the failure');
+  const spawn = main.slice(main.indexOf('function spawnViaNode('), main.indexOf('function spawnViaExtendScript('));
+  assert.ok(/!child \|\| !child\.pid/.test(spawn), 'a spawn without a pid is not started');
+  assert.ok(/cp\.spawn\([\s\S]*?\} catch \(e\) \{[^}]*spawnFailed\(e\);\s*return null;/.test(launch), 'a synchronous spawn throw (ENOEXEC, EBADARCH) is reported too');
+  assert.ok(spawn.includes('launch.retry'), 'the swap-window retry is handled');
+  assert.ok(spawn.includes('swapWaitExpired'), 'the retry is bounded');
+});
+
+test('main.js: a panel-made kill suppresses the Gatekeeper notice', () => {
+  const main = read('../../main.js');
+  const launch = main.slice(main.indexOf('function launchDaemon('), main.indexOf('function showLaunchError('));
+  assert.ok(launch.includes('panelKilled:'), 'gatekeeperKilled is told about panel kills');
+  const stop = main.slice(main.indexOf('function forceStopDaemonPort('));
+  assert.ok(/daemonKilledByPanelAt = Date\.now\(\)/.test(stop.slice(0, 600)), 'forceStopDaemonPort records its kill');
+});

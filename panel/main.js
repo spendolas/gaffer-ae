@@ -400,6 +400,15 @@
   // Its code (runtime-damaged, runtime-missing, runtime-blocked, launch-failed):
   // Settings offers Repair while it is set (GafferUpdateState.isRepairableLaunchError).
   var daemonLaunchCode = null;
+  // When the panel itself last killed the daemon (forceStopDaemonPort): a
+  // SIGKILL it caused is never reported as Gatekeeper (gatekeeperKilled).
+  var daemonKilledByPanelAt = 0;
+  // Swap-window waits (GafferLaunch retry 'runtime-swapping': another panel's
+  // updater is between its runtime renames). Bounded: after SWAP_RETRY_MAX
+  // tries SWAP_RETRY_MS apart the launch resolves as before.
+  var swapRetries = 0;
+  var SWAP_RETRY_MAX = 6;
+  var SWAP_RETRY_MS = 5000;
 
   function daemonLogPath() {
     return process.platform === 'win32'
@@ -444,11 +453,23 @@
 
   // launch = { bin, args, cwd } from Launch.resolveDaemonLaunch. Spawn shape
   // per spec: detached, log opened in append mode for stdout and stderr,
-  // no console window on Windows, cleaned env.
+  // no console window on Windows, cleaned env. Returns the ChildProcess, or
+  // null when the spawn threw (the notice is already showing).
   function launchDaemon(cp, fs, launch) {
     var env = Launch.cleanDaemonEnv(process.env, process.platform);
     var fd = fs.openSync(daemonLogPath(), 'a');
     var child;
+    // A spawn that fails at exec never starts the daemon. Without a notice
+    // the panel would sit on "Disconnected" with no Repair offered and
+    // nothing retrying. Node reports it two ways: a synchronous throw for
+    // errnos libuv cannot name (ENOEXEC, macOS EBADARCH: an x64 runtime on
+    // Apple Silicon without Rosetta), or an 'error' event with no 'exit' and
+    // no pid (EACCES, ENOENT).
+    function spawnFailed(e) {
+      var code = Launch.spawnFailureCode(e, launch.kind);
+      appendDaemonLog(fs, ['daemon not launched: err:' + code + ' (' + ((e && e.code) || 'error') + ' ' + ((e && e.message) || e) + ')']);
+      showLaunchError(code);
+    }
     try {
       child = cp.spawn(launch.bin, launch.args, {
         cwd: launch.cwd,
@@ -457,16 +478,26 @@
         windowsHide: true,
         env: env,
       });
+    } catch (e) {
+      console.error('Gaffer: daemon spawn threw', e);
+      spawnFailed(e);
+      return null;
     } finally {
       try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
     }
-    child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
+    child.on('error', function (e) {
+      console.error('Gaffer: daemon spawn error', e);
+      if (child.pid) return; // a later error on a running child (kill, ipc) is not a launch failure
+      spawnFailed(e);
+    });
     // Gatekeeper refusing the runtime kills it at exec (SIGKILL / 137). An
     // exit listener holds no stdio and does not keep the daemon tied to the
-    // panel; any other exit keeps today's behaviour.
+    // panel; any other exit keeps today's behaviour. A kill the panel made
+    // (Force stop, or an updater it started) is not Gatekeeper.
     var launchedAt = Date.now();
     child.on('exit', function (code, signal) {
-      if (!Launch.gatekeeperKilled({ platform: process.platform, kind: launch.kind, code: code, signal: signal, elapsedMs: Date.now() - launchedAt })) return;
+      if (!Launch.gatekeeperKilled({ platform: process.platform, kind: launch.kind, code: code, signal: signal, elapsedMs: Date.now() - launchedAt,
+        panelKilled: daemonKilledByPanelAt >= launchedAt || !!window.__gafferUpdating })) return;
       appendDaemonLog(fs, ['daemon not running: err:runtime-blocked (runtime killed ' + (signal || 'exit ' + code) + ' ' + (Date.now() - launchedAt) + ' ms after launch, macOS Gatekeeper)']);
       showLaunchError('runtime-blocked');
     });
@@ -483,7 +514,8 @@
     try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ } // offers Repair
   }
 
-  // Returns 'started', 'refused' (a notice is showing), or false only when
+  // Returns 'started', 'refused' (a notice is showing or about to),
+  // 'retry' (swap window, a retry is scheduled), or false only when
   // CEP Node integration or GafferLaunch is unavailable (then the ExtendScript
   // route runs). Any other failure is refused with a notice: falling through
   // to the launcher scripts could bypass a runtime verdict.
@@ -511,8 +543,21 @@
         env: process.env,
         detectDev: function () { return isDevCheckoutSync(fs, extPath); },
         hashFile: function (p) { return sha256FileSync(fs, crypto, p); },
+        swapWaitExpired: swapRetries >= SWAP_RETRY_MAX,
       });
       appendDaemonLog(fs, launch.notes);
+      if (launch.retry) {
+        // Another panel's updater is swapping the runtime: not an error, try
+        // again shortly (the "Starting daemon..." status stays up).
+        swapRetries++;
+        setTimeout(function () {
+          daemonStartAttempted = false;
+          if (window.__gafferUpdating || (ws && ws.readyState === 1)) return; // ours is updating, or a daemon came up
+          startDaemon();
+        }, SWAP_RETRY_MS);
+        return 'retry';
+      }
+      swapRetries = 0;
       if (launch.error) {
         // Never fall through to the ExtendScript route: its launcher would
         // reach the same verdict, and a damaged runtime must not be bypassed.
@@ -522,6 +567,12 @@
       }
       appendDaemonLog(fs, ['launching daemon via ' + launch.kind + ': ' + launch.bin + ' ' + launch.args.join(' ') + ' (cwd ' + launch.cwd + ')']);
       var child = launchDaemon(cp, fs, launch);
+      if (!child || !child.pid) {
+        // The spawn failed at exec: the notice is showing already (a throw)
+        // or its 'error' event shows it on the next tick. Not started.
+        console.error('Gaffer: daemon spawn failed, bin=' + launch.bin);
+        return 'refused';
+      }
       console.log('Gaffer: daemon spawned, pid=' + child.pid + ' ' + launch.kind + ' bin=' + launch.bin);
       return 'started';
     } catch (e) {
@@ -567,7 +618,7 @@
     // Prefer Node spawn (works on Apple Silicon). Fall back to ExtendScript
     // system.callSystem only if CEP Node integration isn't available.
     var res = spawnViaNode();
-    if (res === 'refused') return;
+    if (res === 'refused' || res === 'retry') return;
     if (!res) spawnViaExtendScript();
   }
 
@@ -2798,6 +2849,7 @@
   // script could abort the update mid-run). Best-effort: callback always
   // fires, even if the kill itself failed or nothing was listening.
   function forceStopDaemonPort(callback) {
+    daemonKilledByPanelAt = Date.now(); // its SIGKILL must not read as Gatekeeper
     try {
       var cp = require('child_process');
       var isWin = process.platform === 'win32';
