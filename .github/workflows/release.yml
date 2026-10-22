@@ -88,7 +88,7 @@ jobs:
           set -euo pipefail
           (cd panel/daemon && npm ci && npm test)
           node scripts/check-ps-encoding.mjs
-          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs scripts/runtime-pins.test.mjs scripts/third-party-notices.test.mjs scripts/node-runtime-check.test.mjs scripts/smoke/smoke.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/package-release.test.mjs scripts/traffic-snapshot.test.mjs scripts/release-docs.test.mjs scripts/cli-contract-check.test.mjs scripts/updater-scripts.test.mjs scripts/telemetry-sheet-webhook.test.mjs scripts/runtime-pins.test.mjs scripts/third-party-notices.test.mjs scripts/node-runtime-check.test.mjs scripts/smoke/smoke.test.mjs scripts/recompute-sums.test.mjs
 
       # package-release.sh runs scripts/bundle-daemon.sh first: esbuild bundle,
       # hygiene checks (no developer paths or secret patterns), the license
@@ -375,14 +375,31 @@ jobs:
             else
               # Published release: never overwrite assets users already
               # download (a retry would otherwise swap live v0.11.x assets for
-              # new-layout archives). Upload only the missing ones.
+              # new-layout archives). Upload only the missing archives.
+              # SHA256SUMS.txt is never taken from this build: packaging is
+              # not byte-reproducible, so its hashes for the kept archives
+              # would not match what users download.
               for f in artifact/dist/*; do
-                if jq -e --arg n "$(basename "$f")" '.assets | map(.name) | index($n)' release.json > /dev/null; then
-                  echo "Keeping existing asset $(basename "$f")"
+                n="$(basename "$f")"
+                if [ "$n" = "SHA256SUMS.txt" ]; then
+                  continue
+                elif jq -e --arg n "$n" '.assets | map(.name) | index($n)' release.json > /dev/null; then
+                  echo "Keeping existing asset $n"
                 else
                   gh release upload "v$V" "$f"
                 fi
               done
+              # Recompute the sums over the release's FINAL archives (the
+              # kept ones and the ones just uploaded, as they now sit on the
+              # release) and replace SHA256SUMS.txt with them.
+              FINAL="$RUNNER_TEMP/final-assets"
+              rm -rf "$FINAL"
+              mkdir -p "$FINAL"
+              gh release download "v$V" --dir "$FINAL" \
+                -p gaffer-install-mac.tar.gz -p gaffer-install-win.zip \
+                -p gaffer-update-mac.tar.gz -p gaffer-update-win.zip
+              bash scripts/recompute-sums.sh "$FINAL"
+              gh release upload "v$V" "$FINAL/SHA256SUMS.txt" --clobber
             fi
             if [ "$(jq -r '.isDraft' release.json)" = "true" ]; then
               gh release edit "v$V" --draft=false
