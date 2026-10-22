@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { mcpUrl } from './ports.js';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
@@ -889,7 +890,7 @@ export class ChatHandler {
     // Register the gaffer MCP server inline — chat must work even when the
     // installer's `claude mcp add` step never ran (e.g. CLI installed after
     // the panel). Merges with any user-scope registration of the same name.
-    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: 'http://127.0.0.1:9824/mcp' } } }));
+    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: mcpUrl() } } }));
 
     // Build allowedTools for every call so MCP toggle changes apply
     // immediately, even on resumed sessions.

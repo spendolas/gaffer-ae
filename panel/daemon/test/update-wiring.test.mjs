@@ -3,13 +3,16 @@
 // cannot quietly bring back the commit-keyed check against main.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 const html = read('../../index.html');
 const main = read('../../main.js');
-const capture = read('../../../design/scripts/panel-capture.mjs');
+// design/ is not part of the packaged tree; skip the capture assertion there.
+const capturePath = '../../../design/scripts/panel-capture.mjs';
+const hasDesign = existsSync(fileURLToPath(new URL(capturePath, import.meta.url)));
+const capture = hasDesign ? read(capturePath) : '';
 
 test('index.html loads update-state.js before main.js', () => {
   const state = html.indexOf('<script src="update-state.js"></script>');
@@ -109,7 +112,7 @@ test('download timeouts in both updater scripts fit inside the panel give-up', (
   assert.ok(main.includes('waited >= 180000'), 'panel give-up moved; re-check the script timeouts against it');
 });
 
-test('panel-capture forces the update-available state with a version', () => {
+test('panel-capture forces the update-available state with a version', { skip: !hasDesign && 'design/ absent (packaged tree)' }, () => {
   assert.ok(capture.includes("setUpdateAvailable('99.0.0')"));
   assert.ok(!capture.includes("setUpdateAvailable('feedface')"));
 });
