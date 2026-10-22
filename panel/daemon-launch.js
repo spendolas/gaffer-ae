@@ -9,11 +9,13 @@
   'use strict';
 
   var REAL_SHA256 = /^[0-9a-f]{64}$/i;
+  var PENDING_PIN = 'PENDING-FIRST-ACCEPTANCE-RUN';
   var STRIPPED_ENV = ['NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS'];
   var CA_STASH = 'GAFFER_CLAUDE_EXTRA_CA_CERTS';
   var NOTICES = {
     'runtime-damaged': "Gaffer's runtime is damaged. Open Settings and run Update to repair it, or reinstall.",
-    'runtime-missing': "Gaffer's runtime is missing. Open Settings and run Update, or reinstall."
+    'runtime-missing': "Gaffer's runtime is missing. Open Settings and run Update, or reinstall.",
+    'launch-failed': 'Gaffer could not start its daemon. Open Settings and run Update, or reinstall.'
   };
 
   // CSInterface returns the extension path with forward slashes on Windows
@@ -64,7 +66,7 @@
   }
 
   function launchNotice(code) {
-    return NOTICES[code] || 'Gaffer could not start its daemon. Open Settings and run Update, or reinstall.';
+    return NOTICES[code] || NOTICES['launch-failed'];
   }
 
   function exists(fs, p) {
@@ -109,19 +111,21 @@
       var match = pinFor(o.pins, o.platform, size);
       if (!match) return { ok: false, reason: 'no stamp and runtime size ' + size + ' matches no pinned binary' };
       var sha = match.pin.binarySha256;
-      var recorded;
-      if (!REAL_SHA256.test(String(sha))) {
-        notes.push('runtime: pinned sha256 for ' + match.key + ' is a placeholder (' + sha + '), skipping the hash check, size matched');
-        recorded = 'unhashed';
+      if (sha === PENDING_PIN) {
+        // Only this exact literal skips the hash (the darwin-arm64 value is
+        // recorded by the first acceptance run). No stamp is written, so a
+        // later stamp-less run re-evaluates once the real pin ships.
+        notes.push('runtime: pinned sha256 for ' + match.key + ' is the placeholder ' + PENDING_PIN + ', skipping the hash check, size matched, no stamp written');
+      } else if (!REAL_SHA256.test(String(sha))) {
+        return { ok: false, reason: 'pinned sha256 for ' + match.key + ' is not a sha256 (' + sha + ')' };
       } else {
         var got;
         try { got = String(o.hashFile(bin)).toLowerCase(); } catch (e) { return { ok: false, reason: 'cannot hash runtime: ' + (e && e.message) }; }
         if (got !== String(sha).toLowerCase()) return { ok: false, reason: 'runtime sha256 ' + got + ' does not match the pin for ' + match.key };
-        recorded = got;
         notes.push('runtime: first run, sha256 matches the pin for ' + match.key);
+        try { fs.writeFileSync(stampPath, size + ' ' + got + '\n'); notes.push('runtime: wrote stamp ' + stampPath); }
+        catch (e) { notes.push('runtime: could not write the stamp (' + (e && e.message) + '), will verify again next launch'); }
       }
-      try { fs.writeFileSync(stampPath, size + ' ' + recorded + '\n'); notes.push('runtime: wrote stamp ' + stampPath); }
-      catch (e) { notes.push('runtime: could not write the stamp (' + (e && e.message) + '), will verify again next launch'); }
     }
 
     // macOS: a binary whose size checks out but lost its exec bit (copied by

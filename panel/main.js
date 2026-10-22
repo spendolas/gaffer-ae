@@ -443,18 +443,22 @@
   // per spec: detached, log opened in append mode for stdout and stderr,
   // no console window on Windows, cleaned env.
   function launchDaemon(cp, fs, launch) {
-    var fd = fs.openSync(daemonLogPath(), 'a');
     var env = Launch.cleanDaemonEnv(process.env, process.platform);
-    var child = cp.spawn(launch.bin, launch.args, {
-      cwd: launch.cwd,
-      detached: true,
-      stdio: ['ignore', fd, fd],
-      windowsHide: true,
-      env: env,
-    });
+    var fd = fs.openSync(daemonLogPath(), 'a');
+    var child;
+    try {
+      child = cp.spawn(launch.bin, launch.args, {
+        cwd: launch.cwd,
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        windowsHide: true,
+        env: env,
+      });
+    } finally {
+      try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
+    }
     child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
     child.unref();
-    try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
     return child;
   }
 
@@ -465,16 +469,24 @@
     try { showToast('error', daemonLaunchError, { duration: 0 }); } catch (e) { /* ignore */ }
   }
 
-  // Returns 'started', 'refused' (a notice is showing), or false when CEP Node
-  // integration is unavailable (then the ExtendScript route runs).
+  // Returns 'started', 'refused' (a notice is showing), or false only when
+  // CEP Node integration or GafferLaunch is unavailable (then the ExtendScript
+  // route runs). Any other failure is refused with a notice: falling through
+  // to the launcher scripts could bypass a runtime verdict.
   function spawnViaNode() {
     // Direct Node spawn — works on Apple Silicon AE where system.callSystem
     // silently fails.
     if (typeof require === 'undefined' || !Launch) return false;
+    var cp, fs, crypto;
     try {
-      var cp = require('child_process');
-      var fs = require('fs');
-      var crypto = require('crypto');
+      cp = require('child_process');
+      fs = require('fs');
+      crypto = require('crypto');
+    } catch (e) {
+      console.error('Gaffer: CEP Node modules unavailable, using the ExtendScript route:', e);
+      return false;
+    }
+    try {
       var extPath = cs.getSystemPath(SystemPath.EXTENSION);
       var daemonDir = extPath + '/daemon';
       var launch = Launch.resolveDaemonLaunch({
@@ -500,7 +512,9 @@
       return 'started';
     } catch (e) {
       console.error('Gaffer: spawnViaNode failed:', e);
-      return false;
+      appendDaemonLog(fs, ['daemon not launched: err:launch-failed (' + (e && e.message ? e.message : e) + ')']);
+      showLaunchError('launch-failed');
+      return 'refused';
     }
   }
 
@@ -531,13 +545,14 @@
     if (daemonStartAttempted) return;
     daemonStartAttempted = true;
     daemonLaunchError = null;
+    // Shown first: a stamp-less first run hashes the runtime synchronously
+    // (up to about 3 s). A refused launch replaces it with its notice.
+    setStatus('starting', 'Starting daemon...');
 
     // Prefer Node spawn (works on Apple Silicon). Fall back to ExtendScript
-    // system.callSystem if Node integration isn't available. A refused
-    // launch already shows its notice instead of "Starting daemon...".
+    // system.callSystem only if CEP Node integration isn't available.
     var res = spawnViaNode();
     if (res === 'refused') return;
-    setStatus('starting', 'Starting daemon...');
     if (!res) spawnViaExtendScript();
   }
 
