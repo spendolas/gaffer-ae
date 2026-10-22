@@ -159,6 +159,19 @@
 
 - [ ] Tests for the checker with fixtures. Validate workflow YAML (`actionlint` if present, else `node -e` YAML parse via a tiny script; do not add dependencies to the repo). Do NOT run `gh workflow run` (controller does the dry run). Commit.
 
+### Task 12: Corporate CA restore and Gatekeeper notice (found by the Task 5 review)
+
+**Files:**
+- Modify: `panel/daemon/chat-handler.js` (~line 637, the env passed to the spawned `claude`), `panel/main.js` (child exit monitoring in the launch/start path), `panel/daemon-launch.js` only if a pure helper belongs there
+- Test: `panel/daemon/test/chat-handler-ca-env.test.mjs`, additions to `panel/daemon/test/daemon-launch.test.mjs`
+
+**Interfaces:**
+- Consumes: `cleanDaemonEnv` already stashes the original `NODE_EXTRA_CA_CERTS` as `GAFFER_CLAUDE_EXTRA_CA_CERTS` in the daemon env (Task 5).
+- Produces: the `claude` child env gets `NODE_EXTRA_CA_CERTS` set to the value of `GAFFER_CLAUDE_EXTRA_CA_CERTS` when present (decision D7), and never leaks `GAFFER_CLAUDE_EXTRA_CA_CERTS` itself; the daemon's own env is unchanged. In the panel, when the daemon process spawned by `launchDaemon` exits within a few seconds of launch with signal SIGKILL or exit code 137 on macOS (Gatekeeper killing the runtime), show the notice "macOS blocked Gaffer's runtime. Reinstall Gaffer." (no em dashes) plus a log line; any other early exit keeps today's behaviour. The monitoring must not keep the panel from detaching the daemon (it must not hold stdio or prevent the daemon outliving the panel; an exit listener on the ChildProcess is fine).
+
+- [ ] Tests first: chat-handler env building as a pure function or via the existing spawn seam (set the stash var, assert the child env has the restored variable, no stash var, and that unset stays unset); pure helper for "is this exit a Gatekeeper kill" with the notice text.
+- [ ] Implement, run `cd panel/daemon && node --test test/chat-handler-ca-env.test.mjs test/daemon-launch.test.mjs test/update-wiring.test.mjs`, then the whole daemon suite once. Commit.
+
 ### Task 11: Final integration check
 
 **Files:** none new.
