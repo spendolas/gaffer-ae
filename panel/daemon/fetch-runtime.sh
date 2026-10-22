@@ -255,7 +255,10 @@ fi
 chmod 755 "$BIN" || die "cannot set the exec bit"
 
 # ---- step 7: smoke run ----
-got_ver=$("$BIN" --version 2>"$TMP/run.err" </dev/null) \
+# Variables that change how Node starts are cleared for this run only, as the
+# panel's launcher does (update.sh runs with the panel's uncleaned env, and
+# NODE_OPTIONS=--bogus alone makes node --version exit 9).
+got_ver=$(/usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_EXTRA_CA_CERTS "$BIN" --version 2>"$TMP/run.err" </dev/null) \
   || die "runtime does not run on this machine: $(head -c 200 "$TMP/run.err" | tr '\n' ' ')"
 [ "$got_ver" = "$VER" ] || die "runtime reports '$got_ver', expected $VER"
 

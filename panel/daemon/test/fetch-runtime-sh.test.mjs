@@ -711,3 +711,13 @@ test('stale gaffer-runtime temp folders older than a day are swept, others kept'
   assert.deepEqual(readdirSync(sb.tmp).sort(),
     ['gaffer-runtime-XyZ789', 'gaffer-runtime-Zz9999.txt', 'gaffer-runtime-keep-me']);
 });
+
+test('the smoke run ignores the caller\'s NODE_OPTIONS, NODE_PATH and NODE_EXTRA_CA_CERTS', (t) => {
+  // A fake runtime that fails like real Node does on a bad NODE_OPTIONS
+  // (NODE_OPTIONS=--bogus node --version exits 9), and on the other two.
+  const sb = sandbox({ binBody: `#!/bin/sh\nif [ -n "\${NODE_OPTIONS+x}\${NODE_PATH+x}\${NODE_EXTRA_CA_CERTS+x}" ]; then echo "node: bad option" >&2; exit 9; fi\necho ${VERSION}\n` });
+  t.after(sb.cleanup);
+  const r = run(sb, [], { NODE_OPTIONS: '--bogus', NODE_PATH: '/nowhere', NODE_EXTRA_CA_CERTS: '/nowhere.pem' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.last, `runtime:installed ${VERSION} ${PLAT}`);
+});
