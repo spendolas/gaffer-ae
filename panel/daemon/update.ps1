@@ -91,7 +91,9 @@ $stuckAfter = 900
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
 #   GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames (runtime
 #                                   moved aside, runtime.new not yet in), so
-#                                   the harness can kill an updater there
+#                                   the harness can kill an updater there;
+#                                   honoured only next to GAFFER_UPDATE_ASSET,
+#                                   like the stuck-age knob below
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder created after the lock,
@@ -243,7 +245,8 @@ function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, 
 }
 
 # End the holder AND every process it started (its curl.exe, robocopy, the
-# fetch-runtime.ps1 child, and whatever those started); ending only the shell would orphan those.
+# fetch-runtime.ps1 child, and whatever those started); ending only the
+# shell would orphan those.
 # Order: (1) while the holder is still alive, list its descendants from
 # Win32_Process (parent pid plus creation order, see above); (2) if that
 # listing failed, taskkill /T /F the holder right now, while it is alive,
@@ -601,13 +604,14 @@ if (-not $env:GAFFER_UPDATE_ASSET) {
 # worst case stays at about 90 + 150 = 240s, under the curl-only worst case
 # of 270s, then extract + the runtime step + robocopy. The runtime step is
 # instant when the runtime is current (no network call); a release that
-# changes the Node pin adds a download of about 30 MB with fetch-runtime.ps1's
-# own limits. The panel (main.js
+# changes the Node pin adds the Node archive download (spec section 8:
+# about 38 MB for win-x64, 94 MB once extracted; about 54 MB on macOS),
+# within fetch-runtime.ps1's own limits. The panel (main.js
 # waitForUpdatedVersion) gives up after 180s but extends once by 180s while
 # this lock is held, a 360s window; a worst-case download plus a runtime
-# download on a slow link can outlive it, and then the panel offers "Force stop & retry",
-# whose second updater exits busy against this lock, so a slow run is never
-# corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
+# download on a slow link can outlive it, and then the panel offers
+# "Force stop & retry", whose second updater exits busy against this lock,
+# so a slow run is never corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
 # is final: any other 4xx (403, 407, 429) is what a proxy intercepting
 # curl.exe answers, so those fall back like a connection failure. The .NET
 # path has nothing left to fall back to, so every 4xx is final there. Both
@@ -815,17 +819,28 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     Write-Host "Checking the Node runtime..."
     $psExe = Join-Path $PSHOME "powershell.exe"
     if (-not (Test-Path -LiteralPath $psExe -PathType Leaf)) { $psExe = Join-Path $PSHOME "pwsh.exe" }
-    $fetchOut = @()
+    # Each line goes to the transcript as it arrives (so the log shows the
+    # download's progress even if this updater is killed mid-way) and is
+    # also collected for the last-line parse below.
+    $fetchLines = @()
     $fetchExit = -1
     $ErrorActionPreference = "Continue"
-    try { $fetchOut = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1) }
-    catch { $fetchOut = @("could not start fetch-runtime.ps1: $($_.Exception.Message)") }
-    $fetchExit = $LASTEXITCODE
+    try {
+        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1 |
+            ForEach-Object { $l = "$_".Trim(); if ($l) { Write-Host $l; $l } })
+        $fetchExit = $LASTEXITCODE
+    } catch {
+        $fetchLines = @("runtime: ERROR: could not start fetch-runtime.ps1: $($_.Exception.Message)")
+        Write-Host $fetchLines[0]
+    }
     $ErrorActionPreference = "Stop"
-    $fetchLines = @($fetchOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-    foreach ($line in $fetchLines) { Write-Host $line }
     $fetchLast = ""
     if ($fetchLines.Count -gt 0) { $fetchLast = $fetchLines[$fetchLines.Count - 1] }
+    # The child's own reason, for the ERROR line: its last "runtime: ERROR:"
+    # line (download, checksum, signature, smoke run, disk), else a generic one.
+    $fetchReason = "runtime staging failed: fetch-runtime.ps1 exit $fetchExit, last line '$fetchLast'"
+    $errLines = @($fetchLines | Where-Object { $_ -like "runtime: ERROR: *" })
+    if ($errLines.Count -gt 0) { $fetchReason = "runtime staging failed: " + $errLines[$errLines.Count - 1].Substring("runtime: ERROR: ".Length).TrimEnd('.') }
     $stagedRuntime = $false
     if ($fetchExit -eq 0 -and $fetchLast -eq "runtime:current") {
         Write-Host "  the runtime is current, nothing to swap"
@@ -838,7 +853,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         $stagedRuntime = $true
     } else {
         Remove-Tree $runtimeNew
-        Exit-Update "could not download Gaffer's runtime (fetch-runtime.ps1 exit $fetchExit, last line '$fetchLast'). Your current version still works." "runtime"
+        Exit-Update "$fetchReason. Your current version still works." "runtime"
     }
 
     # Stop daemon. It must be down before the swap (spec 6.3).
@@ -866,7 +881,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
                 Exit-Update "could not move the current runtime aside: $reason. Your current version still works." "runtime"
             }
         }
-        Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE
+        if ($env:GAFFER_UPDATE_ASSET) { Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE }
         try { [System.IO.Directory]::Move($runtimeNew, $runtimeDir) } catch {
             $reason = $_.Exception.Message
             if ($hadRuntime -and -not (Test-Path -LiteralPath $runtimeDir)) {

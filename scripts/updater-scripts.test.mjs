@@ -594,12 +594,17 @@ test('update.ps1 stages the runtime with -StageOnly while the daemon runs, then 
   const version = at('Move-Item -LiteralPath $versionTmp -Destination "$panelDir\\version.json" -Force');
   assert.ok(at('Get-ReleaseAsset $assetSource $zipPath') < stage, 'the archive is extracted first');
   assert.ok(stage < stop && stop < aside && aside < swapIn && swapIn < robo && robo < version, 'order: stage, stop daemon, swap, sync, version.json last');
-  assert.ok(ps1Body.includes('$ErrorActionPreference = "Continue"\n    try { $fetchOut = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1) }'), 'native stderr from the child cannot abort the update');
+  assert.ok(ps1Body.includes('$ErrorActionPreference = "Continue"\n    try {\n        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1 |'), 'native stderr from the child cannot abort the update');
+  assert.ok(ps1Body.includes('ForEach-Object { $l = "$_".Trim(); if ($l) { Write-Host $l; $l } })\n        $fetchExit = $LASTEXITCODE'), 'each child line is logged as it arrives and collected; the exit code is read right after');
+  assert.ok(!ps1Body.includes('$fetchOut'), 'no collect-then-print left');
   assert.ok(ps1Body.includes('$psExe = Join-Path $PSHOME "powershell.exe"'), 'the child is the same PowerShell, sharing the (hidden) console');
   assert.ok(!/-Into "[^"]*\\"/.test(ps1Code), 'never a quoted -Into ending in a backslash');
   assert.ok(ps1Body.includes('if ($fetchExit -eq 0 -and $fetchLast -eq "runtime:current") {'), 'runtime:current means nothing to swap');
   assert.ok(ps1Body.includes("} elseif ($fetchExit -eq 0 -and $fetchLast -match '^runtime:installed \\S+ \\S+$') {"), 'runtime:installed means staged, swap needed');
-  assert.ok(/\} else \{\n\s*Remove-Tree \$runtimeNew\n\s*Exit-Update "could not download Gaffer's runtime[^\n]*Your current version still works\." "runtime"/.test(ps1Body), 'any other result deletes runtime.new and ends with err:runtime');
+  assert.ok(/\} else \{\n\s*Remove-Tree \$runtimeNew\n\s*Exit-Update "\$fetchReason\. Your current version still works\." "runtime"/.test(ps1Body), 'any other result deletes runtime.new and ends with err:runtime');
+  assert.ok(ps1Body.includes('$errLines = @($fetchLines | Where-Object { $_ -like "runtime: ERROR: *" })'), 'the ERROR line carries the child\'s own last runtime: ERROR reason');
+  assert.ok(ps1Body.includes('$fetchReason = "runtime staging failed: fetch-runtime.ps1 exit $fetchExit, last line \'$fetchLast\'"'), 'a generic reason when the child printed none');
+  assert.ok(!ps1Body.includes("could not download Gaffer's runtime"), 'no blanket download message for every cause');
   assert.ok(ps1Body.includes('if (-not (Test-RuntimeStamp $runtimeNew)'), 'a staged runtime.new is size-checked before it is trusted');
 });
 
@@ -607,7 +612,10 @@ test('update.ps1 swaps by renaming aside (never copying), puts the old runtime b
   const swap = ps1Body.split('if ($stagedRuntime) {')[1].split('\n    }\n')[0];
   assert.ok(swap.indexOf('Remove-Tree $runtimeOld') < swap.indexOf('[System.IO.Directory]::Move($runtimeDir, $runtimeOld)'), 'a leftover runtime.old is cleared first');
   assert.ok(swap.includes('daemon\\runtime.old is still in use by a running node.exe'), 'a runtime.old that cannot be cleared stops the update before any rename');
-  const gate = swap.indexOf('Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE');
+  const gate = swap.indexOf('if ($env:GAFFER_UPDATE_ASSET) { Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE }');
+  assert.ok(gate !== -1, 'the swap gate is honoured only next to GAFFER_UPDATE_ASSET (like the stuck-age knob)');
+  const gateLines = ps1Code.split('\n').filter((l) => l.includes('GAFFER_UPDATE_TEST_SWAP_GATE'));
+  assert.ok(gateLines.length > 0 && gateLines.every((l) => l.includes('$env:GAFFER_UPDATE_ASSET')), 'every read of the swap gate is gated on GAFFER_UPDATE_ASSET');
   assert.ok(swap.indexOf('Move($runtimeDir, $runtimeOld)') < gate && gate < swap.indexOf('Move($runtimeNew, $runtimeDir)'), 'the swap gate sits between the two renames');
   assert.ok(swap.includes('try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}'), 'a failed second rename puts the old runtime back');
   assert.ok(swap.includes('it will be removed by the next update'), 'a locked runtime.old after the swap is left and logged');
@@ -661,6 +669,17 @@ test('the Windows field harness for the runtime step covers the spec 8 flows and
   assert.ok(t6.includes('old daemon\\node_modules removed by the sync'));
   assert.ok(t6.includes('Write-Host "ALL PASS"; exit 0'));
   assert.ok(!/&&|\|\|/.test(t6.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'no PS 7 chain operators');
+});
+
+test('test-5 never lets the updater fetch the real runtime and requires a zero-dependency release zip', () => {
+  const t5 = readFileSync(fileURLToPath(new URL('./windows-tests/test-5-update-ps1.ps1', import.meta.url)), 'utf8');
+  for (const s of ['$env:GAFFER_FETCH_TEST = "1"', '$env:GAFFER_FETCH_PINS = $fxPinsPath', '$env:GAFFER_FETCH_BASE_OFFICIAL = $fxBase', '$env:GAFFER_FETCH_BASE_MIRROR = $fxBase']) {
+    assert.ok(t5.includes(s), 'test-5 is missing ' + s);
+  }
+  assert.ok(t5.includes('MUST be a zero-dependency build'), 'the header says -ReleaseZip must be a zero-dependency build');
+  assert.ok(t5.includes('ABORT: -ReleaseZip is not a zero-dependency build'), 'and it checks');
+  assert.ok(!/NodeDir/.test(t5), 'the -NodeDir (npm on PATH) input is gone');
+  assert.ok(!/npm/i.test(t5.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'no npm in test-5 code');
 });
 
 test('update.ps1 keeps the v0.11.3 lock, process-tree and hand-run-terminal rules and stays PowerShell 5.1 syntax', () => {
