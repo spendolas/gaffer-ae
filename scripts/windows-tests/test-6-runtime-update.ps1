@@ -361,7 +361,7 @@ try {
     if ($code -eq 1) { Pass "3: update.ps1 exited 1" } else { Fail "3: update.ps1 exited $code, expected 1" }
     $last = Get-LastLogLine
     if ($last -eq "err:runtime") { Pass "3: log ends with err:runtime" } else { Fail "3: last log line: $last" }
-    if ($log -match "ERROR: could not download Gaffer's runtime") { Pass "3: an ERROR line precedes err:runtime" } else { Fail "3: no ERROR line for the runtime failure" }
+    if ($log -match "ERROR: runtime staging failed: could not download the Node runtime from nodejs\.org or the Gaffer mirror") { Pass "3: the ERROR line carries fetch-runtime.ps1's own reason" } else { Fail "3: no ERROR line with the staging reason" }
     if ($log -match "official download failed, using the mirror") { Pass "3: the mirror was tried after the official source" } else { Fail "3: no mirror attempt in the log" }
     if ($log -notmatch "Stopping daemon\.\.\.") { Pass "3: the daemon was never stopped" } else { Fail "3: the daemon was stopped before the failure" }
     if ((Get-TreeHash $c3) -eq $before) { Pass "3: the whole install is byte-identical (runtime and node_modules included)" } else { Fail "3: the install changed" }

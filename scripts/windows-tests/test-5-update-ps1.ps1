@@ -48,23 +48,42 @@
 # live daemon without touching it, pass -ShimDaemonStop: each scratch
 # install then gets a no-op stop-daemon.ps1 instead of the real one, so the
 # updater's Stop-Daemon finds nothing to stop (the twin of the Mac harness's
-# GAFFER_TEST_SHIM_DAEMON_STOP). Everything else (download, robocopy, npm
-# install, lock) is exercised for real.
+# GAFFER_TEST_SHIM_DAEMON_STOP). Everything else (download, runtime step,
+# robocopy, lock) is exercised for real.
+#
+# Zero-dependency updater: there is no npm step any more. Every successful
+# run stages the Node runtime (the old install has none), so this harness
+# never lets the updater reach nodejs.org: it sets fetch-runtime.ps1's
+# GAFFER_FETCH_* test seams for every run (update.ps1 passes them on because
+# GAFFER_UPDATE_ASSET is set) to a local zip of -NodeExe served as a file://
+# URL, with pins written to match. The runtime step itself is covered in
+# depth by test-6-runtime-update.ps1.
 #
 # Inputs, built on the Mac (see the implementation plan):
-#   -UpdateScriptDir  folder with the NEW update.ps1 and stop-daemon.ps1
+#   -UpdateScriptDir  folder with the NEW update.ps1, stop-daemon.ps1 and
+#                     fetch-runtime.ps1
 #   -OldInstallZip    git archive --format=zip -o old-install.zip ce16c2f:panel
-#   -ReleaseZip       gaffer-update-win.zip from scripts/package-release.sh
-#   -NodeDir          optional folder holding node.exe / npm.cmd to put on PATH
+#   -ReleaseZip       gaffer-update-win.zip from scripts/package-release.sh,
+#                     which MUST be a zero-dependency build (daemon\daemon.mjs,
+#                     daemon\fetch-runtime.ps1 and daemon\runtime-pins.json
+#                     inside): the new updater refuses any other archive
+#   -NodeExe          a node.exe served as the runtime (default: node.exe on
+#                     PATH); an OpenJS-signed one keeps the Authenticode
+#                     check on, any other runs with it skipped (NOTE line)
 #   -ShimDaemonStop   leave a running daemon alone (see above)
 #
+# Cases 3b and 3c download the LATEST PUBLISHED release through the system
+# proxy path. While that release is still a pre-zero-dependency one, the new
+# updater refuses it after the download (no daemon\daemon.mjs); those cases
+# then check the refusal instead of ok: and say so in a NOTE line.
+#
 # Run:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-5-update-ps1.ps1 -UpdateScriptDir <dir> -OldInstallZip <zip> -ReleaseZip <zip> [-NodeDir <dir>] [-ShimDaemonStop]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-5-update-ps1.ps1 -UpdateScriptDir <dir> -OldInstallZip <zip> -ReleaseZip <zip> [-NodeExe <node.exe>] [-ShimDaemonStop]
 param(
     [Parameter(Mandatory = $true)][string] $UpdateScriptDir,
     [Parameter(Mandatory = $true)][string] $OldInstallZip,
     [Parameter(Mandatory = $true)][string] $ReleaseZip,
-    [string] $NodeDir = "",
+    [string] $NodeExe = "",
     [switch] $ShimDaemonStop
 )
 $ErrorActionPreference = "Stop"
@@ -84,17 +103,62 @@ if (-not (Select-String -Path (Join-Path $UpdateScriptDir "update.ps1") -Pattern
     Write-Host "FAIL: update.ps1 does not honor GAFFER_UPDATE_ASSET (still the main-archive updater)"
     exit 1
 }
-if ($NodeDir) { $env:Path = "$NodeDir;$env:Path" }
+if (-not $NodeExe) {
+    $nodeCmd = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($nodeCmd) { $NodeExe = $nodeCmd.Source }
+}
+if (-not $NodeExe -or -not (Test-Path -LiteralPath $NodeExe -PathType Leaf)) { Write-Host "ABORT: no node.exe for the runtime fixture; pass -NodeExe"; exit 2 }
 
 $scratch = Join-Path $env:TEMP ("gaffer-update-test-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path "$scratch\tmp" -Force | Out-Null
 $expected = Join-Path $scratch "expected"
 Expand-Archive -Path $ReleaseZip -DestinationPath $expected -Force
+foreach ($need in @("daemon\daemon.mjs", "daemon\fetch-runtime.ps1", "daemon\runtime-pins.json")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $expected $need))) { Write-Host "ABORT: -ReleaseZip is not a zero-dependency build (no $need)"; exit 2 }
+}
+
+# Runtime fixture: a zip of -NodeExe under the pinned member path, served as a
+# file:// URL, and pins that match it. Set for every run below (each child
+# PowerShell inherits it); removed in the finally at the bottom.
+$fxVersion = (& $NodeExe --version).Trim()
+$fxTop = "node-$fxVersion-win-x64"
+$fxDir = Join-Path $scratch "runtime-fixture"
+New-Item -ItemType Directory -Path (Join-Path $fxDir "src\$fxTop"), (Join-Path $fxDir "serve") -Force | Out-Null
+Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $fxDir "src\$fxTop\node.exe")
+$fxZip = Join-Path $fxDir "serve\$fxTop.zip"
+& (Join-Path $env:SystemRoot "System32\tar.exe") -a -c -f $fxZip -C (Join-Path $fxDir "src") "$fxTop/node.exe"
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $fxZip)) { Write-Host "ABORT: could not build the runtime fixture zip with tar.exe"; exit 2 }
+$fxPins = @{ node = @{
+    version = $fxVersion; codename = "Test"
+    official = "https://example.invalid/official/"; mirror = "https://example.invalid/mirror/"
+    platforms = @{ "win-x64" = @{
+        archive = "$fxTop.zip"; archiveSha256 = (Get-FileHash -LiteralPath $fxZip -Algorithm SHA256).Hash.ToLowerInvariant()
+        member = "$fxTop/node.exe"; binaryBytes = (Get-Item -LiteralPath $NodeExe).Length
+        binarySha256 = (Get-FileHash -LiteralPath $NodeExe -Algorithm SHA256).Hash.ToLowerInvariant() } }
+    signing = @{ darwinTeamId = "HX7739G8FX"; windowsSigner = "OpenJS Foundation" }
+} }
+$fxPinsPath = Join-Path $fxDir "pins.json"
+[System.IO.File]::WriteAllText($fxPinsPath, ($fxPins | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+$fxBase = ([System.Uri] ((Join-Path $fxDir "serve") + "\")).AbsoluteUri
+$env:GAFFER_FETCH_TEST = "1"
+$env:GAFFER_FETCH_PINS = $fxPinsPath
+$env:GAFFER_FETCH_PLATFORM = "win-x64"
+$env:GAFFER_FETCH_BASE_OFFICIAL = $fxBase
+$env:GAFFER_FETCH_BASE_MIRROR = $fxBase
+$fxSig = Get-AuthenticodeSignature -LiteralPath $NodeExe
+if ($fxSig.Status -ne "Valid" -or -not $fxSig.SignerCertificate -or $fxSig.SignerCertificate.Subject -notmatch "OpenJS Foundation") {
+    $env:GAFFER_FETCH_SKIP_CODESIGN = "1"
+    Write-Host "NOTE: $NodeExe is not OpenJS-signed (status $($fxSig.Status)); the Authenticode check is skipped"
+}
+Write-Host "Runtime fixture: $fxVersion from $NodeExe (served from $fxBase)"
 
 function New-TestInstall([string] $dir) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     Expand-Archive -Path $OldInstallZip -DestinationPath $dir -Force
     Copy-Item (Join-Path $UpdateScriptDir "update.ps1") (Join-Path $dir "daemon\update.ps1") -Force
+    # update.ps1 runs the ARCHIVE's fetch-runtime.ps1; this copy only keeps
+    # the installed folder consistent with the scripts under test.
+    Copy-Item (Join-Path $UpdateScriptDir "fetch-runtime.ps1") (Join-Path $dir "daemon\fetch-runtime.ps1") -Force
     if ($ShimDaemonStop) {
         # Same signature as the real one; finds nothing to stop.
         Set-Content -LiteralPath (Join-Path $dir "daemon\stop-daemon.ps1") -Value "function Stop-Daemon { param([int[]] `$ProcIds = `$null) }"
@@ -153,7 +217,7 @@ function Get-LastLogLine {
 }
 # A long-lived process whose command line contains "daemon\update.ps1",
 # which is what the lock's liveness check looks for. Like a real stuck
-# updater it has a long-lived child (its curl.exe, robocopy or npm) which in
+# updater it has a long-lived child (its curl.exe, robocopy or runtime step) which in
 # turn has a child (a grandchild sleep), and records their pids in
 # $scratch\fake\child.pid and grandchild.pid. -ForwardSlash launches it by
 # a "daemon/update.ps1" path, as the panel's ExtendScript fallback does;
@@ -316,7 +380,7 @@ try {
     # Cases 1 and 2 hand update.ps1 a local file. Real users always hit the
     # URL branch: Test-Path must treat "https://..." as not-a-file without
     # raising, and Invoke-WebRequest's 404 must land in the catch. Needs
-    # internet access, like the npm install in Case 1.
+    # internet access (GitHub only; the runtime never comes from the net).
     $missing = Join-Path $scratch "Application Data\missing\com.gaffer.panel"
     New-TestInstall $missing
     $notFoundUrl = "https://github.com/spendolas/gaffer-ae/releases/download/v0.0.0/nope.zip"
@@ -339,12 +403,29 @@ try {
     # A 404 is final: curl.exe must not hand it to the system proxy path.
     if ($log404 -notmatch "trying the system proxy path") { Pass "404 from curl.exe did not fall back to the system proxy path" } else { Fail "404 from curl.exe fell back to the system proxy path" }
 
+    # Judges a run against the latest PUBLISHED release (cases 3b, 3c). A
+    # zero-dependency release must install (ok:, daemon\daemon.mjs). A
+    # pre-zero-dependency one is refused by the new updater after its
+    # download: that still proves the system proxy path fetched it.
+    function Test-LatestOutcome([int] $code, [string] $log, [string] $dir, [string] $label) {
+        if ($log -match "missing version\.json or daemon\\daemon\.mjs") {
+            Write-Host "NOTE: $label`: the latest published release is not a zero-dependency build; checking the refusal instead of ok:"
+            if ($code -ne 0 -and $log -notmatch "download or extract failed") { Pass "$label`: the system proxy path downloaded the latest release, the new updater refused its old layout" } else { Fail "$label`: exit $code, the download did not complete; log: $logPath" }
+            return
+        }
+        if ($code -eq 0) { Pass "$label`: system proxy path downloaded the latest release and update.ps1 exited 0" } else { Fail "$label`: update.ps1 exited $code on the system proxy path (offline?); log: $logPath" }
+        $lastLine = Get-LastLogLine
+        if ($lastLine -match "^ok:\d+\.\d+\.\d+") { Pass "$label`: ends with $lastLine" } else { Fail "$label`: last log line: $lastLine" }
+        if (Test-Path -LiteralPath (Join-Path $dir "daemon\daemon.mjs")) { Pass "$label`: installed the release files" } else { Fail "$label`: left no daemon\daemon.mjs" }
+    }
+
     # ---------- Case 3b: a curl.exe failure falls back to the system proxy path ----------
     # curl.exe ignores the WinINET proxy and fails on blocked revocation
     # checks, so a non-4xx curl failure must fall back to the .NET download.
     # GAFFER_UPDATE_CURL points update.ps1 at a stand-in that fails like a
     # curl that cannot connect (exit 7); the fallback then downloads the real
-    # latest release asset from GitHub and the update completes with it.
+    # latest release asset from GitHub (see Test-LatestOutcome for what is
+    # expected of it).
     $fallback = Join-Path $scratch "Application Data\fallback\com.gaffer.panel"
     New-TestInstall $fallback
     $fakeCurl = Join-Path $scratch "curl-fail.cmd"
@@ -356,10 +437,7 @@ try {
     $logFallback = ""
     if (Test-Path -LiteralPath $logPath) { $logFallback = Get-Content -LiteralPath $logPath -Raw }
     if ($logFallback -match "curl\.exe could not download the asset \(curl\.exe exit 7") { Pass "curl.exe failure (exit 7) was logged and handed to the system proxy path" } else { Fail "no fallback line in the log; log: $logPath" }
-    if ($code -eq 0) { Pass "system proxy path downloaded the latest release and update.ps1 exited 0" } else { Fail "update.ps1 exited $code on the system proxy path (offline?); log: $logPath" }
-    $last = Get-LastLogLine
-    if ($last -match "^ok:\d+\.\d+\.\d+") { Pass "fallback run ends with $last" } else { Fail "fallback run last log line: $last" }
-    if (Test-Path -LiteralPath (Join-Path $fallback "daemon\index.js")) { Pass "fallback run installed the release files" } else { Fail "fallback run left no daemon\index.js" }
+    Test-LatestOutcome $code $logFallback $fallback "fallback run"
     if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after the fallback run" } else { Pass "update lock released after the fallback run" }
 
     # ---------- Case 3c: a 403 from curl.exe is a proxy answer, not a missing asset: fall back ----------
@@ -378,7 +456,7 @@ try {
     $log403 = ""
     if (Test-Path -LiteralPath $logPath) { $log403 = Get-Content -LiteralPath $logPath -Raw }
     if ($log403 -match "curl\.exe could not download the asset \(curl\.exe exit 22 : curl: \(22\) The requested URL returned error: 403\s*\), trying the system proxy path") { Pass "403 from curl.exe was handed to the system proxy path" } else { Fail "403 from curl.exe did not fall back; log: $logPath" }
-    if ($code -eq 0) { Pass "system proxy path completed the update after curl's 403" } else { Fail "update.ps1 exited $code after curl's 403 (offline?); log: $logPath" }
+    Test-LatestOutcome $code $log403 $forbidden "403 run"
     if (Test-Path -LiteralPath $lockPath) { Fail "update lock left behind after the 403 run" } else { Pass "update lock released after the 403 run" }
 
     # ---------- Case 4: a second updater exits busy while a live one holds the lock ----------
@@ -648,7 +726,7 @@ try {
     if ($logOld -match "stopping the stuck update and its (\d+) descendant process\(es\)" -and [int] $Matches[1] -ge 2) { Pass "descendants were enumerated through Win32_Process ($($Matches[1]) found)" } else { Fail "no descendant enumeration line (or fewer than 2 found) in the log" }
     if ($logOld -notmatch "using taskkill /T") { Pass "taskkill /T fallback was not needed" } else { Fail "the taskkill /T fallback ran" }
     if (Get-Process -Id $fake.Id -ErrorAction SilentlyContinue) { Fail "stuck holder (pid $($fake.Id)) is still alive after the takeover" } else { Pass "stuck holder was stopped before the takeover" }
-    # The holder's child (its curl.exe, robocopy or npm) and grandchild must go with it, not be orphaned.
+    # The holder's child (its curl.exe, robocopy or runtime step) and grandchild must go with it, not be orphaned.
     $childId = Get-FakeUpdaterChildId
     $grandchildId = Get-FakeUpdaterGrandchildId
     if ($childId -gt 0 -and -not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) { Pass "stuck holder's child (pid $childId) was stopped too" } else { Fail "stuck holder's child (pid $childId) is still alive after the takeover" }
@@ -917,6 +995,7 @@ try {
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue
+    foreach ($v in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN")) { Remove-Item "Env:\$v" -ErrorAction SilentlyContinue }
     foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE", "GAFFER_UPDATE_TEST_STUCK_AFTER", "GAFFER_UPDATE_TEST_FAIL_LIST")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 }
