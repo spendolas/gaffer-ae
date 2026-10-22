@@ -263,6 +263,13 @@ try {
     if (-not $archive -or -not $archiveSha -or -not $member -or $binaryBytes -le 0 -or -not $binarySha -or -not $version -or -not $signer) {
         Exit-Fail "pins file is incomplete for $platform"
     }
+    # The binary hash is either 64 hex digits or exactly the placeholder
+    # literal (as in fetch-runtime.sh, start.ps1 and daemon-launch.js); any
+    # other value is a damaged pins file.
+    $binaryShaPending = ([string] $entry.binarySha256) -ceq "PENDING-FIRST-ACCEPTANCE-RUN"
+    if (-not $binaryShaPending -and $binarySha -notmatch '^[0-9a-f]{64}$') {
+        Exit-Fail "bad binary SHA-256 in pins"
+    }
     if ($archive -match '[\\/]|\.\.') { Exit-Fail "bad archive name in pins" }
     if ($member -match '\\|\.\.|^/|:' -or $member -notmatch '^[^/]+/[^/]+\.exe$') { Exit-Fail "bad member path in pins" }
     $binaryName = Split-Path -Leaf ($member -replace '/', '\')
@@ -457,9 +464,9 @@ try {
     $newSize = (Get-Item -LiteralPath $newExe).Length
     if ($newSize -ne $binaryBytes) { Exit-Fail "$binaryName is $newSize bytes, expected $binaryBytes" }
     $newSha = Get-Sha256 $newExe
-    # A value that is not 64 hex digits is the placeholder
-    # (PENDING-FIRST-ACCEPTANCE-RUN): skip the hash, keep size and signature.
-    if ($binarySha -notmatch '^[0-9a-f]{64}$') {
+    # The placeholder (PENDING-FIRST-ACCEPTANCE-RUN, checked above): skip
+    # the hash, keep size and signature.
+    if ($binaryShaPending) {
         Write-Step "binary SHA-256 not pinned yet ($($entry.binarySha256)), skipping the binary hash check (size and signature still checked); got $newSha"
     } elseif ($newSha -ne $binarySha) {
         Exit-Fail "$binaryName SHA-256 is $newSha, expected $binarySha"

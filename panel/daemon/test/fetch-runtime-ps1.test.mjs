@@ -47,6 +47,17 @@ describe('fetch-runtime.ps1 static checks', () => {
     assert.ok(code.includes('official download failed, using the mirror'), 'missing the mirror log line');
   });
 
+  test('the binary hash placeholder is the exact literal; any other non-hex value fails', () => {
+    // Same rule as fetch-runtime.sh, start.ps1 and daemon-launch.js.
+    assert.ok(code.includes('$binaryShaPending = ([string] $entry.binarySha256) -ceq "PENDING-FIRST-ACCEPTANCE-RUN"'),
+      'placeholder is not matched as the exact literal');
+    assert.match(code, /if \(-not \$binaryShaPending -and \$binarySha -notmatch '\^\[0-9a-f\]\{64\}\$'\) \{\s*Exit-Fail "bad binary SHA-256 in pins"/,
+      'a damaged binary hash does not fail');
+    const verify = text.split('# ---- 6. Verify the binary')[1].split('# ---- 7.')[0];
+    assert.match(verify, /if \(\$binaryShaPending\) \{\s*Write-Step "binary SHA-256 not pinned yet/, 'hash skip is not keyed on the literal');
+    assert.ok(!/\$binarySha -notmatch '\^\[0-9a-f\]\{64\}\$'\) \{\s*Write-Step/.test(code), 'non-hex still treated as the placeholder');
+  });
+
   test('takes -Into, -StageOnly and -Force', () => {
     assert.match(code, /param\(\s*\[string\]\s*\$Into\s*=\s*"",\s*\[switch\]\s*\$StageOnly,\s*\[switch\]\s*\$Force\s*\)/);
   });
@@ -523,6 +534,12 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     assert.equal(r.last, 'err:runtime', r.out);
     assert.ok(!existsSync(join(c.into, 'runtime.new')));
     c = setup({ pins: { binarySha256: '0'.repeat(64) } });
+    r = run(c);
+    assert.equal(r.last, 'err:runtime', r.out);
+    c = setup({ pins: { binarySha256: 'not-a-hash' } });
+    r = run(c);
+    assert.equal(r.last, 'err:runtime', r.out);
+    c = setup({ pins: { binarySha256: 'pending-first-acceptance-run' } });
     r = run(c);
     assert.equal(r.last, 'err:runtime', r.out);
     c = setup({ pins: { binarySha256: 'PENDING-FIRST-ACCEPTANCE-RUN' } });
