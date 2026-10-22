@@ -545,12 +545,140 @@ test('every npm install uses --omit=dev; npm 10 (Node 20) deprecated --productio
   for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin], ['README.md', readme]]) {
     assert.ok(!/--production\b/.test(text), name + ' still passes --production');
   }
-  // update.sh no longer runs npm at all (zero-dependency install, spec 6.6).
-  for (const [name, text] of [['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin]]) {
+  // update.sh and update.ps1 no longer run npm at all (zero-dependency install, spec 6.6).
+  for (const [name, text] of [['install-mac.sh', installMac], ['install-win.ps1', installWin]]) {
     assert.match(text, /npm(\.cmd|Cmd)?[^\n]* install --omit=dev/, name + ' installs with --omit=dev');
   }
   // The flag needs npm 7+; the daemon's Node floor (20, which ships npm 10) guarantees it.
   const pkg = JSON.parse(read('../panel/daemon/package.json'));
   assert.equal(pkg.engines.node, '>=20');
   assert.match(readme, /Node 20\+/);
+});
+
+// ---- update.ps1 after the zero-dependency change (spec 6, 7; Task 8) ----
+// The runtime is staged by the archive's fetch-runtime.ps1 before anything
+// is replaced, swapped in by two renames after the daemon is stopped and
+// kept out of robocopy /PURGE; npm is gone. Comments may still say "npm",
+// code lines may not. Behaviour is covered on Windows by
+// scripts/windows-tests/test-6-runtime-update.ps1.
+const ps1Code = ps1.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+const ps1Body = ps1.slice(ps1.indexOf('\ntry {\n'));
+
+test('update.ps1 names err:runtime in its contract and has no npm step or Node probe left', () => {
+  assert.ok(ps1.includes('err:download,\n#                           err:sync, err:runtime) after an ERROR line'), 'the contract comment names err:runtime instead of err:npm');
+  assert.ok(!/npm/i.test(ps1Code), 'a code line still mentions npm: ' + (ps1Code.split('\n').find((l) => /npm/i.test(l)) || '').trim());
+  assert.ok(!ps1.includes('err:npm'), 'err:npm is gone');
+  for (const probe of ['\\nodejs', 'NVM_SYMLINK', 'Get-Command node', '$env:Path = ']) {
+    assert.ok(!ps1Code.includes(probe), 'Node directory probe left: ' + probe);
+  }
+});
+
+test('update.ps1 requires daemon.mjs in the archive and runs the archive\'s own fetch-runtime.ps1', () => {
+  assert.ok(ps1.includes('-not (Test-Path -LiteralPath "$extractDir\\daemon\\daemon.mjs" -PathType Leaf)'), 'the archive check requires daemon\\daemon.mjs');
+  assert.ok(ps1.includes('missing version.json or daemon\\daemon.mjs'));
+  assert.ok(!ps1Code.includes('"$extractDir\\daemon\\index.js"'), 'the archive check no longer keys on index.js');
+  assert.ok(ps1.includes('$fetchScript = Join-Path $extractDir "daemon\\fetch-runtime.ps1"'), 'the ARCHIVE copy runs, not the installed one');
+  assert.ok(ps1.includes('(Join-Path $extractDir "daemon\\runtime-pins.json")'), 'the archive must carry its pins');
+  assert.ok(ps1.includes('"the release has no runtime provisioning (missing daemon\\fetch-runtime.ps1 or daemon\\runtime-pins.json)" "runtime"'));
+});
+
+test('update.ps1 stages the runtime with -StageOnly while the daemon runs, then stops it, swaps, syncs and writes version.json last', () => {
+  const at = (s) => { const i = ps1Body.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  const stage = at('-File $fetchScript -StageOnly -Into $daemonDir');
+  const stop = at('Write-Host "Stopping daemon..."\n    Stop-Daemon');
+  const aside = at('[System.IO.Directory]::Move($runtimeDir, $runtimeOld)');
+  const swapIn = at('[System.IO.Directory]::Move($runtimeNew, $runtimeDir)');
+  const robo = at('robocopy $extractDir $panelDir');
+  const version = at('Move-Item -LiteralPath $versionTmp -Destination "$panelDir\\version.json" -Force');
+  assert.ok(at('Get-ReleaseAsset $assetSource $zipPath') < stage, 'the archive is extracted first');
+  assert.ok(stage < stop && stop < aside && aside < swapIn && swapIn < robo && robo < version, 'order: stage, stop daemon, swap, sync, version.json last');
+  assert.ok(ps1Body.includes('$ErrorActionPreference = "Continue"\n    try { $fetchOut = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir 2>&1) }'), 'native stderr from the child cannot abort the update');
+  assert.ok(ps1Body.includes('$psExe = Join-Path $PSHOME "powershell.exe"'), 'the child is the same PowerShell, sharing the (hidden) console');
+  assert.ok(!/-Into "[^"]*\\"/.test(ps1Code), 'never a quoted -Into ending in a backslash');
+  assert.ok(ps1Body.includes('if ($fetchExit -eq 0 -and $fetchLast -eq "runtime:current") {'), 'runtime:current means nothing to swap');
+  assert.ok(ps1Body.includes("} elseif ($fetchExit -eq 0 -and $fetchLast -match '^runtime:installed \\S+ \\S+$') {"), 'runtime:installed means staged, swap needed');
+  assert.ok(/\} else \{\n\s*Remove-Tree \$runtimeNew\n\s*Exit-Update "could not download Gaffer's runtime[^\n]*Your current version still works\." "runtime"/.test(ps1Body), 'any other result deletes runtime.new and ends with err:runtime');
+  assert.ok(ps1Body.includes('if (-not (Test-RuntimeStamp $runtimeNew)'), 'a staged runtime.new is size-checked before it is trusted');
+});
+
+test('update.ps1 swaps by renaming aside (never copying), puts the old runtime back on failure, gates between the renames', () => {
+  const swap = ps1Body.split('if ($stagedRuntime) {')[1].split('\n    }\n')[0];
+  assert.ok(swap.indexOf('Remove-Tree $runtimeOld') < swap.indexOf('[System.IO.Directory]::Move($runtimeDir, $runtimeOld)'), 'a leftover runtime.old is cleared first');
+  assert.ok(swap.includes('daemon\\runtime.old is still in use by a running node.exe'), 'a runtime.old that cannot be cleared stops the update before any rename');
+  const gate = swap.indexOf('Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE');
+  assert.ok(swap.indexOf('Move($runtimeDir, $runtimeOld)') < gate && gate < swap.indexOf('Move($runtimeNew, $runtimeDir)'), 'the swap gate sits between the two renames');
+  assert.ok(swap.includes('try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}'), 'a failed second rename puts the old runtime back');
+  assert.ok(swap.includes('it will be removed by the next update'), 'a locked runtime.old after the swap is left and logged');
+  assert.ok(!/Copy-Item|Move-Item/.test(swap), 'the swap is Directory.Move only');
+  assert.ok(ps1.includes('GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames'), 'the gate is documented with the others');
+});
+
+test('update.ps1 restores runtime.old at the start only when runtime is missing and runtime.old passes the size check', () => {
+  const fn = ps1.split('function Test-RuntimeStamp([string] $dir) {')[1].split('\n}\n')[0];
+  assert.ok(fn.includes('$stamp = Join-Path $dir "VERIFIED"'));
+  assert.ok(fn.includes('$fields[0] -eq [string] (Get-Item -LiteralPath $exe).Length'), 'the size check compares the stamp with the file');
+  const dev = ps1Body.indexOf('Write-Output "err:dev-install"');
+  const recover = ps1Body.indexOf('if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {');
+  const download = ps1Body.indexOf('Get-ReleaseAsset $assetSource $zipPath');
+  assert.ok(dev !== -1 && recover !== -1 && download !== -1);
+  assert.ok(dev < recover && recover < download, 'recovery runs after the dev-install refusal and before anything is fetched');
+  const block = ps1Body.slice(recover, download);
+  assert.ok(block.includes('if (Test-RuntimeStamp $runtimeOld) {\n            try {\n                [System.IO.Directory]::Move($runtimeOld, $runtimeDir)'), 'only a runtime.old that passes the size check is renamed back');
+});
+
+test('update.ps1 keeps the runtime folders out of robocopy /PURGE and lets it delete the old node_modules', () => {
+  const lines = ps1.split('\n');
+  const at = lines.findIndex((l) => l.includes('robocopy $extractDir $panelDir'));
+  const cmd = lines.slice(at, at + 3).join('\n');
+  assert.ok(cmd.includes('/XD runtime runtime.new runtime.old'), 'robocopy must exclude runtime, runtime.new and runtime.old');
+  assert.ok(!cmd.includes('node_modules'), 'node_modules is no longer excluded, so /PURGE removes the old tree');
+  assert.ok(cmd.includes('/XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json'), 'user data excludes unchanged');
+  assert.ok(cmd.includes('.gaffer-icons'), 'icon cache still excluded');
+});
+
+test('update.ps1 drops stray GAFFER_FETCH_* seams unless the harness set GAFFER_UPDATE_ASSET', () => {
+  const block = ps1.split('if (-not $env:GAFFER_UPDATE_ASSET) {\n    foreach ($seam in')[1];
+  assert.ok(block, 'seam drop block missing');
+  const body = block.split('\n}\n')[0];
+  for (const seam of ['GAFFER_FETCH_TEST', 'GAFFER_FETCH_BASE_OFFICIAL', 'GAFFER_FETCH_BASE_MIRROR', 'GAFFER_FETCH_PINS', 'GAFFER_FETCH_SKIP_CODESIGN', 'GAFFER_FETCH_PLATFORM', 'GAFFER_FETCH_NO_TAR', 'GAFFER_FETCH_NO_CURL']) {
+    assert.ok(body.includes('"' + seam + '"'), seam + ' is not dropped');
+  }
+  assert.ok(body.includes('Remove-Item -LiteralPath "Env:\\$seam"'));
+  assert.ok(ps1.indexOf('if (-not $env:GAFFER_UPDATE_ASSET) {\n    foreach ($seam in') < ps1.indexOf('-File $fetchScript -StageOnly'), 'dropped before the child starts');
+});
+
+test('the Windows field harness for the runtime step covers the spec 8 flows and drives the swap gate', () => {
+  const t6raw = readFileSync(fileURLToPath(new URL('./windows-tests/test-6-runtime-update.ps1', import.meta.url)));
+  assert.deepEqual([...t6raw.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'UTF-8 BOM');
+  assert.ok(![...t6raw.subarray(3)].some((b) => b > 127), 'ASCII only');
+  const t6 = t6raw.subarray(3).toString('utf8');
+  for (const c of ['Case 1: runtime unchanged', 'Case 2: runtime changed', 'Case 2b: runtime changed while a node.exe runs', 'Case 3: stage failure', 'Case 3b: an archive without fetch-runtime.ps1', 'Case 4a: killed between the two renames', 'Case 4b: a current runtime.old']) {
+    assert.ok(t6.includes(c), 'missing ' + c);
+  }
+  assert.ok(t6.includes('$env:GAFFER_UPDATE_TEST_SWAP_GATE = $gate'), 'the harness uses the swap gate the updater offers');
+  assert.ok(t6.includes('old daemon\\node_modules removed by the sync'));
+  assert.ok(t6.includes('Write-Host "ALL PASS"; exit 0'));
+  assert.ok(!/&&|\|\|/.test(t6.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'no PS 7 chain operators');
+});
+
+test('update.ps1 keeps the v0.11.3 lock, process-tree and hand-run-terminal rules and stays PowerShell 5.1 syntax', () => {
+  for (const s of ['function Stop-LockHolder($proc, [int[]] $protect) {', 'function Get-AncestorProcessIds {',
+    'An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes.',
+    'Write-Output "busy:already-running"', 'Write-Output "ok:$latestVersion"', '. "$PSScriptRoot\\stop-daemon.ps1"',
+    'Move-Item -LiteralPath $versionTmp -Destination "$panelDir\\version.json" -Force']) {
+    assert.ok(ps1.includes(s), 'missing ' + s);
+  }
+  const raw = readFileSync(fileURLToPath(new URL('../panel/daemon/update.ps1', import.meta.url)));
+  assert.deepEqual([...raw.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'UTF-8 BOM');
+  assert.ok(![...raw.subarray(3)].some((b) => b > 127), 'ASCII only');
+  const bad = [[/&&|\|\|/, 'pipeline chain operator'], [/\?\?/, 'null-coalescing'], [/\s\?\s[^\n]*\s:\s/, 'ternary'], [/\?\.|\?\[/, 'null-conditional']];
+  for (const [re, what] of bad) {
+    const hit = ps1Code.split('\n').find((l) => re.test(l.replace(/"[^"]*"|'[^']*'/g, '""')));
+    assert.ok(!hit, what + ': ' + (hit || '').trim());
+  }
+  // Every path cmdlet in the new runtime code uses -LiteralPath (paths may hold brackets).
+  const rt = ps1.slice(ps1.indexOf('$runtimeDir = Join-Path $daemonDir "runtime"'));
+  for (const l of rt.split('\n').filter((x) => !/^\s*#/.test(x) && /\b(Test-Path|Remove-Item|Get-Item)\b/.test(x) && /runtime|\$path|\$exe|\$stamp|fetchScript|daemon\.mjs/.test(x))) {
+    assert.ok(l.includes('-LiteralPath'), 'path cmdlet without -LiteralPath: ' + l.trim());
+  }
 });
