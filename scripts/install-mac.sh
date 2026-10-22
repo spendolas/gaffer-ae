@@ -8,6 +8,12 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PANEL_DIR="$REPO_DIR/panel"
 
 echo "=== Gaffer Installer (macOS) ==="
+# Developer installer: links this checkout into the CEP extensions folder and
+# runs the daemon from source, so it needs Node.js 20+ and npm. End users
+# follow README.md instead, which needs neither (it downloads the pinned
+# runtime into the extension folder, the same steps as daemon/fetch-runtime.sh).
+# There is no copy mode on macOS: the install is always a symlink, so the
+# runtime is never fetched here.
 
 # 1. Look for a runnable Claude. The panel chat works with either the Claude
 # desktop app's bundled Claude Code or a standalone CLI (the daemon finds
@@ -54,8 +60,9 @@ else
   echo "  Claude CLI: $CLAUDE_BIN"
 fi
 
-if ! command -v node &>/dev/null; then
-  echo "ERROR: Node.js not found. Install from https://nodejs.org"
+if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+  echo "ERROR: this developer install runs the daemon from source and needs Node.js 20+ and npm."
+  echo "  To install Gaffer without Node.js, follow the install steps in README.md instead."
   exit 1
 fi
 echo "  Node.js: $(node --version)"
@@ -67,14 +74,19 @@ if [ -e "$INSTALL_DIR" ]; then
 fi
 ln -sf "$PANEL_DIR" "$INSTALL_DIR"
 
-# 3. Install daemon dependencies
+# 3. Install daemon dependencies (symlinked dev install: system node runs
+# index.js from the checkout). npm's cache, logs and userconfig stay inside
+# the repo so nothing lands in the developer's home directory (spec 9).
 echo "Installing daemon dependencies..."
+export npm_config_cache="$REPO_DIR/.npm-cache"
+export npm_config_logs_dir="$REPO_DIR/.npm-cache/_logs"
+export npm_config_userconfig="$REPO_DIR/.npmrc-dev"
 cd "$PANEL_DIR/daemon" && npm install --omit=dev 2>&1 | tail -3
 
 # 4. Set PlayerDebugMode
 echo "Setting PlayerDebugMode..."
-defaults write com.adobe.CSXS.11 PlayerDebugMode 1
-defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+# A user preference that lets AE load extensions not signed through Adobe.
+for v in 11 12 13; do defaults write com.adobe.CSXS.$v PlayerDebugMode 1; done
 
 # 5. Register MCP server (only used by Claude Code outside AE; the panel chat
 # passes its own MCP config and does not need this). Skip when there is no
@@ -88,6 +100,8 @@ elif "$CLAUDE_BIN" mcp get gaffer >/dev/null 2>&1; then
   echo "  Gaffer MCP server already registered with Claude Code."
 else
   echo "Registering Gaffer MCP server..."
+  echo "  This adds an entry named gaffer to your Claude Code user settings (~/.claude.json)."
+  echo "  To remove it later: claude mcp remove gaffer -s user"
   if ! "$CLAUDE_BIN" mcp add --transport http -s user gaffer "http://127.0.0.1:9824/mcp" >/dev/null 2>&1; then
     echo "WARNING: could not register the Gaffer MCP server with Claude Code. The panel still works;"
     echo "  to use Gaffer tools from Claude Code outside AE, run:"

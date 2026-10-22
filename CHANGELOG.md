@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Installing Gaffer no longer needs Node.js or npm on your computer. The install downloads the official Node.js runtime from nodejs.org into Gaffer's own folder, checks its checksum and its code signature, and installs nothing system-wide. If your network blocks nodejs.org, it uses an identical copy on Gaffer's GitHub page instead.
+- The install also checks the Gaffer package itself against the checksum list published with each release.
+- Updates no longer run npm. They download the Node.js runtime again only when a release moves to a new Node.js version.
+- The install still registers Gaffer's tools with Claude Code by default, and now tells you that it does and how to remove the entry.
+
 ## v0.11.3 - 2026-10-18
 
 **Sturdier updates, a smaller download, and a heads-up when your Claude Code is outside the versions Gaffer was tested with.**
