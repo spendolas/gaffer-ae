@@ -26,6 +26,17 @@ const PLATFORMS = {
 
 const MAC_INSTALL = '"$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"';
 const WIN_INSTALL = '"$env:APPDATA\\Adobe\\CEP\\extensions\\com.gaffer.panel"';
+// Each download gets a new private folder (mktemp -d / a GUID name), never a
+// fixed name in a shared temp directory. Shell variables do not carry over
+// between the agent's command runs, so step 5 prints the folder and steps 6
+// and 7 take it through this placeholder.
+export const DL_PLACEHOLDER = '<download folder step 5 printed>';
+const MAC_MKTEMP = 'DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-node.XXXXXX")" && echo "Download folder: $DL"';
+const WIN_MKTEMP = [
+  '$dl = Join-Path $env:TEMP ("gaffer-node-" + [guid]::NewGuid().ToString("N"))',
+  'New-Item -ItemType Directory -Path $dl | Out-Null',
+  '"Download folder: $dl"',
+];
 // Same download budget as fetch-runtime.sh / fetch-runtime.ps1 (-fsSL = --fail
 // --silent --show-error --location). '=https' is quoted: zsh expands a bare
 // =word to a command path (EQUALS option), so an unquoted --proto =https fails there.
@@ -55,7 +66,7 @@ export function renderRuntimeSteps(pins) {
   const out = [];
 
   // ---- 5. download ----
-  out.push('5. **Download the Node.js runtime.** Gaffer runs on the official Node.js ' + n.version + ' from nodejs.org, kept as a single file inside Gaffer\'s own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed.');
+  out.push('5. **Download the Node.js runtime.** Gaffer runs on the official Node.js ' + n.version + ' from nodejs.org, kept as a single file inside Gaffer\'s own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed. The block creates a new download folder and prints its path; steps 6 and 7 need that path.');
   out.push('');
   for (const p of plats) {
     const a = p.pin.archive;
@@ -63,38 +74,42 @@ export function renderRuntimeSteps(pins) {
     out.push('');
     if (p.os === 'mac') {
       out.push(fence('bash', [
-        'DL="${TMPDIR:-/tmp}/gaffer-download"',
-        'mkdir -p "$DL" && curl ' + CURL_OPTS + ' -o "$DL/' + a + '" ' + n.official + a,
+        MAC_MKTEMP + ' \\',
+        '  && curl ' + CURL_OPTS + ' -o "$DL/' + a + '" ' + n.official + a,
       ].join('\n')));
     } else {
       out.push(fence('powershell', [
-        '$dl = "$env:TEMP\\gaffer-download"',
-        'New-Item -ItemType Directory -Path $dl -Force | Out-Null',
+        ...WIN_MKTEMP,
         'curl.exe ' + CURL_OPTS + ' -o "$dl\\' + a + '" ' + n.official + a,
-        'if ($LASTEXITCODE -ne 0) { Write-Host "Download failed (curl exit $LASTEXITCODE)" }',
+        'if ($LASTEXITCODE -ne 0) { throw "Download failed (curl exit $LASTEXITCODE). From nodejs.org: use Gaffer\'s mirror as described below. From the mirror: stop." }',
       ].join('\n')));
     }
     out.push('');
     out.push(ind('If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer\'s mirror: `' + n.mirror + a + '`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org\'s SHASUMS256.txt for this file.'));
     out.push('');
   }
-  out.push(ind('For the mirror, run the same command with the mirror URL in place of the nodejs.org URL, and tell the user that you used the mirror. If the mirror download fails too, stop and tell the user: "Could not download the Node runtime from nodejs.org or Gaffer\'s mirror. Check your network and try again."'));
+  out.push(ind('For the mirror, run the same block with the mirror URL in place of the nodejs.org URL, and tell the user that you used the mirror. It creates a new download folder: delete the folder of the failed attempt, and use the folder printed by the download that succeeded in steps 6 and 7. If the mirror download fails too, stop and tell the user: "Could not download the Node runtime from nodejs.org or Gaffer\'s mirror. Check your network and try again."'));
   out.push('');
 
   // ---- 6. archive SHA-256 ----
-  out.push('6. **Verify the SHA-256 of the Node.js download.** It must equal the value written here for your platform.');
+  out.push('6. **Verify the SHA-256 of the Node.js download.** It must equal the value written here for your platform. Replace `' + DL_PLACEHOLDER + '` with the folder step 5 printed.');
   out.push('');
   for (const p of plats) {
     const a = p.pin.archive;
     out.push(heading(p) + ' expected SHA-256 `' + p.pin.archiveSha256 + '`');
     out.push('');
     if (p.os === 'mac') {
-      out.push(fence('bash', 'cd "${TMPDIR:-/tmp}/gaffer-download" && echo "' + p.pin.archiveSha256 + '  ' + a + '" | shasum -a 256 -c -'));
+      out.push(fence('bash', [
+        'DL="' + DL_PLACEHOLDER + '"',
+        'cd "$DL" && echo "' + p.pin.archiveSha256 + '  ' + a + '" | shasum -a 256 -c -',
+      ].join('\n')));
       out.push('');
       out.push(ind('It must print `' + a + ': OK`.'));
     } else {
       out.push(fence('powershell', [
-        '$got = (Get-FileHash "$env:TEMP\\gaffer-download\\' + a + '" -Algorithm SHA256).Hash.ToLower()',
+        '$dl = "' + DL_PLACEHOLDER + '"',
+        'if (-not (Test-Path -LiteralPath "$dl\\' + a + '")) { throw "No download at $dl\\' + a + '. Use the folder step 5 printed." }',
+        '$got = (Get-FileHash "$dl\\' + a + '" -Algorithm SHA256).Hash.ToLower()',
         'if ($got -eq "' + p.pin.archiveSha256 + '") { "SHA-256 OK" } else { "SHA-256 MISMATCH: $got" }',
       ].join('\n')));
       out.push('');
@@ -106,7 +121,7 @@ export function renderRuntimeSteps(pins) {
   out.push('');
 
   // ---- 7. extract ----
-  out.push('7. **Extract only the `node` binary into Gaffer\'s folder, then delete the archive.** The archive also contains npm and other tools; Gaffer needs only the one file.');
+  out.push('7. **Extract only the `node` binary into Gaffer\'s folder, then delete the archive.** The archive also contains npm and other tools; Gaffer needs only the one file. Replace `' + DL_PLACEHOLDER + '` with the folder step 5 printed.');
   out.push('');
   for (const p of plats) {
     const a = p.pin.archive;
@@ -116,26 +131,25 @@ export function renderRuntimeSteps(pins) {
     if (p.os === 'mac') {
       out.push(fence('bash', [
         'INSTALL_DIR=' + MAC_INSTALL,
-        'DL="${TMPDIR:-/tmp}/gaffer-download"',
+        'DL="' + DL_PLACEHOLDER + '"',
         'mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/' + a + '" -C "$INSTALL_DIR/daemon/runtime" --strip-components=' + strip + ' ' + p.pin.member + ' && rm -rf "$DL"',
       ].join('\n')));
     } else {
       const leaf = p.pin.member.split('/').pop();
       out.push(fence('powershell', [
         '$installDir = ' + WIN_INSTALL,
-        '$dl = "$env:TEMP\\gaffer-download"',
+        '$dl = "' + DL_PLACEHOLDER + '"',
         '$rt = "$installDir\\daemon\\runtime"',
         'New-Item -ItemType Directory -Path $rt -Force | Out-Null',
         'tar.exe -xf "$dl\\' + a + '" -C $rt ' + p.pin.member,
-        'if ($LASTEXITCODE -eq 0) {',
-        '  Move-Item -Force "$rt\\' + top + '\\' + leaf + '" "$rt\\' + leaf + '"',
-        '  Remove-Item -Recurse -Force "$rt\\' + top + '", $dl',
-        '} else { Write-Host "Extract failed (tar exit $LASTEXITCODE)" }',
+        'if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }',
+        'Move-Item -Force "$rt\\' + top + '\\' + leaf + '" "$rt\\' + leaf + '"',
+        'Remove-Item -Recurse -Force "$rt\\' + top + '", $dl',
       ].join('\n')));
     }
     out.push('');
   }
-  out.push(ind('The result is one file: `daemon/runtime/node` (Windows: `daemon\\runtime\\node.exe`) inside the install folder. Delete the archive and any download folder you created, including empty ones.'));
+  out.push(ind('The result is one file: `daemon/runtime/node` (Windows: `daemon\\runtime\\node.exe`) inside the install folder. Delete the archive and any download folder you created, including empty ones and those of failed attempts.'));
   out.push('');
 
   // ---- 8. signature and first run ----
