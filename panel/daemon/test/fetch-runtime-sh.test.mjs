@@ -611,3 +611,62 @@ test('HTTP 404 HTML error page from official falls back to the mirror (curl --fa
   assert.ok(out.includes('runtime: official download failed, using the mirror'));
   assert.equal(hits, 1, '404 is not retried');
 });
+
+test('a stalled official download gives up within the budget and falls to the mirror', async (t) => {
+  const { createServer } = await import('node:http');
+  const { spawn } = await import('node:child_process');
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  let hits = 0;
+  // Headers, a few bytes, then nothing: below 10 KB/s forever.
+  const server = createServer((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-length': '50000000' });
+    res.write('stall');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections?.(); server.close(); });
+  const env = {
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: sb.root, TMPDIR: sb.tmp,
+    GAFFER_FETCH_TEST: '1', GAFFER_FETCH_PINS: sb.pinsPath,
+    GAFFER_FETCH_BASE_OFFICIAL: `http://127.0.0.1:${server.address().port}/`,
+    GAFFER_FETCH_BASE_MIRROR: urlOf(sb.mirror),
+    GAFFER_FETCH_SKIP_CODESIGN: '1', GAFFER_FETCH_PLATFORM: PLAT,
+    GAFFER_FETCH_SPEED_TIME: '1', GAFFER_FETCH_MAX_TIME: '4',
+  };
+  const t0 = Date.now();
+  const out = await new Promise((resolve) => {
+    const c = spawn('/bin/bash', [SCRIPT, '--into', sb.into], { env });
+    let s = '';
+    c.stdout.on('data', (d) => { s += d; });
+    c.on('close', () => resolve(s));
+  });
+  const secs = (Date.now() - t0) / 1000;
+  assert.equal(out.trim().split('\n').pop(), `runtime:installed ${VERSION} ${PLAT}`, out);
+  assert.ok(out.includes('runtime: official download failed, using the mirror'), out);
+  assert.match(out, /curl exit 28/);
+  assert.ok(hits >= 1, 'official was tried');
+  // Retries stop once GAFFER_FETCH_MAX_TIME (4 s) has passed on one source.
+  assert.ok(secs < 15, `gave up in ${secs}s`);
+  assert.deepEqual(readdirSync(sb.tmp), []);
+});
+
+test('stale gaffer-runtime temp folders older than a day are swept, others kept', (t) => {
+  const sb = sandbox();
+  t.after(sb.cleanup);
+  const old = join(sb.tmp, 'gaffer-runtime-AbC123');
+  const fresh = join(sb.tmp, 'gaffer-runtime-XyZ789');
+  const otherName = join(sb.tmp, 'gaffer-runtime-keep-me');
+  const otherFile = join(sb.tmp, 'gaffer-runtime-Zz9999.txt');
+  for (const d of [old, fresh, otherName]) {
+    mkdirSync(d);
+    writeFileSync(join(d, 'node.tar.gz'), 'partial');
+  }
+  writeFileSync(otherFile, 'not a dir');
+  const twoDays = new Date(Date.now() - 2 * 86400 * 1000);
+  for (const p of [old, otherName, otherFile]) utimesSync(p, twoDays, twoDays);
+  const r = run(sb);
+  assert.equal(r.last, `runtime:installed ${VERSION} ${PLAT}`, r.stdout + r.stderr);
+  assert.deepEqual(readdirSync(sb.tmp).sort(),
+    ['gaffer-runtime-XyZ789', 'gaffer-runtime-Zz9999.txt', 'gaffer-runtime-keep-me']);
+});
