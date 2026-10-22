@@ -13,12 +13,13 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync,
-  copyFileSync, readdirSync, statSync, truncateSync, renameSync,
+  copyFileSync, readdirSync, statSync, truncateSync, renameSync, utimesSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,7 +53,7 @@ describe('fetch-runtime.ps1 static checks', () => {
 
   test('uses the commands the spec names', () => {
     for (const s of ['System32\\curl.exe', '"--fail"', '"--proto"', '"=https"', '"--location"',
-      '"--connect-timeout", "20"', '"--max-time", "600"', '"--retry", "3"', '"--retry-delay", "2"',
+      '"--connect-timeout", "20"', '"--retry", "3"', '"--retry-delay", "2"',
       'Get-FileHash -LiteralPath $path -Algorithm SHA256', 'System32\\tar.exe', '"-xf"',
       '[System.IO.Compression.ZipFile]::OpenRead', '$zip.GetEntry($member)',
       'Get-AuthenticodeSignature -LiteralPath $newExe', '$sig.Status -ne "Valid"',
@@ -70,7 +71,8 @@ describe('fetch-runtime.ps1 static checks', () => {
 
   test('test seams are honoured only in test mode', () => {
     const seams = ['GAFFER_FETCH_BASE_OFFICIAL', 'GAFFER_FETCH_BASE_MIRROR', 'GAFFER_FETCH_PINS',
-      'GAFFER_FETCH_SKIP_CODESIGN', 'GAFFER_FETCH_PLATFORM', 'GAFFER_FETCH_NO_TAR', 'GAFFER_FETCH_NO_CURL'];
+      'GAFFER_FETCH_SKIP_CODESIGN', 'GAFFER_FETCH_PLATFORM', 'GAFFER_FETCH_NO_TAR', 'GAFFER_FETCH_NO_CURL',
+      'GAFFER_FETCH_SPEED_TIME', 'GAFFER_FETCH_MAX_TIME'];
     for (const seam of seams) assert.ok(text.includes('#   ' + seam), seam + ' is not documented in the header');
     assert.ok(code.includes('$testMode = ($env:GAFFER_FETCH_TEST -eq "1")'));
     for (const seam of seams) {
@@ -149,13 +151,37 @@ describe('fetch-runtime.ps1 static checks', () => {
   test('system proxy fallback after curl, like update.ps1', () => {
     for (const s of ['function Get-ViaSystemProxy', '[System.Net.SecurityProtocolType]::Tls12',
       '[System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials',
-      '$req.Timeout = 20000', '$req -is [System.Net.HttpWebRequest]', 'download exceeded its 600 s budget',
-      'Get-ViaSystemProxy $url $archivePath $testMode', '$skipCurl = ($testMode -and $env:GAFFER_FETCH_NO_CURL -eq "1")',
+      '$req.Timeout = 20000', '$req -is [System.Net.HttpWebRequest]', 'download exceeded its $maxTime s budget',
+      '$req.ReadWriteTimeout = $speedTime * 1000', 'download stalled (under 10 KB/s for $speedTime s)',
+      '($elapsed + 2) -ge $maxTime',
+      'Get-ViaSystemProxy $url $archivePath $testMode $speedTime $maxTime', '$skipCurl = ($testMode -and $env:GAFFER_FETCH_NO_CURL -eq "1")',
       'refusing a non-https URL', 'redirected to a non-https URL']) {
       assert.ok(code.includes(s), 'missing ' + s);
     }
     // The fallback runs before the hash check of the same source.
     assert.ok(code.indexOf('Get-ViaSystemProxy $url') < code.indexOf('$gotSha = Get-Sha256 $archivePath'));
+  });
+
+  test('curl uses the stall-based budget (deliberate change from --max-time 600)', () => {
+    assert.ok(code.includes(`$curlArgs = @("--fail", "--proto", $proto, "--location", "--connect-timeout", "20",
+            "--speed-limit", "10240", "--speed-time", [string] $speedTime,
+            "--max-time", [string] $maxTime, "--retry-max-time", [string] $maxTime,
+            "--retry", "3", "--retry-delay", "2", "--silent", "--show-error", "--ssl-no-revoke",
+            "-o", $archive, $url)`), 'curl flags changed');
+    assert.ok(code.includes('$speedTime = 60') && code.includes('$maxTime = 1800'));
+    assert.ok(code.includes(`if ($testMode -and $env:GAFFER_FETCH_SPEED_TIME -match '^[0-9]+$') { $speedTime = [int] $env:GAFFER_FETCH_SPEED_TIME }`));
+    assert.ok(code.includes(`if ($testMode -and $env:GAFFER_FETCH_MAX_TIME -match '^[0-9]+$') { $maxTime = [int] $env:GAFFER_FETCH_MAX_TIME }`));
+    assert.ok(!code.includes('"600"'), 'the old 600 s cap is gone');
+    assert.match(text, /deliberate change from spec section 3 step 3/);
+  });
+
+  test('stale temp folders are swept: exact name, folders only, over 24 h, errors ignored', () => {
+    assert.ok(code.includes('[System.IO.Directory]::GetDirectories($tempRoot, "gaffer-runtime-*")'));
+    assert.ok(code.includes(`$staleName -cmatch '^gaffer-runtime-[0-9a-f]{32}$' -and [System.IO.Directory]::GetLastWriteTimeUtc($stale) -lt $cutoff`));
+    assert.ok(code.includes('$cutoff = (Get-Date).ToUniversalTime().AddHours(-24)'));
+    assert.match(code, /try \{\s*\n\s*\$cutoff[\s\S]*?\} catch \{\}\s*\n\s*\[void\]\[System\.IO\.Directory\]::CreateDirectory\(\$tmpDir\)/);
+    // Our own temp folder name matches the sweep pattern.
+    assert.ok(code.includes('("gaffer-runtime-" + [guid]::NewGuid().ToString("N"))'));
   });
 
   test('no Move-Item -Destination (wildcards in paths)', () => {
@@ -259,6 +285,23 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     { env: { ...c.env, ...extraEnv }, encoding: 'utf8', windowsHide: true, timeout: 240000 });
     const lines = (r.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     return { status: r.status, out: r.stdout + r.stderr, last: lines[lines.length - 1] };
+  }
+
+  // Async variant for tests that serve from this process (a loopback server).
+  function runAsync(c, args = [], extraEnv = {}) {
+    return new Promise((resolve) => {
+      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath, '-Into', c.into, ...args],
+      { env: { ...c.env, ...extraEnv }, windowsHide: true });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      child.stderr.on('data', (d) => { stderr += d; });
+      child.on('close', (status) => {
+        const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        resolve({ status, out: stdout + stderr, last: lines[lines.length - 1] });
+      });
+    });
   }
 
   const tree = (d) => (existsSync(d) ? readdirSync(d, { recursive: true }).map(String).sort() : []);
@@ -397,6 +440,54 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     assert.match(r.out, /downloaded through the system proxy path/);
     assert.equal(r.last, 'runtime:installed ' + version + ' ' + plat, r.out);
     assertInstalled(c);
+  });
+
+  test('a stalled official download gives up within the budget and falls to the mirror', async (t) => {
+    const c = setup();
+    let hits = 0;
+    // Headers, a few bytes, then nothing: below 10 KB/s forever.
+    const server = createServer((req, res) => {
+      hits++;
+      res.writeHead(200, { 'content-length': '50000000' });
+      res.write('stall');
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    t.after(() => { server.closeAllConnections?.(); server.close(); });
+    const t0 = Date.now();
+    const r = await runAsync(c, [], {
+      GAFFER_FETCH_BASE_OFFICIAL: 'http://127.0.0.1:' + server.address().port + '/',
+      GAFFER_FETCH_SPEED_TIME: '1', GAFFER_FETCH_MAX_TIME: '4',
+    });
+    const secs = (Date.now() - t0) / 1000;
+    assert.equal(r.last, 'runtime:installed ' + version + ' ' + plat, r.out);
+    assert.match(r.out, /runtime: official download failed, using the mirror/);
+    assert.ok(hits >= 1, 'official was tried');
+    // curl and the proxy path each stop once GAFFER_FETCH_MAX_TIME (4 s) has
+    // passed; powershell.exe start-up and the smoke run add a few seconds.
+    assert.ok(secs < 40, 'gave up in ' + secs + 's');
+    assert.deepEqual(tree(c.temp), []);
+  });
+
+  test('stale gaffer-runtime temp folders older than a day are swept, others kept', () => {
+    const c = setup();
+    const hex = (ch) => ch.repeat(32);
+    const old = join(c.temp, 'gaffer-runtime-' + hex('a'));
+    const fresh = join(c.temp, 'gaffer-runtime-' + hex('b'));
+    const upper = join(c.temp, 'gaffer-runtime-' + hex('C'));
+    const otherName = join(c.temp, 'gaffer-runtime-keep-me');
+    const otherFile = join(c.temp, 'gaffer-runtime-' + hex('d') + '.txt');
+    for (const d of [old, fresh, upper, otherName]) {
+      mkdirSync(d);
+      writeFileSync(join(d, 'node.zip'), 'partial');
+    }
+    writeFileSync(otherFile, 'not a dir');
+    const twoDays = new Date(Date.now() - 2 * 86400 * 1000);
+    for (const p of [old, upper, otherName, otherFile]) utimesSync(p, twoDays, twoDays);
+    const r = run(c);
+    assert.equal(r.last, 'runtime:installed ' + version + ' ' + plat, r.out);
+    assert.deepEqual(readdirSync(c.temp).sort(), [
+      'gaffer-runtime-' + hex('C'), 'gaffer-runtime-' + hex('b'),
+      'gaffer-runtime-' + hex('d') + '.txt', 'gaffer-runtime-keep-me'].sort());
   });
 
   test('curl and the system proxy path both failing: mirror, then err:runtime', () => {
