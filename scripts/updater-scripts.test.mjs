@@ -730,11 +730,21 @@ test('the shipped v0.11.3 update.sh accepts the new archive and its npm install 
     });
     assert.ok(existsSync(join(dist, 'gaffer-update-mac.tar.gz')), 'package-release.sh built the update asset');
     const npmDir = join(root, 'npm');
+    // Two old trees. "bare": node_modules/ws only. "npm": the same plus npm's
+    // hidden lockfile (node_modules/.package-lock.json), which every real
+    // 0.11.x install has because npm 7+ writes it on install. With it, npm
+    // 10 trusts the hidden lockfile and does NOT prune the old tree (verified
+    // against a real v0.11.3 npm ci tree, npm 10.8.1: "up to date", 95
+    // packages kept). That is harmless: daemon.mjs never loads node_modules
+    // and the next new-updater sync deletes it. So npm must succeed offline
+    // on both trees, but pruning is asserted only for the bare one.
     const body = [
-      'EXTRACT_DIR="$ROOT/extract"; INSTALL="$ROOT/inst all/com.gaffer.panel"',
+      'EXTRACT_DIR="$ROOT/extract-$FIXTURE"; INSTALL="$ROOT/inst all $FIXTURE/com.gaffer.panel"',
       'mkdir -p "$EXTRACT_DIR" "$INSTALL/daemon/node_modules/ws"',
       'tar -xzf "$ROOT/dist/gaffer-update-mac.tar.gz" -C "$EXTRACT_DIR"',
       `echo '{"name":"ws","version":"8.0.0"}' > "$INSTALL/daemon/node_modules/ws/package.json"`,
+      // Written last: npm trusts a hidden lockfile only when it is newer than the folders it lists.
+      `if [ "$FIXTURE" = npm ]; then sleep 1; echo '{"name":"gaffer-daemon","lockfileVersion":3,"requires":true,"packages":{"node_modules/ws":{"version":"8.0.0","resolved":"https://registry.npmjs.org/ws/-/ws-8.0.0.tgz","license":"MIT"}}}' > "$INSTALL/daemon/node_modules/.package-lock.json"; fi`,
       'archive_check',
       'echo "check:passed"',
       'cp -R "$EXTRACT_DIR/daemon/." "$INSTALL/daemon/"',
@@ -747,21 +757,25 @@ test('the shipped v0.11.3 update.sh accepts the new archive and its npm install 
     const checkFn = 'archive_check() {\n' + check.slice(0, check.indexOf('\nfi\n') + 3) + '\n}\n';
     const deps = oldSh.slice(oldSh.indexOf('install_deps() {'));
     const depsFn = deps.slice(0, deps.indexOf('\n}\n') + 3);
-    const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + checkFn + depsFn + body], {
-      encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH, HOME: join(root, 'home'), ROOT: root, NODE_BIN: process.execPath,
-        npm_config_cache: join(npmDir, 'cache'), npm_config_userconfig: join(npmDir, 'no-userconfig'),
-        npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
-        // Any registry request would fail: the dependency-free package must not need one.
-        npm_config_registry: 'http://127.0.0.1:9/', npm_config_fetch_retries: '0',
-      },
-    });
-    assert.equal(r.status, 0, r.stderr + r.stdout);
-    const lines = r.stdout.trim().split('\n');
-    assert.ok(lines.includes('check:passed'), 'v0.11.3 archive check passed on the new archive: ' + r.stdout);
-    assert.ok(lines.includes('npm:ok'), 'v0.11.3 npm install --omit=dev succeeded with no registry: ' + r.stdout);
-    assert.ok(lines.includes('ws:pruned'), 'npm pruned the old dependency tree: ' + r.stdout);
+    for (const fixture of ['bare', 'npm']) {
+      const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + checkFn + depsFn + body], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH, HOME: join(root, 'home'), ROOT: root, NODE_BIN: process.execPath, FIXTURE: fixture,
+          npm_config_cache: join(npmDir, 'cache'), npm_config_userconfig: join(npmDir, 'no-userconfig'),
+          npm_config_logs_dir: join(npmDir, 'logs'),
+          npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
+          // Any registry request would fail: the dependency-free package must not need one.
+          npm_config_registry: 'http://127.0.0.1:9/', npm_config_fetch_retries: '0',
+        },
+      });
+      assert.equal(r.status, 0, fixture + ': ' + r.stderr + r.stdout);
+      const lines = r.stdout.trim().split('\n');
+      assert.ok(lines.includes('check:passed'), fixture + ': v0.11.3 archive check passed on the new archive: ' + r.stdout);
+      assert.ok(lines.includes('npm:ok'), fixture + ': v0.11.3 npm install --omit=dev succeeded with no registry: ' + r.stdout);
+      if (fixture === 'bare') assert.ok(lines.includes('ws:pruned'), 'npm pruned the bare old dependency tree: ' + r.stdout);
+      else t.diagnostic('tree with npm\'s hidden lockfile: ' + (lines.includes('ws:pruned') ? 'pruned' : 'kept (removed by the next new-updater sync)'));
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

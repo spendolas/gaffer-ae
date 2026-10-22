@@ -994,6 +994,13 @@ OLD_UPDATER_REF="v0.11.3"
 if git -C "$REPO_ROOT" rev-parse -q --verify "$OLD_UPDATER_REF^{commit}" >/dev/null && command -v npm >/dev/null 2>&1; then
   MIG_INSTALL="$SCRATCH/Application Support/migrate-0.11.3/com.gaffer.panel"
   new_install "$MIG_INSTALL"
+  # Like a real 0.11.x install: npm 7+ leaves its hidden lockfile in
+  # node_modules. With it npm 10 does not prune the old tree (a real v0.11.3
+  # tree kept all 95 packages, npm 10.8.1), so the NOTE below is the
+  # expected outcome. Written a second later: npm trusts it only when it is
+  # newer than the folders it lists.
+  sleep 1
+  printf '%s\n' '{"name":"gaffer-daemon","lockfileVersion":3,"requires":true,"packages":{"node_modules/ws":{"version":"8.0.0","resolved":"https://registry.npmjs.org/ws/-/ws-8.0.0.tgz","license":"MIT"}}}' > "$MIG_INSTALL/daemon/node_modules/.package-lock.json"
   git -C "$REPO_ROOT" show "$OLD_UPDATER_REF:panel/daemon/update.sh" > "$MIG_INSTALL/daemon/update.sh"
   : > "$LOG"
   if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$MIG_INSTALL/daemon/update.sh"; then
