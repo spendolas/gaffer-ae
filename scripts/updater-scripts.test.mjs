@@ -101,23 +101,134 @@ test('update.sh dir_age_seconds fails, rather than reporting a huge age, when th
   assert.ok(!sh.includes('|| echo 0)"'), 'no mtime 0 fallback is left');
 });
 
-test('update.sh ends a failed rsync or npm step with an ERROR line and err:sync / err:npm, exit code unchanged', () => {
+test('update.sh ends a failed rsync step with an ERROR line and err:sync, and has no npm step any more', () => {
   assert.ok(sh.includes('sync_files() {'));
   const sync = sh.split('sync_files() {')[1].split('\n}\n')[0];
   assert.ok(sync.includes('"$EXTRACT_DIR/" "$PANEL_DIR/" || return 1'), 'rsync failure returns, not set -e exit');
   assert.ok(sh.includes('if ! sync_files; then\n  echo "ERROR: replacing the panel files failed (rsync)"\n  echo "err:sync"\n  exit 1\nfi'));
-  assert.ok(sh.includes('install_deps() {'));
-  const deps = sh.split('install_deps() {')[1].split('\n}\n')[0];
-  assert.ok(deps.includes('[ -n "${NODE:-}" ] || return 0'), 'no node still means skip, not fail');
-  assert.ok(deps.includes('npm install --omit=dev || return 1'), 'npm failure returns');
-  assert.ok(sh.includes('if ! install_deps; then\n  echo "ERROR: installing the daemon dependencies failed (npm install)"\n  echo "err:npm"\n  exit 1\nfi'));
-  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:sync, err:npm'), 'the contract comment names the codes');
-  assert.ok(ps1.includes('err:download,\n#                           err:sync, err:npm) after an ERROR line'), 'the Windows contract comment names the same codes');
+  assert.ok(!sh.includes('install_deps'), 'the npm block is gone');
+  assert.ok(!/\bnpm\b/.test(sh.replace(/^\s*#.*$/gm, '')), 'no npm call outside comments');
+  assert.ok(!sh.includes('err:npm'), 'err:npm is gone from the script and its contract comment');
+  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:runtime, err:sync'), 'the contract comment names the codes');
+});
+
+// ---- zero-dependency install: the runtime step (spec 6, 7) ----
+const RT_FIRST = '# ---- runtime step (spec 6) ----';
+const RT_LAST = '# ---- end runtime step ----';
+// Runs the runtime block of update.sh in a fresh temp folder ($T) with
+// DAEMON_DIR, EXTRACT_DIR and TMP_DIR inside it and a no-op test_gate.
+function runRuntime(setup, body, env = {}) {
+  const pre = 'T="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT\nDAEMON_DIR="$T/install/daemon"; EXTRACT_DIR="$T/extract"; TMP_DIR="$T/tmp"\nmkdir -p "$DAEMON_DIR" "$EXTRACT_DIR/daemon" "$TMP_DIR"\ntest_gate() { :; }\n';
+  return runShSnippet(sh, RT_FIRST, RT_LAST, pre + setup + '\n' + body, env);
+}
+// A runtime folder as fetch-runtime.sh leaves it: node, VERSION, VERIFIED "<size> <sha>".
+const mkRuntime = (dir, body = 'binary-v1') => `mkdir -p "${dir}"; printf '%s' '${body}' > "${dir}/node"; echo "v1 darwin-x64" > "${dir}/VERSION"; echo "$(wc -c < "${dir}/node" | tr -d ' ') abc" > "${dir}/VERIFIED"`;
+
+test('update.sh checks the archive for daemon/daemon.mjs and orders recovery, stage, stop, swap, sync, version.json', () => {
+  assert.ok(sh.includes('if [ ! -f "$EXTRACT_DIR/version.json" ] || [ ! -f "$EXTRACT_DIR/daemon/daemon.mjs" ]; then'));
+  assert.ok(sh.includes('missing version.json or daemon/daemon.mjs'));
+  const main = sh.slice(sh.indexOf(RT_LAST));
+  const at = (s) => { const i = main.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  assert.ok(at('if ! recover_runtime; then') < at('if ! download_and_extract; then'), 'recovery runs before anything else is fetched');
+  assert.ok(at('if ! download_and_extract; then') < at('if ! stage_runtime; then'), 'the archive is extracted first, its own fetch-runtime.sh runs');
+  assert.ok(at('if ! stage_runtime; then') < at('stop_daemon\n'), 'staged while the daemon still runs');
+  assert.ok(at('stop_daemon\n') < at('if ! swap_runtime; then'), 'stopped before the swap');
+  assert.ok(at('if ! swap_runtime; then') < at('if ! sync_files; then'), 'swap, then sync');
+  assert.ok(at('if ! sync_files; then') < at('mv -f "$PANEL_DIR/version.json.tmp" "$PANEL_DIR/version.json"'), 'version.json last');
+  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  echo "err:runtime"\n  exit 1\nfi'));
+  const block = sh.slice(sh.indexOf(RT_FIRST), sh.indexOf(RT_LAST));
+  assert.ok(block.includes('bash "$script" --stage-only --into "$DAEMON_DIR"'), 'runs the ARCHIVE copy of fetch-runtime.sh, stage only');
+  assert.ok(block.includes('local script="$EXTRACT_DIR/daemon/fetch-runtime.sh"'));
+  assert.ok(!/stat -f %z "\$1"[^\n]*\|\| stat -c/.test(sh), 'GNU stat first: BSD-only stat -f means something else on Linux');
+});
+
+test('update.sh sync keeps daemon/runtime, runtime.new and runtime.old through --delete and removes node_modules (run under bash with rsync)', () => {
+  const sync = sh.split('sync_files() {')[1].split('\n}\n')[0];
+  for (const ex of ["--exclude '/daemon/runtime'", "--exclude '/daemon/runtime.new'", "--exclude '/daemon/runtime.old'"]) assert.ok(sync.includes(ex), ex);
+  assert.ok(!sync.includes('node_modules'), 'the node_modules exclude is gone, so the sync deletes the old tree');
+  const r = runShSnippet(sh, 'sync_files() {', '\n}', [
+    'T="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT; EXTRACT_DIR="$T/x"; PANEL_DIR="$T/p"',
+    'mkdir -p "$EXTRACT_DIR/daemon" "$PANEL_DIR/daemon/node_modules/ws" "$PANEL_DIR/daemon/sub"',
+    'echo new > "$EXTRACT_DIR/daemon/daemon.mjs"; echo x > "$PANEL_DIR/daemon/node_modules/ws/index.js"',
+    'for d in runtime runtime.new runtime.old; do mkdir -p "$PANEL_DIR/daemon/$d"; echo bin > "$PANEL_DIR/daemon/$d/node"; done',
+    'mkdir -p "$PANEL_DIR/daemon/sub/runtime"; echo nested > "$PANEL_DIR/daemon/sub/runtime/x"',
+    'sync_files',
+    'for p in daemon/runtime/node daemon/runtime.new/node daemon/runtime.old/node daemon/node_modules daemon/sub daemon/daemon.mjs; do if [ -e "$PANEL_DIR/$p" ]; then echo "$p:yes"; else echo "$p:no"; fi; done',
+  ].join('\n'), {});
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.split('\n'), ['daemon/runtime/node:yes', 'daemon/runtime.new/node:yes', 'daemon/runtime.old/node:yes', 'daemon/node_modules:no', 'daemon/sub:no', 'daemon/daemon.mjs:yes'], 'anchored excludes: only the daemon/ runtime folders are kept');
+});
+
+test('update.sh recover_runtime restores runtime.old only when runtime is missing and the size check passes (run under bash)', () => {
+  const state = 'for d in runtime runtime.new runtime.old; do if [ -e "$DAEMON_DIR/$d" ]; then printf "%s " "$d"; fi; done; echo; cat "$DAEMON_DIR/runtime/node" 2>/dev/null || true';
+  const ok = runRuntime(mkRuntime('$DAEMON_DIR/runtime.old') + '; mkdir -p "$DAEMON_DIR/runtime.new"', 'recover_runtime; ' + state);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /Restoring daemon\/runtime from runtime.old/);
+  assert.match(ok.stdout, /\nruntime \nbinary-v1$/, 'restored, leftover runtime.new removed: ' + ok.stdout);
+  const damaged = runRuntime(mkRuntime('$DAEMON_DIR/runtime.old') + '; printf x > "$DAEMON_DIR/runtime.old/node"', 'recover_runtime; ' + state);
+  assert.equal(damaged.status, 0, damaged.stderr);
+  assert.doesNotMatch(damaged.stdout, /Restoring/);
+  assert.match(damaged.stdout, /fails the size check/);
+  assert.match(damaged.stdout, /\nruntime\.old$/, 'damaged runtime.old left for the swap to clear: ' + damaged.stdout);
+  const both = runRuntime(mkRuntime('$DAEMON_DIR/runtime') + '; ' + mkRuntime('$DAEMON_DIR/runtime.old', 'old'), 'recover_runtime; ' + state);
+  assert.match(both.stdout, /\nruntime \nbinary-v1$/, 'a leftover runtime.old next to a runtime is removed: ' + both.stdout);
+  const clean = runRuntime(mkRuntime('$DAEMON_DIR/runtime'), 'recover_runtime; ' + state);
+  assert.equal(clean.stdout, 'runtime \nbinary-v1', 'nothing to do, nothing logged');
+});
+
+test('update.sh stage_runtime reads the last line of fetch-runtime.sh: current, installed, or err:runtime with runtime.new removed (run under bash)', () => {
+  // A fake archive fetch-runtime.sh: logs its args to $T/args, optionally
+  // stages a valid runtime.new in its --into folder, prints lines, exits rc.
+  const fake = (lines, rc = 0, stage = true) => `echo '{}' > "$EXTRACT_DIR/daemon/runtime-pins.json"
+cat > "$EXTRACT_DIR/daemon/fetch-runtime.sh" <<'EOF'
+echo "args: $*" >> "$(dirname "$0")/../../args"
+${stage ? mkRuntime('$3/runtime.new') : ':'}
+${lines.map((l) => `echo '${l}'`).join('\n')}
+exit ${rc}
+EOF`;
+  const show = 'if stage_runtime; then echo "rc:0 staged:${RUNTIME_STAGED:-no}"; else echo "rc:1"; fi; [ -e "$DAEMON_DIR/runtime.new" ] && echo new:yes || echo new:no; cat "$T/args"';
+  const cur = runRuntime(fake(['runtime:current'], 0, false), show);
+  assert.equal(cur.status, 0, cur.stderr);
+  assert.match(cur.stdout, /rc:0 staged:no\nnew:no\nargs: --stage-only --into .*\/install\/daemon$/);
+  const inst = runRuntime(fake(['runtime: staged in runtime.new', 'runtime:installed v2 darwin-x64']), show);
+  assert.match(inst.stdout, /rc:0 staged:1\nnew:yes/, inst.stdout + inst.stderr);
+  const err = runRuntime(fake(['runtime: download failed', 'err:runtime'], 1, true), show);
+  assert.match(err.stdout, /rc:1\nnew:no/, 'failure removes runtime.new: ' + err.stdout);
+  const liar = runRuntime(fake(['runtime:installed v2 darwin-x64'], 0, false), show);
+  assert.match(liar.stdout, /rc:1\nnew:no/, 'an "installed" with no valid runtime.new is a failure: ' + liar.stdout);
+  const odd = runRuntime(fake(['something else'], 0, false), show);
+  assert.match(odd.stdout, /rc:1/, 'an unknown last line is a failure');
+  const none = runRuntime('', show.replace('; cat "$T/args"', ''));
+  assert.match(none.stdout, /rc:1/, 'an archive without fetch-runtime.sh fails the runtime step');
+});
+
+test('update.sh swap_runtime renames runtime aside, moves runtime.new in, then deletes runtime.old (run under bash)', () => {
+  const state = 'for d in runtime runtime.new runtime.old; do if [ -e "$DAEMON_DIR/$d" ]; then printf "%s " "$d"; fi; done; echo; cat "$DAEMON_DIR/runtime/node"';
+  const swap = runRuntime(mkRuntime('$DAEMON_DIR/runtime') + '; ' + mkRuntime('$DAEMON_DIR/runtime.new', 'binary-v2'), 'RUNTIME_STAGED=1; swap_runtime; ' + state);
+  assert.equal(swap.status, 0, swap.stderr);
+  assert.match(swap.stdout, /\nruntime \nbinary-v2$/, swap.stdout);
+  const fresh = runRuntime(mkRuntime('$DAEMON_DIR/runtime.new', 'binary-v2'), 'RUNTIME_STAGED=1; swap_runtime; ' + state);
+  assert.match(fresh.stdout, /\nruntime \nbinary-v2$/, 'no runtime yet (0.11.x install): one rename');
+  const idle = runRuntime(mkRuntime('$DAEMON_DIR/runtime'), 'RUNTIME_STAGED=""; swap_runtime; ' + state);
+  assert.equal(idle.stdout, 'runtime \nbinary-v1', 'nothing staged, nothing touched');
+  const block = sh.slice(sh.indexOf('swap_runtime() {'), sh.indexOf(RT_LAST));
+  assert.ok(block.indexOf('mv "$rt" "$rt.old"') < block.indexOf('test_gate "${GAFFER_UPDATE_TEST_SWAP_GATE:-}"'));
+  assert.ok(block.indexOf('test_gate "${GAFFER_UPDATE_TEST_SWAP_GATE:-}"') < block.indexOf('mv "$rt.new" "$rt"'), 'the swap gate sits between the two renames');
+});
+
+test('update.sh drops the GAFFER_FETCH_* test seams unless the harness set GAFFER_UPDATE_ASSET (run under bash)', () => {
+  const first = 'if [ -z "${GAFFER_UPDATE_ASSET:-}" ]; then\n  unset GAFFER_FETCH_TEST';
+  const run = (env) => runShSnippet(sh, first, '\nfi', 'echo "${GAFFER_FETCH_TEST:-unset} ${GAFFER_FETCH_SKIP_CODESIGN:-unset} ${GAFFER_FETCH_BASE_OFFICIAL:-unset}"', env);
+  const seams = { GAFFER_FETCH_TEST: '1', GAFFER_FETCH_SKIP_CODESIGN: '1', GAFFER_FETCH_BASE_OFFICIAL: 'file:///x/' };
+  assert.equal(run(seams).stdout, 'unset unset unset', 'a stray seam in a real environment is ignored');
+  assert.equal(run({ ...seams, GAFFER_UPDATE_ASSET: '/x.tgz' }).stdout, '1 1 file:///x/', 'the harness keeps them');
+});
+
+test('update.ps1 still ends a failed download, robocopy or npm step with an ERROR line and its err: code', () => {
   assert.ok(ps1.includes('function Exit-Update([string] $message, [string] $code = "") {'));
   assert.ok(ps1.includes('if ($code) { Write-Output "err:$code" }'), 'the code line follows the ERROR line');
   assert.ok(ps1.includes('Exit-Update "download or extract failed: $($_.Exception.Message)" "download"'), 'a failed download ends with err:download like Mac');
   assert.ok(ps1.includes('Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync"'));
-  assert.ok(ps1.includes('Exit-Update "npm install failed (exit $npmExit)" "npm"'));
 });
 
 test('update.sh freezes a non-leader holder before snapshotting its descendants and resumes it after the signal', () => {
@@ -167,7 +278,7 @@ test('update.sh clears a stale takeover marker by atomic rename and treats futur
   assert.ok(sh.includes('[ "$age" -ge "$STUCK_AFTER" ]'), 'a lock older than the stuck age is old');
   assert.ok(sh.includes('[ "$age" -ge -300 ] && [ "$age" -lt 30 ]'), 'a lock dated over 300 s in the future is never young');
   assert.ok(!sh.includes('-mmin +15'), 'find -mmin cannot see a future mtime');
-  for (const gate of ['GAFFER_UPDATE_TEST_GATE', 'GAFFER_UPDATE_TEST_MARKER_GATE', 'GAFFER_UPDATE_TEST_HOLD_GATE']) {
+  for (const gate of ['GAFFER_UPDATE_TEST_GATE', 'GAFFER_UPDATE_TEST_MARKER_GATE', 'GAFFER_UPDATE_TEST_HOLD_GATE', 'GAFFER_UPDATE_TEST_SWAP_GATE']) {
     assert.ok(sh.includes('test_gate "${' + gate + ':-}"'), 'deterministic test gate ' + gate);
   }
   assert.ok(!sh.includes('GAFFER_UPDATE_TEST_DELAY'), 'the sleep-based race hook is gone');
@@ -434,7 +545,8 @@ test('every npm install uses --omit=dev; npm 10 (Node 20) deprecated --productio
   for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin], ['README.md', readme]]) {
     assert.ok(!/--production\b/.test(text), name + ' still passes --production');
   }
-  for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin]]) {
+  // update.sh no longer runs npm at all (zero-dependency install, spec 6.6).
+  for (const [name, text] of [['update.ps1', ps1], ['install-mac.sh', installMac], ['install-win.ps1', installWin]]) {
     assert.match(text, /npm(\.cmd|Cmd)?[^\n]* install --omit=dev/, name + ' installs with --omit=dev');
   }
   // The flag needs npm 7+; the daemon's Node floor (20, which ships npm 10) guarantees it.
