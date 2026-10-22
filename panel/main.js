@@ -437,13 +437,13 @@
     return h.digest('hex');
   }
 
-  // Dev install = the panel is symlinked out of a git checkout. Same test as
-  // detectDevInstall (kernel path resolution follows the symlink, so
-  // <ext>/../.git is the repo's), done synchronously because the launch
-  // decision cannot wait for evalScript. Windows: never dev, as there.
+  // Dev install = the panel is symlinked out of a git checkout
+  // (GafferLaunch.isDevCheckout: <ext>/../.git through the kernel on macOS,
+  // the realpath's parent on Windows), done synchronously because the launch
+  // decision cannot wait for evalScript. A Windows dev install then runs its
+  // live sources (index.js), never a stale gitignored daemon.mjs.
   function isDevCheckoutSync(fs, extPath) {
-    if (process.platform === 'win32') return false;
-    try { return fs.existsSync(extPath + '/../.git'); } catch (e) { return false; }
+    return Launch.isDevCheckout(fs, extPath, process.platform);
   }
 
   function readRuntimePins(fs, daemonDir) {
