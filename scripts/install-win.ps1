@@ -7,6 +7,12 @@ $repoDir = Split-Path -Parent $scriptDir
 $panelDir = "$repoDir\panel"
 
 Write-Host "=== Gaffer Installer (Windows) ==="
+# Developer installer from a checkout. A symlinked install runs the daemon
+# from source with the system Node.js (npm install below). When symlinks are
+# not allowed the panel is copied instead; a copy that carries a built
+# daemon\daemon.mjs (scripts/build.sh) gets the pinned Node runtime from
+# daemon\fetch-runtime.ps1 and needs no Node.js at all. End users follow
+# README.md, which needs neither Node.js nor npm.
 
 # 1. Look for a runnable Claude. The panel chat works with either the Claude
 # desktop app's bundled Claude Code or a standalone CLI (the daemon finds
@@ -78,20 +84,54 @@ if (-not $claudeBin -and $npmShim) {
     Write-Host "  Claude CLI: $claudeBin"
 }
 
-$nodeVersion = & node --version 2>$null
-if (-not $nodeVersion) {
-    Write-Host "ERROR: Node.js not found. Install from https://nodejs.org"
-    exit 1
+# Node.js is checked only where it is needed (the npm path below).
+function Assert-SystemNode {
+    $nodeVersion = & node --version 2>$null
+    if (-not $nodeVersion) {
+        Write-Host "ERROR: this install runs the daemon from source and needs Node.js 20+ and npm."
+        Write-Host "  To install Gaffer without Node.js, follow the install steps in README.md instead."
+        exit 1
+    }
+    Write-Host "  Node.js: $nodeVersion"
 }
-Write-Host "  Node.js: $nodeVersion"
+
+# npm's cache, logs and userconfig stay inside the repo, so nothing lands in
+# the developer's profile (spec section 9). The previous values come back
+# afterwards because a dot-sourced run shares the caller's environment.
+function Invoke-DevNpmInstall([string] $daemonDir) {
+    Assert-SystemNode
+    $saved = @{}
+    $npmEnv = @{
+        npm_config_cache = "$repoDir\.npm-cache"
+        npm_config_logs_dir = "$repoDir\.npm-cache\_logs"
+        npm_config_userconfig = "$repoDir\.npmrc-dev"
+    }
+    foreach ($k in $npmEnv.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
+        [Environment]::SetEnvironmentVariable($k, $npmEnv[$k], "Process")
+    }
+    try {
+        Write-Host "Installing daemon dependencies..."
+        Push-Location $daemonDir
+        try { & npm install --omit=dev } finally { Pop-Location }
+    } finally {
+        foreach ($k in $npmEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
+    }
+}
 
 # 2. Stop any running daemon - a live process holds its cwd inside the old
 # install (blocks Remove-Item) and would keep serving stale code after update
 Write-Host "Stopping any running daemon..."
 Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
+# Whatever listens on the daemon port (runtime\node.exe daemon.mjs or a
+# system node with index.js), same helper as update.ps1.
+$stopHelper = Join-Path $panelDir "daemon\stop-daemon.ps1"
+if (Test-Path $stopHelper -PathType Leaf) {
+    try { . $stopHelper; Stop-Daemon } catch { Write-Host "  (could not stop the daemon by port: $($_.Exception.Message))" }
+}
 # match by COMMAND LINE - Get-Process .Path is node.exe and never matches the script
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
+    Where-Object { ($_.CommandLine -like "*daemon*index.js*") -or ($_.CommandLine -like "*daemon*daemon.mjs*") } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 
@@ -110,12 +150,16 @@ Get-ChildItem -Path $installDir -Filter "chat-history-*.json" -ErrorAction Silen
     ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
 Write-Host "Installing extension to $installDir..."
 if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+$installKind = "symlink"
 try {
     New-Item -ItemType SymbolicLink -Path $installDir -Target $panelDir -Force | Out-Null
     Write-Host "  (symlinked)"
 } catch {
-    # Symlinks may require admin on some Windows configs - fall back to copy
-    robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
+    # Symlinks may require admin on some Windows configs - fall back to copy.
+    # Never copy a checkout's runtime folders or local session history; the
+    # copy gets its own verified runtime below.
+    $installKind = "copy"
+    robocopy "$panelDir" "$installDir" /E /XD node_modules dist .remember runtime runtime.new runtime.old /XF package-lock.json .debug | Out-Null
     Write-Host "  (copied)"
 }
 if ($historyBackup -and (Test-Path $historyBackup)) {
@@ -130,17 +174,40 @@ if ($restoredVersioned) {
 }
 Remove-Item -Recurse -Force $historyBackupDir -ErrorAction SilentlyContinue
 
-# 4. Install daemon dependencies INTO THE DEPLOYED install - installing into
-# the source checkout leaves a copied install without node_modules and the
-# daemon can never start (symlinked installs resolve to the same place)
-Write-Host "Installing daemon dependencies..."
-Push-Location "$installDir\daemon"
-& npm install --omit=dev
-Pop-Location
+# 4. Daemon code and runtime, INTO THE DEPLOYED install (symlinked installs
+# resolve to the checkout itself).
+#   symlink:                npm install, system node runs index.js
+#   copy with daemon.mjs:   fetch-runtime.ps1 provisions the pinned runtime, no Node.js needed
+#   copy without daemon.mjs: npm install like a symlink (run scripts/build.sh first to avoid it)
+$deployedDaemon = "$installDir\daemon"
+if ($installKind -eq "copy" -and (Test-Path "$deployedDaemon\daemon.mjs" -PathType Leaf)) {
+    Write-Host "Installing the pinned Node runtime..."
+    # A separate PowerShell process: fetch-runtime.ps1 ends with exit, and its
+    # last output line is the contract (runtime:current / runtime:installed / err:runtime).
+    $psExe = (Get-Process -Id $PID).Path
+    # Continue inside the block: under "Stop", a stderr line from the child
+    # would end this installer before the contract line is read.
+    $fetchOut = & {
+        $ErrorActionPreference = "Continue"
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File "$deployedDaemon\fetch-runtime.ps1" -Into $deployedDaemon 2>&1
+    }
+    $fetchOut | ForEach-Object { Write-Host "  $_" }
+    $last = [string] ($fetchOut | Select-Object -Last 1)
+    if ($last -notmatch '^runtime:(current|installed)') {
+        Write-Host "ERROR: could not install Gaffer's Node runtime (see the lines above). Check the network and run this installer again."
+        exit 1
+    }
+} else {
+    if ($installKind -eq "copy") {
+        Write-Host "  This checkout has no daemon\daemon.mjs (scripts/build.sh builds it), so the copy runs from source with npm."
+    }
+    Invoke-DevNpmInstall $deployedDaemon
+}
 
 # 5. Registry: PlayerDebugMode
 Write-Host "Setting PlayerDebugMode in registry..."
-foreach ($ver in @("11", "12")) {
+# A user preference that lets AE load extensions not signed through Adobe.
+foreach ($ver in @("11", "12", "13")) {
     $key = "HKCU:\Software\Adobe\CSXS.$ver"
     if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
     Set-ItemProperty -Path $key -Name "PlayerDebugMode" -Value 1 -Type DWord
@@ -169,6 +236,8 @@ if ($registerMcp) {
 }
 if ($registerMcp) {
     Write-Host "Registering Gaffer MCP server..."
+    Write-Host "  This adds an entry named gaffer to your Claude Code user settings (%USERPROFILE%\.claude.json)."
+    Write-Host "  To remove it later: claude mcp remove gaffer -s user"
     $registered = $false
     try {
         $registered = ((Invoke-Native $claudeBin @("mcp", "add", "--transport", "http", "-s", "user", "gaffer", "http://127.0.0.1:9824/mcp")) -eq 0)
