@@ -10,9 +10,8 @@ import * as telemetry from './telemetry.js';
 import { getConfigPath } from './config-path.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WS_PORT, MCP_PORT } from './ports.js';
 
-var WS_PORT = 9823;
-var MCP_PORT = 9824;
 
 var bridge = new PanelBridge(WS_PORT);
 
