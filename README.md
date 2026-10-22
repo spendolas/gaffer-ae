@@ -31,10 +31,10 @@ Before you begin, read these rules. They apply to every step below.
 - Do not improvise. If a step seems wrong for this system, stop and ask the user rather than deviating.
 - Do not install prerequisites the user is missing (Claude, After Effects). If a prerequisite is missing, stop and tell the user what to install, with a link. Resume only after they confirm it's installed.
 - Do not install Node.js any other way (Homebrew, nvm, npm, installers). Gaffer does not use a system Node.js; step 5 downloads its own copy into Gaffer's folder. Do not add that folder to PATH.
-- Do not change proxy or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
+- Do not change proxy, certificate or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
 - Do not add shell aliases, modify the user's PATH, or change any config outside the paths explicitly named in these steps.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
-- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to.
+- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 5 names Gaffer's mirror).
 - After the install completes, run the verification step. Do not skip it.
 
 ### What to do
@@ -82,8 +82,8 @@ Before you begin, read these rules. They apply to every step below.
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
    DL="${TMPDIR:-/tmp}/gaffer-download"
    rm -rf "$DL" && mkdir -p "$DL" "$INSTALL_DIR" && cd "$DL" \
-     && curl -fsSL --connect-timeout 20 --max-time 600 -o gaffer-install-mac.tar.gz https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz \
-     && curl -fsSL --connect-timeout 20 --max-time 600 -o SHA256SUMS.txt https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o gaffer-install-mac.tar.gz https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-mac.tar.gz \
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o SHA256SUMS.txt https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt \
      && grep ' gaffer-install-mac.tar.gz$' SHA256SUMS.txt | shasum -a 256 -c - \
      && tar -xzf gaffer-install-mac.tar.gz -C "$INSTALL_DIR" \
      && rm -f gaffer-install-mac.tar.gz SHA256SUMS.txt
@@ -95,9 +95,9 @@ Before you begin, read these rules. They apply to every step below.
    $dl = "$env:TEMP\gaffer-download"
    Remove-Item -Recurse -Force $dl -ErrorAction SilentlyContinue
    New-Item -ItemType Directory -Path $dl, $installDir -Force | Out-Null
-   curl.exe -fsSL --connect-timeout 20 --max-time 600 -o "$dl\gaffer-install-win.zip" https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-win.zip
+   curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\gaffer-install-win.zip" https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-install-win.zip
    if ($LASTEXITCODE -ne 0) { throw "Download of gaffer-install-win.zip failed (curl exit $LASTEXITCODE)" }
-   curl.exe -fsSL --connect-timeout 20 --max-time 600 -o "$dl\SHA256SUMS.txt" https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt
+   curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\SHA256SUMS.txt" https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt
    if ($LASTEXITCODE -ne 0) { throw "Download of SHA256SUMS.txt failed (curl exit $LASTEXITCODE)" }
    $want = ((Get-Content "$dl\SHA256SUMS.txt" | Where-Object { $_ -match ' gaffer-install-win\.zip$' }) -split '\s+')[0]
    $got = (Get-FileHash "$dl\gaffer-install-win.zip" -Algorithm SHA256).Hash.ToLower()
@@ -116,7 +116,7 @@ Before you begin, read these rules. They apply to every step below.
 
    ```bash
    DL="${TMPDIR:-/tmp}/gaffer-download"
-   mkdir -p "$DL" && curl -fsSL --connect-timeout 20 --max-time 600 -o "$DL/node-v24.22.1-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
+   mkdir -p "$DL" && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
    ```
 
    If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-arm64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
@@ -125,7 +125,7 @@ Before you begin, read these rules. They apply to every step below.
 
    ```bash
    DL="${TMPDIR:-/tmp}/gaffer-download"
-   mkdir -p "$DL" && curl -fsSL --connect-timeout 20 --max-time 600 -o "$DL/node-v24.22.1-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
+   mkdir -p "$DL" && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
    ```
 
    If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-x64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
@@ -135,7 +135,7 @@ Before you begin, read these rules. They apply to every step below.
    ```powershell
    $dl = "$env:TEMP\gaffer-download"
    New-Item -ItemType Directory -Path $dl -Force | Out-Null
-   curl.exe -fsSL --connect-timeout 20 --max-time 600 -o "$dl\node-v24.22.1-win-x64.zip" https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip
+   curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\node-v24.22.1-win-x64.zip" https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip
    if ($LASTEXITCODE -ne 0) { Write-Host "Download failed (curl exit $LASTEXITCODE)" }
    ```
 
@@ -247,7 +247,7 @@ Before you begin, read these rules. They apply to every step below.
 
    The first line must start with `Valid` and name `OpenJS Foundation`, and the second must be `v24.22.1`. The first run can take several seconds while Windows Defender scans the new file; later runs are fast. The verified version is recorded only when every check passed.
 
-   If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime's signature could not be verified. Nothing was installed."
+   If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime's signature could not be verified. The Gaffer folder was left without a runtime; nothing was installed anywhere else."
 <!-- runtime-pins:end -->
 
 9. **Turn on the CEP developer mode flag.** This is a user preference that lets After Effects load extensions that are not signed through Adobe; it installs nothing. Tell the user that in one sentence, then set it:
@@ -355,6 +355,7 @@ Before you begin, read these rules. They apply to every step below.
 - **Panel says Gaffer's runtime is damaged or missing:** the Node.js runtime file in the install folder is not the verified one (for example antivirus removed or changed it). Open Settings and run Update, or reinstall.
 - **Panel says "macOS blocked Gaffer's runtime":** reinstall Gaffer. If it happens again, check whether security software on the Mac blocks programs inside `~/Library/Application Support`.
 - **The Node.js download fails from both nodejs.org and the mirror:** the network blocks both. Gaffer needs `nodejs.org` or `github.com` with `release-assets.githubusercontent.com` once at install time, and again only when an update changes the Node.js version. Ask the network administrator to allow one of them; do not work around certificate errors.
+- **Windows: downloads fail with curl exit 35 or `CRYPT_E_REVOCATION_OFFLINE`:** the network blocks the certificate revocation lookups Windows makes for HTTPS downloads. This needs the network administrator to allow those lookups (or the download hosts). Do not work around it by turning off revocation or certificate checks.
 - **Windows with a roaming profile:** the runtime (about 94 MB) lives in the extension folder under `%APPDATA%`, which roams. If roaming sync is slow, ask your administrator to exclude `%APPDATA%\Adobe\CEP\extensions\com.gaffer.panel\daemon\runtime`.
 - **MCP tools not available in a terminal Claude Code session:** Run the step 11 registration again (`<claude binary> mcp add ...`, where the binary is the standalone `claude` if you have one, otherwise the desktop app's copy from step 10; `claude` alone may not be on PATH). Verify with `<claude binary> mcp list`. The panel chat does not need this registration.
 - **MCP tools show as disconnected in `mcp list`:** Most common cause: the Gaffer panel is not open in After Effects. Open AE, then open Window > Extensions > Gaffer, then re-run `mcp list` with the same binary. If the panel is open and it still shows disconnected, check the panel's connection indicator. If the panel also shows disconnected, the daemon failed to start, see "Panel shows Disconnected" above.

@@ -26,7 +26,10 @@ const PLATFORMS = {
 
 const MAC_INSTALL = '"$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"';
 const WIN_INSTALL = '"$env:APPDATA\\Adobe\\CEP\\extensions\\com.gaffer.panel"';
-const CURL_OPTS = '-fsSL --connect-timeout 20 --max-time 600';
+// Same download budget as fetch-runtime.sh / fetch-runtime.ps1 (-fsSL = --fail
+// --silent --show-error --location). '=https' is quoted: zsh expands a bare
+// =word to a command path (EQUALS option), so an unquoted --proto =https fails there.
+export const CURL_OPTS = '-fsSL --proto \'=https\' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2';
 
 function platformsOf(pins) {
   const n = pins && pins.node;
@@ -168,7 +171,7 @@ export function renderRuntimeSteps(pins) {
     }
     out.push('');
   }
-  out.push(ind('If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime\'s signature could not be verified. Nothing was installed."'));
+  out.push(ind('If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime\'s signature could not be verified. The Gaffer folder was left without a runtime; nothing was installed anywhere else."'));
   return out.join('\n');
 }
 
@@ -206,11 +209,15 @@ export function checkReadme(readme, pins) {
     if (!shas.has(m[0].toLowerCase())) problems.push('unpinned SHA-256 in README: ' + m[0]);
   }
   const urlEnd = '[^\\s`"\'<>)\\]]*';
+  // Every official or mirror URL must name a pinned archive exactly, not
+  // just sit under the pinned base.
+  const pinnedUrls = new Set();
+  for (const p of Object.values(n.platforms)) { pinnedUrls.add(n.official + p.archive); pinnedUrls.add(n.mirror + p.archive); }
   for (const m of readme.matchAll(new RegExp('https://nodejs\\.org/dist/' + urlEnd, 'g'))) {
-    if (!m[0].startsWith(n.official)) problems.push('nodejs.org URL not under the pinned version: ' + m[0]);
+    if (!pinnedUrls.has(m[0])) problems.push('nodejs.org URL is not a pinned archive: ' + m[0]);
   }
   for (const m of readme.matchAll(new RegExp('https://github\\.com/spendolas/gaffer-ae/releases/download/' + urlEnd, 'g'))) {
-    if (!m[0].startsWith(n.mirror)) problems.push('mirror URL not the pinned mirror: ' + m[0]);
+    if (!pinnedUrls.has(m[0])) problems.push('mirror URL is not a pinned archive: ' + m[0]);
   }
   for (const m of readme.matchAll(/TeamIdentifier=(\w+)/g)) {
     if (m[1] !== n.signing.darwinTeamId) problems.push('Team ID differs from the pin: ' + m[0]);
