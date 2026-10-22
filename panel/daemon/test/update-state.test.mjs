@@ -140,3 +140,111 @@ test('updateVerdict: a commit-keyed attempt left by a pre-0.11 panel is cleared 
   assert.equal(U.updateVerdict({ target: '401c1ec', at: now - 1000 }, '0.11.0', now), 'stale');
   assert.equal(U.updateVerdict({ target: '9f8e7d6c5b4a', at: now - 1000 }, '0.11.0', now), 'stale');
 });
+
+// ---- Repair mode and the updater's result line (Task 13) ----
+
+test('exposes the repair and result-line API', () => {
+  for (const fn of ['isRepairableLaunchError', 'settingsUpdateAction', 'lastUpdaterResult',
+    'updateWaitStep', 'updateFailureText']) {
+    assert.equal(typeof U[fn], 'function', fn);
+  }
+});
+
+test('isRepairableLaunchError: the launch notices that point at Settings, plus the Gatekeeper block', () => {
+  for (const c of ['runtime-damaged', 'runtime-missing', 'runtime-blocked', 'launch-failed']) {
+    assert.equal(U.isRepairableLaunchError(c), true, c);
+  }
+  for (const c of [null, undefined, '', 'launch-usage', 'something-else']) {
+    assert.equal(U.isRepairableLaunchError(c), false, String(c));
+  }
+});
+
+test('settingsUpdateAction: Update when a newer release exists, Repair when only the runtime needs it, nothing while updating or on a dev install', () => {
+  const base = { available: false, repairable: false, updating: false, dev: false };
+  assert.equal(U.settingsUpdateAction(base), null);
+  assert.equal(U.settingsUpdateAction({ ...base, available: true }), 'update');
+  assert.equal(U.settingsUpdateAction({ ...base, repairable: true }), 'repair');
+  // A newer release repairs too (the runtime step re-provisions); the label stays Update.
+  assert.equal(U.settingsUpdateAction({ ...base, available: true, repairable: true }), 'update');
+  assert.equal(U.settingsUpdateAction({ ...base, available: true, repairable: true, updating: true }), null);
+  assert.equal(U.settingsUpdateAction({ ...base, repairable: true, dev: true }), null);
+  assert.equal(U.settingsUpdateAction({ ...base, available: true, dev: true }), 'update', 'dev keeps today\'s Update CTA rule (runUpdate explains)');
+});
+
+test('lastUpdaterResult: the last ok:, err: or busy: line wins, progress lines and fetch-runtime lines do not count', () => {
+  assert.equal(U.lastUpdaterResult(''), null);
+  assert.equal(U.lastUpdaterResult(null), null);
+  assert.equal(U.lastUpdaterResult('=== Update started ===\nDownloading x\n'), null);
+  assert.deepEqual(plain(U.lastUpdaterResult('=== Update started ===\nRelease: v0.12.0\n=== Update complete ===\nok:0.12.0\n')),
+    { kind: 'ok', version: '0.12.0' });
+  assert.deepEqual(plain(U.lastUpdaterResult('runtime: ERROR: both sources failed\nerr:runtime\nERROR: could not stage\nerr:runtime\n')),
+    { kind: 'err', code: 'runtime' });
+  assert.deepEqual(plain(U.lastUpdaterResult('Another update is already running (pid 4), leaving it to finish.\nbusy:already-running\n')),
+    { kind: 'busy' });
+  // A busy run followed by the other updater finishing: its ok: is newer.
+  assert.deepEqual(plain(U.lastUpdaterResult('busy:already-running\nReplacing files...\nok:0.12.0\n')),
+    { kind: 'ok', version: '0.12.0' });
+  // runtime:current / runtime:installed are fetch-runtime progress, not results.
+  assert.equal(U.lastUpdaterResult('runtime:current\nruntime:installed v24.1.0 darwin-arm64\n'), null);
+  // Not at line start: not a result.
+  assert.equal(U.lastUpdaterResult('note: err:runtime is printed on failure\n'), null);
+});
+
+test('lastUpdaterResult: Windows transcripts (CRLF, BOM, UTF-16 NULs, footer after the result)', () => {
+  const t = '﻿**********************\r\nWindows PowerShell transcript start\r\nok:0.12.0\r\n**********************\r\nWindows PowerShell transcript end\r\nEnd time: 20261022\r\n';
+  assert.deepEqual(plain(U.lastUpdaterResult(t)), { kind: 'ok', version: '0.12.0' });
+  const utf16ish = 'e\u0000r\u0000r\u0000:\u0000r\u0000u\u0000n\u0000t\u0000i\u0000m\u0000e\u0000\r\u0000\n\u0000';
+  assert.deepEqual(plain(U.lastUpdaterResult(utf16ish)), { kind: 'err', code: 'runtime' });
+  assert.deepEqual(plain(U.lastUpdaterResult('  err:sync  \r\n')), { kind: 'err', code: 'sync' });
+});
+
+test('updateWaitStep: ok reloads, err fails at once, a version change reloads, busy and silence wait', () => {
+  const step = (o) => plain(U.updateWaitStep({ mode: 'update', startVersion: '0.11.0', diskJson: '{"version":"0.11.0"}', logText: '', exited: false, ...o }));
+  assert.deepEqual(step({}), { action: 'wait' });
+  assert.deepEqual(step({ logText: 'ok:0.12.0\n' }), { action: 'reload' });
+  assert.deepEqual(step({ logText: 'ERROR: x\nerr:runtime\n' }), { action: 'fail', code: 'runtime' });
+  assert.deepEqual(step({ logText: 'ERROR: x\nerr:download\n', exited: true }), { action: 'fail', code: 'download' });
+  assert.deepEqual(step({ diskJson: '{"version":"0.12.0"}' }), { action: 'reload' });
+  assert.deepEqual(step({ logText: 'busy:already-running\n', exited: true }), { action: 'wait' });
+  // Exited with a readable log but no result line (a bare ERROR line, a crash): failed, no code.
+  assert.deepEqual(step({ logText: 'ERROR: downloaded archive is not a Gaffer release\n', exited: true }), { action: 'fail', code: null });
+  // Log unreadable (no CEP Node): today's behaviour, wait for the version or the give-up.
+  assert.deepEqual(step({ logText: null, exited: true }), { action: 'wait' });
+  // An err: from the updater wins over a version.json that moved (it cannot, but never reload on a failure).
+  assert.deepEqual(step({ logText: 'err:sync\n', diskJson: '{"version":"0.12.0"}' }), { action: 'fail', code: 'sync' });
+});
+
+test('updateWaitStep in repair mode: the version never changes, ok: is the signal; an unreadable log reloads once the updater exited', () => {
+  const step = (o) => plain(U.updateWaitStep({ mode: 'repair', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: '', exited: false, ...o }));
+  assert.deepEqual(step({}), { action: 'wait' });
+  assert.deepEqual(step({ logText: 'ok:0.12.0\n' }), { action: 'reload' });
+  assert.deepEqual(step({ logText: 'err:runtime\n' }), { action: 'fail', code: 'runtime' });
+  assert.deepEqual(step({ logText: null, exited: false }), { action: 'wait' });
+  assert.deepEqual(step({ logText: null, exited: true }), { action: 'reload' }, 'the reloaded panel re-checks the runtime');
+});
+
+test('updateFailureText: the spec text for err:runtime, the generic text with the real log path otherwise, no dashes', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const rt = plain(U.updateFailureText('update', 'runtime', log));
+  assert.equal(rt.notice, "Update failed: could not download Gaffer's runtime. Your current version still works.");
+  assert.equal(rt.banner, 'Update failed');
+  for (const code of ['download', 'sync', 'lock', 'dev-install', null]) {
+    const g = plain(U.updateFailureText('update', code, log));
+    assert.equal(g.banner, 'Update did not complete');
+    assert.equal(g.notice, 'Update did not complete. The updater log has details: ' + log + '.');
+  }
+  const rr = plain(U.updateFailureText('repair', 'runtime', log));
+  assert.equal(rr.banner, 'Repair failed');
+  assert.equal(rr.notice, "Repair failed: could not download Gaffer's runtime. Check your network and try again.");
+  const rg = plain(U.updateFailureText('repair', 'sync', log));
+  assert.equal(rg.banner, 'Repair did not complete');
+  assert.equal(rg.notice, 'Repair did not complete. The updater log has details: ' + log + '.');
+  // Without a known path: today's two-platform hint.
+  assert.match(U.updateFailureText('update', 'sync', null).notice, /%TEMP%\\gaffer-update\.log \(Windows\)/);
+  for (const mode of ['update', 'repair']) {
+    for (const code of ['runtime', 'sync', null]) {
+      const t = U.updateFailureText(mode, code, log);
+      assert.ok(!/[–—]/.test(t.notice + t.banner), 'dash in ' + mode + ' ' + code);
+    }
+  }
+});
