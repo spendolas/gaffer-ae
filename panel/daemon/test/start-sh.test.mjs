@@ -339,7 +339,7 @@ test('hostile NODE_OPTIONS / NODE_PATH / NODE_EXTRA_CA_CERTS are cleared; CA pas
   const evil = join(sb.root, 'evil.cjs');
   writeFileSync(evil, `require('fs').writeFileSync(${JSON.stringify(join(sb.root, 'pwned'))}, 'x');`);
   const r = run(sb, {
-    NODE_OPTIONS: `--require "${evil}"`,
+    NODE_OPTIONS: `--require ${JSON.stringify(evil)}`, // JSON-escaped: NODE_OPTIONS treats a backslash inside quotes as an escape (Windows paths)
     NODE_PATH: join(sb.root, 'evil modules'),
     NODE_EXTRA_CA_CERTS: '/corp/ca.pem',
     KEEP_ME: 'yes',

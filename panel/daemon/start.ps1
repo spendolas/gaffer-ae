@@ -32,7 +32,20 @@ $pinsPath = Join-Path $dir 'runtime-pins.json'
 
 function Write-Note([string] $text) {
     $line = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') + ' Gaffer start.ps1: ' + $text + "`r`n"
-    try { [IO.File]::AppendAllText($log, $line) } catch { }
+    # FileShare.ReadWrite: a running daemon holds the log open for writing
+    # (launch.cjs hands it the handle), and AppendAllText's FileShare.Read
+    # makes the open fail. If the log still cannot be written, the note goes
+    # to stderr instead of vanishing (stdout carries only the contract line).
+    $fs = $null
+    try {
+        $fs = New-Object IO.FileStream($log, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+        $b = [Text.Encoding]::UTF8.GetBytes($line)
+        $fs.Write($b, 0, $b.Length)
+    } catch {
+        try { [Console]::Error.Write($line) } catch { }
+    } finally {
+        if ($fs) { $fs.Dispose() }
+    }
 }
 
 function Stop-Launch([string] $code, [string] $reason) {
@@ -146,6 +159,17 @@ if (Test-Path -LiteralPath $bin) {
 # once; the daemon holds only the log, never this script's stdout. Capture
 # its output so a node that could not start (no output, a stale or null
 # $LASTEXITCODE) still ends in one contract line.
+# This PowerShell holds inheritable copies of the caller's stdout/stderr
+# pipes (the console host duplicates its std handles). & $node would pass
+# them to launch.cjs and libuv on to the detached daemon, so a caller
+# reading this script's output to EOF (system.callSystem) would wait for the
+# daemon to exit (seen on the Windows VM). Clear the inherit flag on every
+# handle first; the pipes PowerShell creates for & $node below are made
+# after this, so the capture still works.
+try {
+    Add-Type -Namespace GafferLaunch -Name NoInherit -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool SetHandleInformation(IntPtr h, int mask, int flags);'
+    for ($h = 4; $h -lt 65536; $h += 4) { [void][GafferLaunch.NoInherit]::SetHandleInformation([IntPtr]$h, 1, 0) }
+} catch { Write-Note ('could not clear handle inheritance: ' + $_.Exception.Message) }
 $global:LASTEXITCODE = $null
 $out = $null
 $started = $true
