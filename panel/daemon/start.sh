@@ -9,10 +9,17 @@
 #      equals the runtime/VERIFIED stamp, or on a stamp-less first run the
 #      size and sha256 match runtime-pins.json, then the stamp is written).
 #      A runtime that fails the check is NEVER bypassed with a system node.
-#   3. No runtime: system node (fixed candidates, then PATH) with daemon.mjs
+#   3. No runtime but runtime.old or runtime.new next to it (not a dev
+#      checkout): an updater is swapping the runtime. A stateless launcher
+#      cannot wait, so it starts nothing and prints err:runtime-updating; the
+#      panel retries in a few seconds, bounded like its own swap wait, and
+#      once that wait is over passes the argument swap-wait-expired, which
+#      skips this rule.
+#   4. No runtime: system node (fixed candidates, then PATH) with daemon.mjs
 #      when present, else index.js.
 # Output contract, one line on stdout (panel/main.js parses it):
 #   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
+#   | err:runtime-updating (not an error: retry shortly)
 # Decisions and notes go to the daemon log, like the panel's.
 #
 # Test seams (panel/daemon/test/start-sh.test.mjs), honoured only when
@@ -21,6 +28,8 @@
 # system-node candidates.
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+SWAP_WAIT_EXPIRED=""
+[ "$1" = "swap-wait-expired" ] && SWAP_WAIT_EXPIRED=1
 cd "$DIR" || { echo "err:runtime-missing"; exit 1; }
 LOG="/tmp/gaffer-daemon.log"
 TESTING=""
@@ -153,6 +162,14 @@ fi
 
 DEV=""
 [ -e "$DIR/../../.git" ] && DEV=1
+
+if [ -z "$DEV" ] && [ ! -e "$BIN" ] && [ -z "$SWAP_WAIT_EXPIRED" ] \
+   && { [ -e "$DIR/runtime.old" ] || [ -e "$DIR/runtime.new" ]; }; then
+  SWAPPING=""
+  [ -e "$DIR/runtime.old" ] && SWAPPING="runtime.old"
+  [ -e "$DIR/runtime.new" ] && SWAPPING="${SWAPPING:+$SWAPPING and }runtime.new"
+  fail runtime-updating "no runtime but $SWAPPING present, an update is swapping the runtime, the panel retries shortly"
+fi
 
 if [ -z "$DEV" ] && [ -e "$BIN" ]; then
   check_runtime

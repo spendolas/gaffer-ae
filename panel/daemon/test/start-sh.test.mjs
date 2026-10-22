@@ -2,6 +2,7 @@
 // launcher must reach the same verdict as resolveDaemonLaunch
 // (panel/daemon-launch.js) and keep the output contract
 //   pid:<N> runtime | pid:<N> node | err:runtime-damaged | err:runtime-missing
+//   | err:runtime-updating
 //
 // Every test builds a sandbox whose path has spaces and accents (the real
 // extension path contains "Application Support"):
@@ -128,7 +129,7 @@ function sandbox(opts = {}) {
 
 const spawned = [];
 const roots = [];
-function run(sb, extraEnv = {}) {
+function run(sb, extraEnv = {}, args = []) {
   const env = {
     HOME: sb.root,
     PATH: sb.tools + ':' + sb.sysbin,
@@ -138,7 +139,7 @@ function run(sb, extraEnv = {}) {
     ...extraEnv,
   };
   const t0 = Date.now();
-  const r = spawnSync('/bin/bash', [join(sb.dir, 'start.sh')], { env, encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync('/bin/bash', [join(sb.dir, 'start.sh'), ...args], { env, encoding: 'utf8', timeout: 15000 });
   const ms = Date.now() - t0;
   const m = /pid:(\d+)/.exec(r.stdout || '');
   if (m) spawned.push(Number(m[1]));
@@ -332,6 +333,70 @@ test('dev checkout (.git next to the panel): system node with index.js even with
   const mk = await marker(sb);
   assert.equal(mk.env.FAKE_BIN, 'system');
   assert.match(mk.argv[1], /index\.js$/);
+});
+
+// ---- swap window (spec section 4 rule 3, resolveDaemonLaunch retry) ----
+
+function swapDir(sb, name) {
+  mkdirSync(join(sb.dir, name));
+  fakeNode(join(sb.dir, name, 'node'), name);
+}
+
+for (const names of [['runtime.old'], ['runtime.new'], ['runtime.old', 'runtime.new']]) {
+  test(`runtime missing, ${names.join(' and ')} present: err:runtime-updating, nothing started although a system node is on PATH`, opts, async () => {
+    const sb = sandbox({ runtime: false, sysNode: true });
+    for (const n of names) swapDir(sb, n);
+    const r = run(sb);
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout.trim(), 'err:runtime-updating');
+    assert.equal(await marker(sb, 600), null, 'nothing launched');
+    const log = logText(sb);
+    assert.match(log, new RegExp(`no runtime but ${names.join(' and ').replace(/\./g, '\\.')} present, an update is swapping the runtime`));
+    assert.match(log, /daemon not launched: err:runtime-updating/);
+    assert.doesNotMatch(log, /launching daemon/);
+  });
+}
+
+test('swap window with no system node either: still err:runtime-updating (retry, not missing)', opts, async () => {
+  const sb = sandbox({ runtime: false, sysNode: false });
+  swapDir(sb, 'runtime.old');
+  assert.equal(run(sb).stdout.trim(), 'err:runtime-updating');
+});
+
+test('swap window, the panel wait is over (swap-wait-expired): the system node probe applies as before', opts, async () => {
+  const sb = sandbox({ runtime: false, sysNode: true });
+  swapDir(sb, 'runtime.old');
+  const r = run(sb, {}, ['swap-wait-expired']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout.trim(), /^pid:\d+ node$/);
+  const mk = await marker(sb);
+  assert.equal(mk.env.FAKE_BIN, 'system');
+  assert.match(mk.argv[1], /daemon\.mjs$/);
+});
+
+test('runtime present next to a leftover runtime.old: the runtime launches (no swap wait)', opts, async () => {
+  const sb = sandbox({ stamp: '<size> <sha>\n', sysNode: true });
+  swapDir(sb, 'runtime.old');
+  const r = run(sb);
+  assert.match(r.stdout.trim(), /^pid:\d+ runtime$/);
+  assert.equal((await marker(sb)).env.FAKE_BIN, 'runtime');
+});
+
+test('dev checkout next to runtime.old: system node with index.js, never waits', opts, async () => {
+  const sb = sandbox({ runtime: false, sysNode: true, dev: true });
+  swapDir(sb, 'runtime.old');
+  const r = run(sb);
+  assert.match(r.stdout.trim(), /^pid:\d+ node$/);
+  const mk = await marker(sb);
+  assert.equal(mk.env.FAKE_BIN, 'system');
+  assert.match(mk.argv[1], /index\.js$/);
+});
+
+test('0.11.x mid-migration (no runtime, no runtime.old or runtime.new): system node, unchanged', opts, async () => {
+  const sb = sandbox({ runtime: false, sysNode: true });
+  const r = run(sb);
+  assert.match(r.stdout.trim(), /^pid:\d+ node$/);
+  assert.doesNotMatch(logText(sb), /runtime-updating/);
 });
 
 test('hostile NODE_OPTIONS / NODE_PATH / NODE_EXTRA_CA_CERTS are cleared; CA passed on for claude', opts, async () => {

@@ -534,6 +534,50 @@ test('main.js: a spawn that fails at exec shows a repairable notice and never cl
   assert.ok(spawn.includes('swapWaitExpired'), 'the retry is bounded');
 });
 
+// ---- ExtendScript route: start.sh / start.ps1 output (spec section 5) ----
+
+test('parseLauncherOutput: pid lines', () => {
+  assert.deepEqual(plain(L.parseLauncherOutput('pid:4242 runtime\n')), { pid: 4242, kind: 'runtime' });
+  assert.deepEqual(plain(L.parseLauncherOutput('pid:7 node')), { pid: 7, kind: 'node' });
+  assert.deepEqual(plain(L.parseLauncherOutput('pid:7 node\r\n')), { pid: 7, kind: 'node' });
+});
+
+test('parseLauncherOutput: err:runtime-updating is a retry, never an error', () => {
+  const r = plain(L.parseLauncherOutput('err:runtime-updating\n'));
+  assert.deepEqual(r, { retry: 'runtime-updating' });
+  assert.equal(r.error, undefined);
+  assert.deepEqual(plain(L.parseLauncherOutput('err:runtime-updating\r\n')), { retry: 'runtime-updating' });
+});
+
+test('parseLauncherOutput: error codes, launch-usage reads as launch-failed', () => {
+  for (const c of ['runtime-damaged', 'runtime-missing', 'launch-failed']) {
+    assert.deepEqual(plain(L.parseLauncherOutput('err:' + c + '\n')), { error: c });
+  }
+  assert.deepEqual(plain(L.parseLauncherOutput('err:launch-usage')), { error: 'launch-failed' });
+});
+
+test('parseLauncherOutput: no output or junk shows nothing', () => {
+  for (const v of ['', null, undefined, 'something else', 'err:runtime-updatingX', 'err:runtime-missingly']) {
+    assert.deepEqual(plain(L.parseLauncherOutput(v)), {}, String(v));
+  }
+  assert.equal(L.SWAP_WAIT_EXPIRED_ARG, 'swap-wait-expired');
+});
+
+test('main.js: the ExtendScript route retries on err:runtime-updating like the Node route, bounded', () => {
+  const main = read('../../main.js');
+  const es = main.slice(main.indexOf('function spawnViaExtendScript('), main.indexOf('function startDaemon('));
+  assert.ok(es.includes('Launch.parseLauncherOutput(result)'), 'parses through GafferLaunch');
+  assert.match(es, /if \(out\.retry\) \{[\s\S]*?scheduleSwapRetry\(\);\s*return;/, 'retry: same scheduler, no notice');
+  assert.ok(es.indexOf('scheduleSwapRetry()') < es.indexOf('showLaunchError(out.error)'), 'the retry never reaches showLaunchError');
+  assert.match(es, /swapRetries >= SWAP_RETRY_MAX\) \? ' ' \+ Launch\.SWAP_WAIT_EXPIRED_ARG/, 'after the bounded wait the launcher skips the rule');
+  assert.ok(/start\.ps1\\\\"' \+ arg \+ '"\)/.test(es) && /start\.sh\\\\"' \+ arg \+ '"\)/.test(es), 'both launchers get the argument');
+  const spawn = main.slice(main.indexOf('function spawnViaNode('), main.indexOf('function spawnViaExtendScript('));
+  assert.match(spawn, /if \(launch\.retry\) \{\s*scheduleSwapRetry\(\);\s*return 'retry';/, 'the Node route shares the scheduler');
+  const sched = main.slice(main.indexOf('function scheduleSwapRetry('), main.indexOf('function spawnViaNode('));
+  assert.match(sched, /swapRetries\+\+/);
+  assert.match(sched, /setTimeout\([\s\S]*?startDaemon\(\);[\s\S]*?SWAP_RETRY_MS\)/);
+});
+
 test('main.js: a panel-made kill suppresses the Gatekeeper notice', () => {
   const main = read('../../main.js');
   const launch = main.slice(main.indexOf('function launchDaemon('), main.indexOf('function showLaunchError('));

@@ -265,3 +265,38 @@ test('start.ps1: mirrors resolveDaemonLaunch (paths, stamp, pins, codes)', () =>
   // Output uses Write-Output (stdout), never Write-Host / Write-Error for the contract line.
   assert.doesNotMatch(ps1Code, /Write-(Host|Error)[^\n]*err:/);
 });
+
+test('start.ps1: swap window mirrors resolveDaemonLaunch (err:runtime-updating, nothing started, bounded by swap-wait-expired)', () => {
+  // The argument is read at script scope ($args inside a function would be the function's).
+  assert.match(ps1Code, /^\$swapWaitExpired = \(\$args\.Count -gt 0 -and \[string\] \$args\[0\] -eq 'swap-wait-expired'\)$/m);
+  const at = ps1Code.indexOf('if (-not $swapWaitExpired -and -not (Test-Path -LiteralPath $bin)) {');
+  assert.ok(at > -1, 'swap-window block');
+  const block = ps1Code.slice(at, ps1Code.indexOf('\n}\n', at) + 3);
+  assert.ok(block.includes("Test-Path -LiteralPath (Join-Path $dir 'runtime.old')"), 'checks runtime.old');
+  assert.ok(block.includes("Test-Path -LiteralPath (Join-Path $dir 'runtime.new')"), 'checks runtime.new');
+  assert.match(block, /Stop-Launch 'runtime-updating' \('no runtime but '/, 'prints err:runtime-updating and exits 1 (Stop-Launch)');
+  assert.doesNotMatch(block, /Find-SystemNode|launch\.cjs|& \$node/, 'starts nothing');
+  // Before the runtime / system-node decision, after the functions it calls.
+  assert.ok(at > ps1Code.indexOf('function Stop-Launch'), 'Stop-Launch defined first');
+  assert.ok(at < ps1Code.indexOf('if (Test-Path -LiteralPath $bin) {'), 'before the system-node branch');
+  assert.ok(at < ps1Code.indexOf('$node = Find-SystemNode'), 'before the probe');
+  // Header contract lists the new line.
+  assert.match(ps1, /\| err:runtime-updating \(not an error: retry shortly\)/);
+});
+
+test('start.ps1: PowerShell 5.1 syntax (no PowerShell 7 operators)', () => {
+  const bad = [[/&&|\|\|/, 'pipeline chain operator'], [/\?\?/, 'null-coalescing'], [/\s\?\s[^\n]*\s:\s/, 'ternary'], [/\?\.|\?\[/, 'null-conditional']];
+  for (const [re, what] of bad) {
+    const hit = ps1Code.split('\n').find((l) => re.test(l.replace(/"[^"]*"|'[^']*'/g, '""')));
+    assert.ok(!hit, what + ': ' + (hit || '').trim());
+  }
+});
+
+test('start.ps1: parses under pwsh when it is installed', (t) => {
+  const probe = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8', windowsHide: true });
+  if (probe.error || probe.status !== 0) { t.skip('pwsh not installed; the Windows VM run is the parse check'); return; }
+  const cmd = "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('" +
+    START_PS1.replace(/'/g, "''") + "', [ref]$null, [ref]$e); if ($e.Count) { $e | ForEach-Object { $_.ToString() }; exit 1 }";
+  const r = spawnSync('pwsh', ['-NoProfile', '-Command', cmd], { encoding: 'utf8', windowsHide: true });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
