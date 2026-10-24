@@ -286,6 +286,7 @@ Evidence: the 10 transcripts, a row per run in the results table, the A3 diff pe
 Prep: a Mac with Little Snitch or LuLu, and separately with the macOS application firewall turned on (it was off on the PoC Mac). Windows Firewall is no longer part of this case: it is a pass/fail gate in A23.
 Act: first launch of the panel after a fresh install.
 Expect: record whether a prompt names `runtime/node` and what it asks. Not a failure either way; the result goes into the README troubleshooting text.
+Result note (2026-10-24, owner's Mac, LuLu, live AE test): LuLu prompted once for `node` (the bundled `runtime/node`, args `daemon.mjs`) connecting to cdn.simpleicons.org (MCP server icons). Rule scope Process/Always is expected to survive a Repair that re-downloads the same signed binary to the same path (to be confirmed). README troubleshooting and the v0.12.0 changelog now tell the user to choose Allow. The macOS application firewall variant is still open.
 
 ### A21. Uninstall leaves no residue [gate]
 
@@ -426,7 +427,7 @@ Only after G1 to G5 pass, and with the mirror release `node-v24.22.1` in place (
 | A19 S1 to S5 | Mac | Sonnet | | | | |
 | A19 S1 to S5 | Mac | Opus | | | | |
 | A19 b, c | Mac | Sonnet, Opus | | | | |
-| A20 | Mac | | | | | prompt text: |
+| A20 | Mac | | | | | prompt text: LuLu 2026-10-24, once, `node` args `daemon.mjs` to cdn.simpleicons.org; app firewall variant open |
 | A21 | Mac / Windows VM | | | | | |
 | A22 | Mac / Windows VM | | | | | |
 | A23 | Windows VM (and Mac listener check) | | | | | rules before / after: |
