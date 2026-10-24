@@ -88,7 +88,7 @@ Each rule has a check in the acceptance test plan (`docs/superpowers/plans/2026-
   |            v                                                       |
   |   <ext>/daemon/runtime/node  (official Node 24 LTS, unmodified,    |
   |                               vendor signed, never on PATH)        |
-  |     runs <ext>/daemon/daemon.mjs  (one esbuild bundle, 2.5 MB)     |
+  |     runs <ext>/daemon/daemon.mjs  (one esbuild bundle, 3.1 MB)     |
   |       MCP :9824, panel bridge :9823, spawns claude -p              |
   +--------------------------------------------------------------------+
         ^ first install and runtime changes only            ^ every update
@@ -432,7 +432,7 @@ Verification order (owner constraint 6), all before the version-bump push to `ma
 
 | Gate | What | Who runs it | Evidence |
 |---|---|---|---|
-| G1 | `gh workflow run release.yml -f dry_run=true` on the release branch; `build` and `smoke` green; download the `gaffer-release` artifact | agent in the repo | run URL, artifact SHA-256 list, smoke matrix hashes equal to the P8 values (tools/list `68693916...8223`, runJSX capture `db239664...7faf`) or an explained difference, the full arm64 `binarySha256` |
+| G1 | `gh workflow run release.yml -f dry_run=true` on the release branch; `build` and `smoke` green; download the `gaffer-release` artifact | agent in the repo | run URL, artifact SHA-256 list, smoke matrix hashes equal to `scripts/smoke/parity-baseline.json` (P8 values, except tools/list, which moved from `68693916...8223` to `9620aefd...2e25` with the zod 4 upgrade of 2026-10-24: same schemas, different JSON layout, see the file's note; runJSX capture `db239664...7faf`) or an explained difference, the full arm64 `binarySha256` |
 | G2 | full Linux test set (the dry run's ubuntu `build` job, plus the same commands in a `node:24` container locally) | agent | job log, local output |
 | G3 | real update on a Mac: v0.11.3 install to the candidate with the old updater, then candidate to a synthetic candidate+1 with the new updater, both using only the dry-run assets | agent drives, owner present for AE | `ok:` lines, marker diffs, runtime hashes, panel screenshot |
 | G4 | same on `gaffer-winvm` | agent via `guestcontrol`, owner approves | same, plus the listener list (loopback only), the firewall rule check and the owner's note that no firewall prompt or console window appeared (A23, A24) |
