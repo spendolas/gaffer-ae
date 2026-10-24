@@ -1,0 +1,10 @@
+{
+  "clip-01": { "title": "ASCII wave", "description": "A well-known waving GIF rendered as ASCII characters.", "holder": "spendolas" },
+  "clip-02": { "title": "Emoji burst", "description": "Various emoji burst outward while their colour shifts from green to yellow.", "holder": "spendolas" },
+  "clip-03": { "title": "Isometric LEGO brick", "description": "A red two-by-four LEGO brick turning in isometric view.", "holder": "spendolas" },
+  "clip-04": { "title": "Menu hover", "description": "A stack of orange menu bars; hovering over one expands it into a larger panel.", "holder": "spendolas" },
+  "clip-05": { "title": "Loading spinners", "description": "Two thin circular spinners, each with a small bright arc travelling around its ring.", "holder": "spendolas" },
+  "clip-06": { "title": "Time scrubber", "description": "A glass handle slides along a row of fading tick marks, and the label above it changes as the slider moves.", "holder": "João Veríssimo" },
+  "clip-07": { "title": "Shimmer sphere", "description": "A sphere made of white dots shimmers as it rotates and zooms in.", "holder": "spendolas" },
+  "clip-08": { "title": "Organic carousel", "description": "Organic-looking colour blocks scroll as a horizontal carousel, moving from left to right.", "holder": "spendolas" }
+}
