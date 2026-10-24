@@ -36,6 +36,10 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # Before the tests: some of them read the generated site/items.json.
+      - name: Build the clip manifest and posters
+        run: node scripts/site/build-manifest.mjs
+
       - name: Site tests
         run: node --test scripts/site/
 
@@ -44,9 +48,6 @@ jobs:
 
       - name: install.md matches the README
         run: node scripts/site/build-install-md.mjs --check
-
-      - name: Build the clip manifest and posters
-        run: node scripts/site/build-manifest.mjs
 
       - name: Build the sitemap
         run: node scripts/site/build-sitemap.mjs
