@@ -210,3 +210,21 @@ test('Settings stays reachable while the welcome screen covers the footer: the s
   assert.match(html, /\.settings-modal \{\s*position: fixed;\s*inset: 0;\s*z-index: 3000;/);
   assert.match(html, /\.toast-stack \{[^}]*z-index: 4000;/, 'toasts paint above the welcome screen');
 });
+
+// Live AE test 2026-10-24: the long Repair failure toast was one nowrap line
+// wider than the dock and clipped on both sides. Long labels must wrap inside
+// the panel (16px gutter each side); short ones keep hugging their text.
+test('a long toast wraps inside the panel width instead of clipping', () => {
+  const rule = (sel) => {
+    const m = html.match(new RegExp('\\n\\s*' + sel.replace('.', '\\.') + ' \\{([^}]*)\\}'));
+    assert.ok(m, 'no ' + sel + ' rule');
+    return m[1];
+  };
+  const stack = rule('.toast-stack');
+  assert.match(stack, /width: max-content;/, 'the stack hugs its widest toast (not capped at half the panel by left:50%)');
+  assert.match(stack, /max-width: calc\(100vw - 2 \* var\(--space-16\)\);/, 'the stack never gets wider than the panel minus its gutters');
+  const label = rule('.toast-label');
+  assert.ok(!/white-space: nowrap/.test(label), 'the toast label must not be nowrap');
+  assert.match(label, /white-space: normal;/);
+  assert.match(label, /overflow-wrap: anywhere;/, 'a long unbroken path still wraps');
+});
