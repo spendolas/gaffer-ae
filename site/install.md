@@ -92,7 +92,7 @@ Before you begin, read these rules. They apply to every step below.
    Pop-Location
    ```
 
-5. **Enable unsigned CEP extensions:**
+5. **Enable unsigned CEP extensions.** This is After Effects' developer setting for panels that are not signed by Adobe. It applies to all unsigned panels on this computer, not just Gaffer.
    ```bash
    # macOS — covers AE 2022 (CSXS 11), 2025 (CSXS 12), 2026+ (CSXS 13+)
    for v in 11 12 13; do defaults write com.adobe.CSXS.$v PlayerDebugMode 1; done
