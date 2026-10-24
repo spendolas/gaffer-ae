@@ -10,6 +10,8 @@ Open Claude Code and say:
 
 Claude will handle the rest. Then restart After Effects and open **Window > Extensions > Gaffer**.
 
+The same install is on the website, https://gafferae.com, as a copy button for the prompt "Install Gaffer by following https://gafferae.com/install.md". That page holds the same steps as the section below, generated from it.
+
 ## Prerequisites
 
 - After Effects 2022+

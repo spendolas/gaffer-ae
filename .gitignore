@@ -33,3 +33,8 @@ assets/
 # doesn't travel with the repo. Any other clone had no protection at all.
 .claude/settings.local.json
 .claude/worktrees/
+
+# Landing page (generated, never committed)
+site/media/_generated/
+site/items.json
+site/sitemap.xml
