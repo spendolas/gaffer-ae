@@ -1,0 +1,563 @@
+/* Structure only. Every colour, size and effect comes from the CSS variables
+   that config.js writes to :root (applyConfig). */
+
+/* Source Sans 3 variable font (upright, wght 200 to 900), SIL OFL (fonts/OFL-LICENSE.txt). */
+@font-face {
+  font-family: 'Source Sans 3';
+  src: url('../fonts/SourceSans3VF-Upright.otf.woff2') format('woff2');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: block;
+}
+
+/* JetBrains Mono variable font (upright, wght 100 to 800), SIL OFL (fonts/JetBrainsMono-OFL.txt). */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../fonts/JetBrainsMono-VF.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: block;
+}
+
+/* Document lock: no scroll, no rubber band, no browser chrome reactions. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Fallbacks (plain values, before JS writes the variables) keep the page dark
+   and readable without JavaScript. */
+html {
+  background: var(--color-stage, #121212);
+  color-scheme: dark;
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  background: var(--color-stage, #121212);
+  color: var(--color-text, #e0e0e0);
+  font-family: var(--type-ui, system-ui, sans-serif);
+  -webkit-text-size-adjust: 100%;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Stage: the infinite grid. Cards are positioned only by their matrix3d. */
+#stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  /* Pinch zooms the whole page like a photo (the browser handles it); one finger drags the grid (our
+     pointer events). grid.js widens this to include panning while the page is zoomed in. */
+  touch-action: pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
+}
+
+#stage.is-dragging {
+  cursor: grabbing;
+}
+
+.grid {
+  position: absolute;
+  inset: 0;
+}
+
+.card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  overflow: hidden;
+  border-radius: var(--grid-radius);
+  background: var(--color-dock-fill);
+  box-shadow: 0 calc(var(--shadow-blur) / 3) var(--shadow-blur) rgb(0 0 0 / var(--shadow-strength));
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* The poster and video live in each card's closed shadow root; their rules
+   are tileMediaCss() in js/media.js. */
+
+/* Flashlight: a dim layer with a hole punched by mask-image (set from JS).
+   Explicit z-index plus its own layer so Safari never sorts a 3D card above it. */
+.torch {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--color-stage);
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+/* Page headline: the h1, two block lines (.headline-title, .headline-sub). It never takes pointer
+   events, so the grid drags (and the cursor logic) as if it were not there. It sits in .bottom-stack, one
+   fixed column anchored to the viewport bottom: the headline above, the dock below, headline.dockGap
+   between them. The two reflow together as the dock grows (the note wrapping, the failure reveal), so
+   they can never overlap. The column has its own layer (explicit z-index plus translate3d) so Safari
+   never sorts a 3D grid card above it. */
+.bottom-stack {
+  position: fixed;
+  z-index: 20;
+  left: 50%;
+  bottom: max(1.5rem, env(safe-area-inset-bottom));
+  transform: translate3d(-50%, 0, 0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--headline-dock-gap, 24px);
+  width: max-content;
+  max-width: 100vw;
+  /* The column passes pointer events through to the grid; the dock takes them back. */
+  pointer-events: none;
+}
+
+.headline {
+  --hl-size: var(--headline-size, 64px);
+  --sl-size: var(--subline-size, 24px);
+  /* The clamped sizes, computed once: the font sizes and the shadow radii. The subtitle's
+     cap is generous (12vh, 18vh on phones) so the whole size slider stays live. */
+  --hl-font: var(--hl-size);
+  --sl-font: var(--sl-size);
+  width: max-content;
+  max-width: 92vw;
+  margin: 0;
+  box-sizing: border-box;
+  text-align: center;
+  font-family: var(--type-ui, system-ui, sans-serif);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.headline-title, .headline-sub {
+  display: block;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+  /* Forced, not inherited: browsers drop ligatures at non-zero letter-spacing unless asked. */
+  font-feature-settings: "liga" var(--headline-ligatures, 1), "clig" var(--headline-ligatures, 1);
+}
+
+.headline-title {
+  font-size: var(--hl-font);
+  font-weight: var(--headline-weight, 500);
+  letter-spacing: var(--headline-tracking, -0.03em);
+  line-height: var(--headline-line-height, 0.8);
+  color: var(--color-headline, #e0e0e0);
+  opacity: var(--headline-opacity, 1);
+  /* Fallback where color-mix is unsupported; replaced in @supports below. */
+  text-shadow: 0 0 0.2em rgb(0 0 0 / 0.6);
+}
+
+/* The gap between the lines: a spacer in the title's em (headline.gap), present only
+   while the subtitle has wording, so emptying it leaves no phantom space. */
+.headline-sub::before {
+  content: "";
+  display: block;
+  font-size: var(--hl-font);
+  height: var(--headline-gap, 0.12em);
+}
+.headline-sub:empty { display: none; }
+
+.headline-sub {
+  font-size: var(--sl-font);
+  font-weight: var(--subline-weight, 400);
+  letter-spacing: var(--subline-tracking, 0em);
+  line-height: var(--subline-line-height, 1.25);
+  color: var(--color-headline-sub, #aaaaaa);
+  opacity: var(--subline-opacity, 1);
+  text-shadow: 0 0 0.2em rgb(0 0 0 / 0.5);
+}
+
+@media (max-width: 600px) {
+  .headline {
+    --hl-size: var(--headline-size-compact, 72px);
+    --sl-size: var(--subline-size-compact, 24px);
+  }
+  .bottom-stack {
+    gap: var(--headline-dock-gap-compact, 24px);
+  }
+}
+
+@supports (background: color-mix(in srgb, red, blue)) {
+  /* Two shadows in the stage colour keep the type legible over moving videos:
+     a tight one for edge contrast, a wide soft one for the overall pool. */
+  .headline-title {
+    text-shadow:
+      0 0 calc(var(--hl-font) * 0.04)
+        color-mix(in srgb, var(--color-stage, #121212) calc(var(--headline-shadow-strength, 0) * 100%), transparent),
+      0 0 calc(var(--hl-font) * 0.4)
+        color-mix(in srgb, var(--color-stage, #121212) calc(var(--headline-shadow-strength, 0) * 100%), transparent);
+  }
+  .headline-sub {
+    text-shadow:
+      0 0 calc(var(--sl-font) * 0.08)
+        color-mix(in srgb, var(--color-stage, #121212) calc(var(--subline-shadow-strength, 0.2) * 100%), transparent),
+      0 0 calc(var(--sl-font) * 0.6)
+        color-mix(in srgb, var(--color-stage, #121212) calc(var(--subline-shadow-strength, 0.2) * 100%), transparent);
+  }
+}
+
+/* Fader: a soft ellipse in the stage colour at the bottom centre, calming the area behind the headline
+   and dock so they read over the moving clips. It is ONE canvas covering the viewport, drawn by fader.js
+   (the ellipse, its colour, the eased falloff and the dither noise baked into its alpha), so it is a single
+   layer for the compositor and its soft edge does not band. Above the stage, below the headline and dock;
+   it takes no pointer events (the grid drags straight through it). Explicit z-index plus translate3d so it
+   has its own layer and Safari never sorts a 3D grid card above it. */
+.fader {
+  position: fixed;
+  z-index: 3;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: translate3d(0, 0, 0);
+  opacity: var(--fader-opacity, 1);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#dock {
+  /* In .bottom-stack, which positions it. */
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+}
+
+.dock-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--dock-gap, 1.5rem);
+  /* The prompt text side gets 12px more than the button side. */
+  padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: var(--dock-radius, 999px);
+  /* Plain fallback (opaque, no border colour, no shadow); the color-mix
+     refinements are in the @supports block below. */
+  background: var(--color-dock-fill);
+  border: 1px solid transparent;
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.dock-prompt {
+  min-width: 0;
+  font-family: var(--type-mono);
+  font-size: var(--type-mono-size, 0.875rem);
+  font-weight: var(--type-mono-weight, 400);
+  /* JetBrains Mono's programming ligatures (//) live in calt; liga for fonts that use it. */
+  font-feature-settings: "calt" var(--type-code-ligatures, 1), "liga" var(--type-code-ligatures, 1);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* The two buttons sit in one group with their own gap and padding. */
+.dock-ctas {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--dock-cta-gap, 4px);
+  padding: var(--dock-cta-padding, 0);
+}
+
+/* Both buttons share one padding and line height, and neither has a border, so
+   their heights match exactly. */
+.dock-cta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.125rem;
+  border: 0;
+  border-radius: 999px;
+  font: var(--type-weight, 400) calc(var(--type-size, 1rem) * 0.9375)/1.25rem var(--type-ui);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Primary: filled. Copy is primary too when there is no app link (data-app="none",
+   set by mountDock on a non-desktop platform), sharing these rules. */
+.dock-cta-primary,
+#dock[data-app="none"] .dock-button {
+  background: var(--color-button);
+  color: var(--color-button-text);
+}
+
+.dock-cta-primary:hover,
+#dock[data-app="none"] .dock-button:hover {
+  filter: brightness(0.92);
+}
+
+.dock-icon {
+  position: relative;
+  display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The copy and check icons are stacked in the fixed icon box, so swapping them never changes the
+   button's size. Copy fades and shrinks out while the check fades in and draws (stroke-dashoffset,
+   pathLength 1). dock.js toggles .is-copied on the button; durations come from --dock-icon-anim-ms. */
+.dock-icon svg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.125rem;
+  height: 1.125rem;
+  transform: translate(-50%, -50%) scale(1);
+  transition: opacity var(--dock-icon-anim-ms, 280ms) ease, transform var(--dock-icon-anim-ms, 280ms) ease;
+}
+
+.dock-icon .dock-icon-check {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.6);
+}
+
+.dock-icon .dock-icon-check path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dock-icon-anim-ms, 280ms) ease;
+}
+
+.dock-button.is-copied .dock-icon svg:first-child {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.6);
+}
+
+.dock-button.is-copied .dock-icon .dock-icon-check {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.dock-button.is-copied .dock-icon .dock-icon-check path {
+  stroke-dashoffset: 0;
+}
+
+/* Secondary: the icon-only Copy button next to the app link. Plain colours from
+   config, a square with equal padding (a circle at the pill radius). */
+.dock-button {
+  padding: 0.625rem;
+  background: var(--color-secondary-fill);
+  color: var(--color-text);
+}
+
+.dock-button:hover {
+  filter: none;
+  background: var(--color-secondary-hover);
+}
+
+/* No app link: the single filled Copy with icon plus short label. */
+#dock[data-app="none"] .dock-app {
+  display: none;
+}
+
+#dock[data-app="none"] .dock-button {
+  padding: 0.625rem 1.125rem;
+}
+
+#dock[data-app="none"] .dock-button:hover {
+  filter: brightness(0.92);
+}
+
+#dock[data-app="none"] .dock-label-short {
+  display: inline;
+}
+
+@supports (background: color-mix(in srgb, red, blue)) {
+  .dock-pill {
+    background: color-mix(in srgb, var(--color-dock-fill) calc(var(--glass-fill-opacity) * 100%), transparent);
+    border-color: color-mix(in srgb, var(--color-text) calc(var(--glass-border-opacity) * 100%), transparent);
+    /* The shadow colour keeps the literal keyword black as its mix target. */
+    box-shadow: 0 calc(var(--dock-shadow-blur) / 3) var(--dock-shadow-blur)
+      color-mix(in srgb, color-mix(in srgb, var(--color-stage), black 60%) calc(var(--dock-shadow-strength) * 100%), transparent);
+  }
+
+  #toast {
+    box-shadow: 0 var(--toast-shadow-y) var(--toast-shadow-blur)
+      color-mix(in srgb, color-mix(in srgb, var(--color-stage), black 60%) calc(var(--toast-shadow-strength) * 100%), transparent);
+  }
+
+  .dock-cta-primary:hover {
+    filter: none;
+    background: color-mix(in srgb, var(--color-button), black 12%);
+  }
+
+  #dock[data-app="none"] .dock-button:hover {
+    filter: none;
+    background: color-mix(in srgb, var(--color-button), black 12%);
+  }
+}
+
+/* A small offset keeps the ring clear of the neighbouring button at the default gap. */
+.dock-cta:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 1px;
+}
+
+.dock-label-short {
+  display: none;
+}
+
+.dock-note {
+  /* Above the pill's glass shadow: the pill has a backdrop-filter, so it (and its shadow) paints over
+     plain in-flow text unless the note is positioned. */
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: var(--dock-note-padding, 8px);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0 var(--dock-note-gap, 6px);
+  font-size: calc(var(--type-size, 1rem) * 0.8125);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* The note's parts (split on the bullet by dock.js applyNote) sit in a row; stacked on phones, where the
+   bullets are hidden. */
+@media (max-width: 600px) {
+  .dock-note { flex-direction: column; align-items: center; }
+  .dock-note-sep { display: none; }
+}
+
+/* Compact: no visible prompt; the buttons still copy it all. The app link stays
+   (it no longer depends on width), so the pill holds both buttons centred. */
+@media (max-width: 600px) {
+  .dock-prompt {
+    display: none;
+  }
+
+  /* Just the buttons: even padding all round, none extra from the group. */
+  .dock-ctas {
+    padding: 0;
+  }
+
+  .dock-pill {
+    justify-content: center;
+    padding: var(--dock-padding, 0.25rem);
+  }
+
+  /* After a failed copy the prompt is revealed above the button so it can
+     be selected by hand. */
+  #dock.is-revealed .dock-pill {
+    flex-wrap: wrap;
+    border-radius: min(var(--dock-radius, 999px), 1.25rem);
+    padding: 0.75rem;
+    justify-content: center;
+  }
+
+  #dock.is-revealed .dock-prompt {
+    display: block;
+    order: -1;
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+}
+
+/* The toast drops in from the top of the screen, clear of the headline and the dock whatever their
+   height. width: max-content, because a fixed box at left: 50% would otherwise shrink to the room to
+   its right (half the screen) and wrap a short message onto two lines. */
+#toast {
+  position: fixed;
+  z-index: 25;
+  left: 50%;
+  top: calc(max(1rem, env(safe-area-inset-top)) + 0.5rem);
+  transform: translateX(-50%) translateY(-0.5rem) translateZ(0);
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  padding: 0.625rem 1rem;
+  border-radius: var(--toast-radius, 210px);
+  box-sizing: border-box;
+  /* Plain fallback has no shadow; the color-mix shadow is in the @supports block. */
+  background: var(--color-toast-fill);
+  color: var(--color-toast-text);
+  font: var(--type-weight, 400) calc(var(--type-size, 1rem) * 0.875) var(--type-ui);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+#toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) translateZ(0);
+}
+
+#toast[data-kind="error"] {
+  border: 1px solid var(--color-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #toast {
+    transition: none;
+  }
+
+  .dock-icon svg,
+  .dock-icon .dock-icon-check path {
+    transition: none;
+  }
+}
+
+/* The cover is opaque from the first paint and main.js lifts it (.is-hidden). The failsafe
+   keyframes lift it with no JS at all (a failed module fetch, an old browser, a blocked
+   script): the delay is 4 s, above POSTER_TIMEOUT_MS (2 s) in main.js, so on the normal path
+   .is-hidden always comes first and the failsafe only keeps it hidden. Without .is-hidden
+   the cover fades over 0.4 s starting at 4 s. visibility: hidden at the end also drops the
+   composited layer. */
+#cover {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: var(--color-stage, #121212);
+  transition: opacity 0.4s, visibility 0s;
+  transform: translateZ(0);
+  animation: cover-failsafe 0.4s linear 4s forwards;
+}
+
+@keyframes cover-failsafe {
+  to { opacity: 0; visibility: hidden; }
+}
+
+#cover.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.4s, visibility 0s 0.4s;
+}
