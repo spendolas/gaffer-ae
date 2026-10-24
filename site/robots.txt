@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /media/
+
+Sitemap: https://gafferae.com/sitemap.xml
