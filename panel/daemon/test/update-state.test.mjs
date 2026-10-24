@@ -313,3 +313,29 @@ test('updateWaitStep: err:runtime-swap fails at once with its own code', () => {
   assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:runtime-swap\n', exited: true })),
     { action: 'fail', code: 'runtime-swap' });
 });
+
+test('updateFailureText err:archive: the download was not a Gaffer release, own text per mode, no dashes', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const u = plain(U.updateFailureText('update', 'archive', log));
+  assert.equal(u.banner, 'Update failed');
+  assert.equal(u.notice, 'Update failed: the downloaded update was not a valid Gaffer release. Your current version still works.');
+  const r = plain(U.updateFailureText('repair', 'archive', log));
+  assert.equal(r.banner, 'Repair failed');
+  assert.equal(r.notice, 'Repair failed: the downloaded update was not a valid Gaffer release. Open the updater log for details, or reinstall.');
+  assert.ok(!/[–—]/.test(u.notice + u.banner + r.notice + r.banner));
+  assert.equal(U.failureNeedsRepair('archive'), false, 'nothing was changed, no Repair needed');
+});
+
+test('updateFailureText err:internal (the updaters\' catch-all) gets the generic text naming the log', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  assert.deepEqual(plain(U.updateFailureText('update', 'internal', log)), { banner: 'Update did not complete', notice: 'Update did not complete. The updater log has details: ' + log + '.' });
+  assert.deepEqual(plain(U.updateFailureText('repair', 'internal', log)), { banner: 'Repair did not complete', notice: 'Repair did not complete. The updater log has details: ' + log + '.' });
+  assert.equal(U.failureNeedsRepair('internal'), false);
+});
+
+test('updateWaitStep: err:archive and err:internal fail at once with their code', () => {
+  for (const code of ['archive', 'internal']) {
+    assert.deepEqual(plain(U.updateWaitStep({ mode: 'repair', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:' + code + '\n', exited: false })),
+      { action: 'fail', code });
+  }
+});
