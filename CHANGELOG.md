@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.0 - 2026-10-24
+## v0.12.0 - 2026-10-25
 
 **Install Gaffer with just After Effects and Claude: no Node.js or npm needed, and a Repair button if anything breaks.**
 
