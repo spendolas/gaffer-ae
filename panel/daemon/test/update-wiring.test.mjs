@@ -228,3 +228,17 @@ test('a long toast wraps inside the panel width instead of clipping', () => {
   assert.match(label, /white-space: normal;/);
   assert.match(label, /overflow-wrap: anywhere;/, 'a long unbroken path still wraps');
 });
+
+test('main.js: keyedToasts is set up before any code that can show a keyed toast', () => {
+  const decl = main.indexOf('var keyedToasts = {};');
+  assert.ok(decl !== -1, 'no keyedToasts declaration');
+  assert.equal(main.indexOf('var keyedToasts'), main.lastIndexOf('var keyedToasts'), 'declared once');
+  const firstUse = main.indexOf('showKeyedToast(');
+  assert.ok(decl < firstUse, 'keyedToasts must be initialised before the first showKeyedToast call site');
+  assert.ok(decl < main.indexOf('function showLaunchError('), 'before showLaunchError, which runs during startup');
+});
+
+test('main.js passes the give-up to updateWaitStep so err:stopped waits until then', () => {
+  assert.match(main, /giveUp: atLimit && !extend/);
+  assert.match(main, /var extend = atLimit && !extended && !!runningUpdaterPid\(\);/);
+});
