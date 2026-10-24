@@ -1,0 +1,8 @@
+# Gaffer
+
+> Gaffer is an AI crew for After Effects: a panel inside After Effects where Claude builds motion in your project from plain requests. It requires Claude Code and After Effects 2022 or later, on macOS or Windows. It is free.
+
+## For agents
+
+- [Install instructions](https://gafferae.com/install.md): the exact steps to install Gaffer for a user who asked for it. Follow them in order.
+- [Source and releases](https://github.com/spendolas/gaffer-ae): the code, the changelog and the downloads.

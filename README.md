@@ -10,6 +10,8 @@ Open Claude Code and say:
 
 Claude will handle the rest. Then restart After Effects and open **Window > Extensions > Gaffer**.
 
+The same install is on the website, https://gafferae.com, as a copy button for the prompt "Install Gaffer by following https://gafferae.com/install.md". That page holds the same steps as the section below, generated from it.
+
 ## Prerequisites
 
 - After Effects 2022+
@@ -258,7 +260,7 @@ Before you begin, read these rules. They apply to every step below.
    If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime's signature could not be verified. The Gaffer folder was left without a runtime; nothing was installed anywhere else."
 <!-- runtime-pins:end -->
 
-9. **Turn on the CEP developer mode flag.** This is a user preference that lets After Effects load extensions that are not signed through Adobe; it installs nothing. Tell the user that in one sentence, then set it:
+9. **Enable unsigned CEP extensions.** This is After Effects' developer setting for panels that are not signed by Adobe. It applies to all unsigned panels on this computer, not just Gaffer, and it installs nothing. Tell the user that in one sentence, then set it:
    ```bash
    # macOS: covers AE 2022 (CSXS 11), 2025 (CSXS 12), 2026+ (CSXS 13+)
    for v in 11 12 13; do defaults write com.adobe.CSXS.$v PlayerDebugMode 1; done

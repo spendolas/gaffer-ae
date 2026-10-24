@@ -142,7 +142,7 @@ test('README install steps follow the spec 9 order', () => {
   const titles = [...install.matchAll(/^(\d+)\. \*\*([^*]+)\*\*/gm)].map((m) => [Number(m[1]), m[2]]);
   assert.deepEqual(titles.map((t) => t[0]), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   const want = [/prerequisites/i, /existing install/i, /platform/i, /Gaffer package/i, /Download the Node\.js runtime/i,
-    /SHA-256/i, /Extract only/i, /signature/i, /developer mode/i, /Find Claude/i, /Register/i, /Restart After Effects and verify/i];
+    /SHA-256/i, /Extract only/i, /signature/i, /unsigned CEP extensions/i, /Find Claude/i, /Register/i, /Restart After Effects and verify/i];
   titles.forEach(([n, title], i) => assert.match(title, want[i], 'step ' + n + ' title: ' + title));
 });
 
@@ -262,7 +262,7 @@ test('README steps 5 to 8 carry the trigger sentence, the extract command and th
 
 test('README step 9 describes the developer-mode flag as a user preference', () => {
   const s = step(9);
-  assert.ok(s.includes('a user preference that lets After Effects load extensions that are not signed through Adobe; it installs nothing'));
+  assert.ok(s.includes("After Effects' developer setting for panels that are not signed by Adobe. It applies to all unsigned panels on this computer, not just Gaffer, and it installs nothing"));
   assert.ok(s.includes('PlayerDebugMode'));
 });
 

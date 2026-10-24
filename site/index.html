@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Gaffer: your AI crew in After Effects</title>
+  <meta name="description" content="Gaffer is an AI crew for After Effects. Ask for the motion you want and Claude builds it in your project, from a panel inside the app. Requires Claude Code.">
+  <link rel="canonical" href="https://gafferae.com/">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="application-name" content="Gaffer">
+  <meta name="apple-mobile-web-app-title" content="Gaffer">
+  <link rel="alternate" type="text/markdown" href="/install.md" title="Install instructions for agents">
+  <!-- Link previews (Slack, iMessage, LinkedIn, Discord, X, Bluesky). All URLs are absolute: crawlers do not resolve relative ones. -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Gaffer">
+  <meta property="og:title" content="Gaffer: your AI crew in After Effects">
+  <meta property="og:description" content="Ask for the motion you want. Claude builds it in your After Effects project, from a panel inside the app.">
+  <meta property="og:url" content="https://gafferae.com/">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://gafferae.com/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:alt" content="A tilted grid of looping motion clips behind the Gaffer mark and the words Gaffer, your AI crew in After Effects.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Gaffer: your AI crew in After Effects">
+  <meta name="twitter:description" content="Ask for the motion you want. Claude builds it in your After Effects project, from a panel inside the app.">
+  <meta name="twitter:image" content="https://gafferae.com/og.jpg">
+  <meta name="twitter:image:alt" content="A tilted grid of looping motion clips behind the Gaffer mark and the words Gaffer, your AI crew in After Effects.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#121212">
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://gafferae.com/#website",
+        "name": "Gaffer",
+        "url": "https://gafferae.com/"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://gafferae.com/#app",
+        "name": "Gaffer",
+        "description": "An AI crew for After Effects. Ask for the motion you want and Claude builds it in your project, from a panel inside the app.",
+        "url": "https://gafferae.com/",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "macOS, Windows",
+        "softwareRequirements": "Adobe After Effects 2022 or later, Claude Code",
+        "downloadUrl": "https://github.com/spendolas/gaffer-ae/releases/latest",
+        "image": "https://gafferae.com/og.jpg",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "publisher": { "@type": "Person", "name": "spendolas", "url": "https://github.com/spendolas" }
+      }
+    ]
+  }
+  </script>
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="fonts/SourceSans3VF-Upright.otf.woff2">
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="fonts/JetBrainsMono-VF.woff2">
+  <!-- Default config variables, so the first paint is styled before main.js runs.
+       Generated from configToCssVars(defaults): after changing config defaults run
+       `node scripts/site/sync-boot-vars.mjs` (a test fails when this block drifts). -->
+  <style id="boot-vars">
+    /* boot-vars:begin */
+    :root {
+      --color-stage: #121212;
+      --color-dock-fill: #232323;
+      --color-button: #4475C0;
+      --color-button-text: #FFFFFF;
+      --color-secondary-fill: transparent;
+      --color-secondary-hover: rgba(255, 255, 255, 0.125);
+      --color-text: #E0E0E0;
+      --color-headline: #E0E0E0;
+      --color-headline-sub: #AAAAAA;
+      --color-text-muted: #AAAAAA;
+      --color-toast-fill: #E0E0E0;
+      --color-toast-text: #121212;
+      --grid-radius: 32px;
+      --glass-blur: 16px;
+      --glass-fill-opacity: 0.7;
+      --glass-border-opacity: 0.1;
+      --shadow-strength: 0;
+      --shadow-blur: 24px;
+      --type-ui: "Source Sans 3", "Segoe UI", sans-serif;
+      --type-mono: "JetBrains Mono", ui-monospace, monospace;
+      --type-size: 1rem;
+      --type-mono-size: 0.875rem;
+      --type-weight: 400;
+      --type-mono-weight: 400;
+      --type-code-ligatures: 1;
+      --toast-radius: 210px;
+      --toast-shadow-strength: 0.5;
+      --toast-shadow-blur: 28px;
+      --toast-shadow-y: 10px;
+      --dock-radius: 999px;
+      --dock-gap: 1.5rem;
+      --dock-padding: 0.25rem;
+      --dock-shadow-strength: 0.85;
+      --dock-shadow-blur: 45px;
+      --dock-cta-gap: 4px;
+      --dock-cta-padding: 0px;
+      --dock-note-padding: 8px;
+      --dock-note-gap: 6px;
+      --dock-icon-anim-ms: 280ms;
+      --headline-size: 64px;
+      --headline-size-compact: 72px;
+      --headline-weight: 500;
+      --headline-tracking: -0.03em;
+      --headline-line-height: 0.8;
+      --headline-dock-gap: 24px;
+      --headline-dock-gap-compact: 24px;
+      --headline-opacity: 1;
+      --headline-shadow-strength: 0;
+      --headline-gap: 0.12em;
+      --headline-ligatures: 1;
+      --subline-size: 24px;
+      --subline-size-compact: 24px;
+      --subline-weight: 400;
+      --subline-tracking: 0em;
+      --subline-line-height: 1.25;
+      --subline-opacity: 1;
+      --subline-shadow-strength: 0.2;
+      --fader-opacity: 1;
+    }
+    /* boot-vars:end */
+  </style>
+  <link rel="stylesheet" href="css/site.css">
+  <script type="module" src="js/main.js"></script>
+  <!-- No JS: the boot variables above already carry the palette; only the cover rule and the
+       layout the page needs without the Copy button are set here. -->
+  <noscript>
+    <style>
+      #cover { display: none; }
+      .dock-app { text-decoration: underline; }
+      @media (max-width: 600px) {
+        .dock-pill { flex-wrap: wrap; border-radius: 1.25rem; padding: 0.75rem 1rem; }
+        .dock-prompt { display: block; flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+      }
+    </style>
+  </noscript>
+</head>
+<body>
+  <div id="stage" aria-hidden="true"></div>
+  <canvas class="fader" aria-hidden="true"></canvas>
+  <!-- One bottom-anchored column: the headline sits above the dock, so the two reflow together whatever the
+       dock's height (note wrapping, failure reveal) instead of competing for the same space. -->
+  <div class="bottom-stack">
+    <h1 class="headline"><span class="headline-title">Gaffer</span><span class="visually-hidden">, </span><span class="headline-sub">your AI crew in After Effects</span></h1>
+    <div id="dock">
+      <div class="dock-pill">
+        <code class="dock-prompt">Install Gaffer by following https://gafferae.com/install.md</code>
+        <div class="dock-ctas">
+          <a class="dock-cta dock-cta-primary dock-app" href="claude://code/new?q=Install%20Gaffer%20by%20following%20https%3A%2F%2Fgafferae.com%2Finstall.md" title="Opens the Claude desktop app (Code tab) with the install prompt filled in. You press Enter to send it." aria-describedby="dock-hint-app">Install with Claude</a>
+        </div>
+      </div>
+      <span class="visually-hidden" id="dock-hint-app" hidden>Opens the Claude desktop app (Code tab) with the install prompt filled in. You press Enter to send it.</span>
+      <p class="dock-note">A panel extension for AE 2022+•Rides your Claude Code subscription</p>
+      <noscript><p class="dock-note">Turn on JavaScript to see the gallery.</p></noscript>
+    </div>
+  </div>
+  <div id="toast" aria-live="polite"></div>
+  <div id="cover" aria-hidden="true"></div>
+</body>
+</html>
