@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.12.0 - 2026-10-24
+
+**Install Gaffer with just After Effects and Claude: no Node.js or npm needed, and a Repair button if anything breaks.**
 
 - Installing Gaffer no longer needs Node.js or npm on your computer. The install downloads the official Node.js runtime from nodejs.org into Gaffer's own folder, checks its checksum and its code signature, and installs nothing system-wide. If your network blocks nodejs.org, it uses an identical copy on Gaffer's GitHub page instead.
 - The install also checks the Gaffer package itself against the checksum list published with each release.
