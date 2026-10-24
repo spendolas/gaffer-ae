@@ -33,6 +33,17 @@ if ($env:GAFFER_UPDATE_ASSET) { $assetSource = $env:GAFFER_UPDATE_ASSET }
 $logPath = Join-Path $env:TEMP "gaffer-update.log"
 
 Start-Transcript -Path $logPath -Append
+# The result line (contract below) and the exit code it implies. Write-Result
+# is the only writer of ok:, err: and busy: lines, so the top-level catch
+# knows whether one was written.
+$script:resultWritten = $false
+$script:resultExit = 1
+function Write-Result([string] $line) {
+    Write-Output $line
+    $script:resultWritten = $true
+    if ($line -like "ok:*") { $script:resultExit = 0 } elseif ($line -like "busy:*") { $script:resultExit = 3 } else { $script:resultExit = 1 }
+}
+try { # top level: any terminating error nothing below handles ends the log with err:internal (catch at the bottom)
 Write-Host "=== Update started: $(Get-Date) ==="
 if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if it looks current" }
 
@@ -44,9 +55,23 @@ if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if 
 #                           err:runtime-swap: moving the new runtime into
 #                           place failed, or restoring an interrupted
 #                           swap's runtime.old failed, the install may be
-#                           unfinished)
+#                           unfinished; err:archive: the download unpacked
+#                           but is not a Gaffer release (no version.json,
+#                           no daemon\daemon.mjs, or no valid version in
+#                           version.json), the install is untouched;
+#                           err:sync also covers restoring the user data
+#                           and writing version.json after robocopy;
+#                           err:internal: the catch-all, any error nothing
+#                           else handled (a temp folder or backup that
+#                           cannot be written, a disk full, a bug), from
+#                           Exit-Update without a code or the top-level
+#                           catch at the bottom)
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
+# Every result line goes through Write-Result, which records that one was
+# written; the top-level try/catch writes err:internal for any terminating
+# error that ends the run before that. Only a forced stop (Stop-Process,
+# taskkill /F, a closed console) can end a run without a result line.
 
 # Single-updater lock. Two updaters interleaving (the panel's "Force stop &
 # retry" after its 180s give-up, or a manual run next to the panel's) would
@@ -409,7 +434,7 @@ while (-not $script:haveLock) {
         # the lock cannot be created here at all. Retry, bounded.
         if ($tries -gt 3) {
             Write-Host "ERROR: could not create the update lock at $lockPath"
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
@@ -424,14 +449,14 @@ while (-not $script:haveLock) {
     $holderParses = ([int]::TryParse($holder, [ref] $holderPid) -and $holderPid -gt 0)
     if (-not $holderParses -and $lockAge -ge -300 -and $lockAge -lt 30) {
         Write-Host "Another update is starting up (its lock is seconds old), leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
     $proc = Get-LockHolderProcess $holder $lockWrittenUtc
     if ($proc -and $proc.Unverified) {
         Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -440,7 +465,7 @@ while (-not $script:haveLock) {
     $lockIsOld = ($lockAge -ge $stuckAfter)
     if ($proc -and -not $lockIsOld) {
         Write-Host "Another update is already running (pid $holder), leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -453,19 +478,19 @@ while (-not $script:haveLock) {
     if ($proc) {
         try { $ancestors = @(Get-AncestorProcessIds) } catch {
             Write-Host "Could not inspect this process's own parent chain, leaving the update holding the lock (pid $holder) to finish."
-            Write-Output "busy:already-running"
+            Write-Result "busy:already-running"
             Stop-Transcript
             exit 3
         }
         if ($ancestors -contains [int] $proc.ProcessId) {
             Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
         if (-not $proc.Stoppable) {
             Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
@@ -475,14 +500,14 @@ while (-not $script:haveLock) {
     }
     if ($tries -gt 3) {
         Write-Host "ERROR: could not take the update lock at $lockPath"
-        Write-Output "err:lock"
+        Write-Result "err:lock"
         Stop-Transcript
         exit 1
     }
     Wait-TestGate $env:GAFFER_UPDATE_TEST_GATE
     if (-not (Enter-TakeoverMutex)) {
         Write-Host "Another update is taking over the abandoned lock, leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -508,7 +533,7 @@ while (-not $script:haveLock) {
         if ($state -eq "unverified") {
             Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."
             Exit-TakeoverMutex
-            Write-Output "busy:already-running"
+            Write-Result "busy:already-running"
             Stop-Transcript
             exit 3
         }
@@ -547,13 +572,14 @@ try {
 . "$PSScriptRoot\stop-daemon.ps1"
 
 # Every failure after this point goes through here: log, clean up, exit 1.
-# $code, when given, ends the log with err:<code> after the ERROR line (the
-# last-line contract above); the exit code stays 1 either way.
+# $code ends the log with err:<code> after the ERROR line (the last-line
+# contract above), err:internal when none is given; the exit code is 1.
 # The panel dir is untouched until the robocopy step, and version.json is
 # only replaced at the very end.
-function Exit-Update([string] $message, [string] $code = "") {
+function Exit-Update([string] $message, [string] $code = "internal") {
     Write-Host "ERROR: $message"
-    if ($code) { Write-Output "err:$code" }
+    if (-not $code) { $code = "internal" }
+    Write-Result "err:$code"
     if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
     Stop-Transcript
     exit 1
@@ -742,7 +768,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # latter terminates the script before the err: line is written.
     if ((Test-Path (Join-Path (Split-Path -Parent $panelDir) ".git")) -or (Test-Path "$panelDir\.git")) {
         Write-Host "ERROR: panel dir is inside a git repo (dev install) - refusing to update. Use git pull instead."
-        Write-Output "err:dev-install"
+        Write-Result "err:dev-install"
         Stop-Transcript
         exit 1
     }
@@ -768,7 +794,9 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
 
     # Download the release asset and extract it into a SUBFOLDER of tmpDir, so
     # the downloaded zip itself is never copied into the panel dir.
-    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    try { New-Item -ItemType Directory -Path $extractDir -Force | Out-Null } catch {
+        Exit-Update "could not create the temporary folder $extractDir (disk full or read-only?): $($_.Exception.Message)" "internal"
+    }
     $zipPath = Join-Path $tmpDir $assetName
     Write-Host "Downloading $assetSource"
     try {
@@ -785,7 +813,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # the daemon\index.js shim too); the runtime step needs the archive's own
     # fetch-runtime.ps1 and runtime-pins.json.
     if (-not (Test-Path -LiteralPath "$extractDir\version.json" -PathType Leaf) -or -not (Test-Path -LiteralPath "$extractDir\daemon\daemon.mjs" -PathType Leaf)) {
-        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\daemon.mjs)"
+        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\daemon.mjs)" "archive"
     }
     $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"
     if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $extractDir "daemon\runtime-pins.json") -PathType Leaf)) {
@@ -797,31 +825,36 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     try {
         $release = Get-Content "$extractDir\version.json" -Raw | ConvertFrom-Json
     } catch {
-        Exit-Update "release version.json is not valid JSON"
+        Exit-Update "release version.json is not valid JSON" "archive"
     }
     $latestVersion = $release.version
     $latestCommit = $release.commit
-    if (-not $latestVersion) { Exit-Update "release version.json has no version" }
+    if (-not $latestVersion) { Exit-Update "release version.json has no version" "archive" }
     Write-Host "Release: v$latestVersion ($latestCommit)"
 
     # Backup chat history - legacy single file plus per-AE-version files
-    # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
-    $backup = $null
-    if (Test-Path "$panelDir\chat-history.json") {
-        $backup = Join-Path $tmpDir "chat-history.backup.json"
-        Copy-Item "$panelDir\chat-history.json" $backup
-    }
-    $historyBackupDir = Join-Path $tmpDir "chat-history-backups"
-    New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
-    Get-ChildItem -Path $panelDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
-
-    # Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) -
+    # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json) - and
+    # .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.):
     # without this it is silently wiped by robocopy /PURGE on every update.
+    # Nothing has changed yet; a backup that cannot be written (a full disk)
+    # ends the run with err:internal before anything does.
+    $backup = $null
     $configBackup = $null
-    if (Test-Path "$panelDir\.gaffer-config.json") {
-        $configBackup = Join-Path $tmpDir "gaffer-config.backup.json"
-        Copy-Item "$panelDir\.gaffer-config.json" $configBackup
+    $historyBackupDir = Join-Path $tmpDir "chat-history-backups"
+    try {
+        if (Test-Path "$panelDir\chat-history.json") {
+            $backup = Join-Path $tmpDir "chat-history.backup.json"
+            Copy-Item "$panelDir\chat-history.json" $backup
+        }
+        New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
+        Get-ChildItem -Path $panelDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
+        if (Test-Path "$panelDir\.gaffer-config.json") {
+            $configBackup = Join-Path $tmpDir "gaffer-config.backup.json"
+            Copy-Item "$panelDir\.gaffer-config.json" $configBackup
+        }
+    } catch {
+        Exit-Update "could not back up the chat history and settings to the temporary folder (disk full?), nothing was changed: $($_.Exception.Message)" "internal"
     }
 
     # Runtime step, BEFORE any file is replaced and while the daemon still
@@ -938,16 +971,20 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
     if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync" }
 
-    # Restore chat history
-    if ($backup -and (Test-Path $backup)) {
-        Copy-Item $backup "$panelDir\chat-history.json" -Force
-    }
-    Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item $_.FullName "$panelDir\" -Force }
-
-    # Restore .gaffer-config.json
-    if ($configBackup -and (Test-Path $configBackup)) {
-        Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
+    # Restore chat history and .gaffer-config.json. robocopy excluded them,
+    # so a failure here leaves them as they were; it still ends with
+    # err:sync, the files were replaced and the run is not finished.
+    try {
+        if ($backup -and (Test-Path $backup)) {
+            Copy-Item $backup "$panelDir\chat-history.json" -Force
+        }
+        Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName "$panelDir\" -Force }
+        if ($configBackup -and (Test-Path $configBackup)) {
+            Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
+        }
+    } catch {
+        Exit-Update "could not restore the chat history and settings after replacing the panel files: $($_.Exception.Message)" "sync"
     }
 
     # No dependency install step: the release ships the daemon as one bundled
@@ -964,15 +1001,21 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # then a move on Windows, not an atomic rename.)
     # Copy-Item keeps the archive's timestamp, so stamp it as written now.
     $versionTmp = "$panelDir\version.json.tmp"
-    Copy-Item "$extractDir\version.json" $versionTmp -Force
-    (Get-Item -LiteralPath $versionTmp).LastWriteTime = Get-Date
-    Move-Item -LiteralPath $versionTmp -Destination "$panelDir\version.json" -Force
+    try {
+        Copy-Item "$extractDir\version.json" $versionTmp -Force
+        (Get-Item -LiteralPath $versionTmp).LastWriteTime = Get-Date
+        Move-Item -LiteralPath $versionTmp -Destination "$panelDir\version.json" -Force
+    } catch {
+        Remove-Item -LiteralPath $versionTmp -Force -ErrorAction SilentlyContinue
+        Exit-Update "could not write version.json after replacing the panel files: $($_.Exception.Message)" "sync"
+    }
 
-    # Cleanup
-    Remove-Item -Recurse -Force $tmpDir
+    # Cleanup. A leftover temp folder (a file still locked) must not turn a
+    # finished update into a failure.
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 
     Write-Host "=== Update complete: $(Get-Date) ==="
-    Write-Output "ok:$latestVersion"
+    Write-Result "ok:$latestVersion"
     Stop-Transcript
 } finally {
     # Runs on every way out of the block above, including the exit calls.
@@ -980,4 +1023,17 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # over must not delete its successor's lock on the way out.
     Exit-TakeoverMutex
     if ($script:haveLock -and ((Read-LockHolder) -eq "$PID")) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }
+}
+} catch { # top level: reached by any terminating error nothing above handled (exit calls never land here)
+    # The lock's finally above has already run. The ERROR line and
+    # err:internal are written only when no result line was written yet,
+    # so nothing ever follows an ok:, err: or busy: line.
+    $failure = $_
+    if (-not $script:resultWritten) {
+        Write-Host "ERROR: the updater stopped unexpectedly: $($failure.Exception.Message)"
+        Write-Result "err:internal"
+    }
+    if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+    try { Stop-Transcript | Out-Null } catch {}
+    exit $script:resultExit
 }

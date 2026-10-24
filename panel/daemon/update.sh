@@ -21,12 +21,69 @@ echo "=== Update started: $(date) ==="
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
-#   err:<code>              failed (err:dev-install, err:lock, err:download, err:runtime, err:sync) or a bare ERROR line
+#   err:<code>              failed, always right after an ERROR line. Codes:
+#                           err:dev-install, err:lock, err:download, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal
+#                           err:dev-install: the panel is a git checkout, refused
+#                           err:lock: the update lock could not be created or taken
+#                           err:download: the asset could not be fetched or unpacked
+#                           err:archive: it unpacked, but is not a Gaffer release (no version.json,
+#                           no daemon/daemon.mjs, or no version in version.json); the install is untouched
 #                           err:runtime: the runtime could not be staged, the install is untouched
 #                           err:runtime-swap: recovering or swapping the runtime failed after the
 #                           daemon was stopped (or an earlier run left it half done): the install may be unfinished
+#                           err:sync: replacing the panel files (or restoring user data, or writing
+#                           version.json) failed: the install may be unfinished
+#                           err:internal: the catch-all. Any other way out (a command failing under
+#                           set -e, the temp folder or a backup that cannot be written, a disk full,
+#                           SIGTERM, SIGINT or SIGHUP) before a result line was printed.
 #   busy:already-running    another updater holds the lock; this one did nothing
-# Exit codes: 0 ok, 1 failed, 3 busy.
+# Exit codes: 0 ok, 1 failed, 3 busy (128 + n when stopped by signal n).
+# Every result line goes through result_line, so the EXIT trap knows one was
+# printed; a failure prints "ERROR: ..." then result_line "err:<code>" then
+# exits. Only SIGKILL (nothing can trap it) ends a run without a result line.
+
+# ---- result line and exit trap ----
+RESULT_LINE=""
+CAUGHT_SIGNAL=""
+result_line() { RESULT_LINE="$1"; echo "$1"; }
+# Removes the temp dir, a held takeover mutex and the lock, however the
+# script exits. Silent (its output would land after the result line) and
+# safe at any point, even before the lock functions are defined.
+cleanup() {
+  cd /
+  if [ -n "${TMP_DIR:-}" ]; then rm -rf "$TMP_DIR"; fi
+  if declare -F release_takeover_mutex >/dev/null; then release_takeover_mutex; fi
+  # Only ever delete a lock that is still ours: a stuck run that was taken
+  # over must not delete its successor's lock on the way out.
+  if [ -n "${HAVE_LOCK:-}" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK_DIR"; fi
+}
+# The catch-all: a run that ends without having printed ok:, err: or busy:
+# (whatever the exit status, a zero one included) gets an ERROR line and
+# err:internal, and a non-zero status. One that printed its result line gets
+# nothing after it.
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  { cleanup; } >/dev/null 2>&1 || true
+  if [ -z "$RESULT_LINE" ]; then
+    if [ -n "$CAUGHT_SIGNAL" ]; then
+      echo "ERROR: the updater was stopped by SIG$CAUGHT_SIGNAL before it reported a result"
+    else
+      echo "ERROR: the updater stopped unexpectedly (exit $rc) before it reported a result"
+    fi
+    echo "err:internal"
+    [ "$rc" -ne 0 ] || rc=1
+  fi
+  exit "$rc"
+}
+# bash 3.2 runs the EXIT trap on SIGTERM with $? 0, so each signal is turned
+# into an exit with the usual 128 + n status first.
+on_signal() { CAUGHT_SIGNAL="$1"; exit "$2"; }
+trap on_exit EXIT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal INT 130' INT
+trap 'on_signal HUP 129' HUP
+# ---- end result line and exit trap ----
 
 # --repair (the panel's Repair button, shown while the daemon launch is
 # refused because the runtime is damaged, missing or blocked): the runtime
@@ -305,6 +362,16 @@ take_takeover_mutex() {
 release_takeover_mutex() {
   if [ -n "$HAVE_TAKEOVER" ]; then rmdir "$TAKEOVER_DIR" 2>/dev/null || true; HAVE_TAKEOVER=""; fi
 }
+# The lock dir is ours (just created); a pid that cannot be written (a full
+# or read-only TMPDIR) leaves no usable lock, so it is removed again.
+write_lock_pid() {
+  if ! echo "$$" > "$LOCK_DIR/pid"; then
+    rm -rf "$LOCK_DIR"
+    echo "ERROR: could not write the update lock at $LOCK_DIR (disk full or read-only?)"
+    result_line "err:lock"
+    exit 1
+  fi
+}
 acquire_lock() {
   local tries=0 holder now_holder stale was_updater
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
@@ -313,7 +380,7 @@ acquire_lock() {
       tries=$((tries + 1))
       if [ "$tries" -gt 3 ]; then
         echo "ERROR: could not create the update lock at $LOCK_DIR"
-        echo "err:lock"
+        result_line "err:lock"
         exit 1
       fi
       continue
@@ -321,14 +388,14 @@ acquire_lock() {
     holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
     if [ -z "$holder" ] && lock_is_young; then
       echo "Another update is starting up (its lock is seconds old), leaving it to finish."
-      echo "busy:already-running"
+      result_line "busy:already-running"
       exit 3
     fi
     # A live updater holder is busy unless its lock is really old; a lock
     # dated in the future is never "old", so it is busy as well.
     if lock_holder_is_updater "$holder" && ! lock_is_old; then
       echo "Another update is already running (pid $holder), leaving it to finish."
-      echo "busy:already-running"
+      result_line "busy:already-running"
       exit 3
     fi
     if [ -n "$HOLDER_PID_REUSED" ]; then
@@ -337,7 +404,7 @@ acquire_lock() {
     tries=$((tries + 1))
     if [ "$tries" -gt 3 ]; then
       echo "ERROR: could not take the update lock at $LOCK_DIR"
-      echo "err:lock"
+      result_line "err:lock"
       exit 1
     fi
     # Was the holder a live updater when judged (then it is only here because
@@ -347,7 +414,7 @@ acquire_lock() {
     test_gate "${GAFFER_UPDATE_TEST_GATE:-}"
     if ! take_takeover_mutex; then
       echo "Another update is taking over the abandoned lock, leaving it to finish."
-      echo "busy:already-running"
+      result_line "busy:already-running"
       exit 3
     fi
     # Inside the mutex: the lock may have been taken over (and re-created)
@@ -386,27 +453,19 @@ acquire_lock() {
     # Still inside the mutex: the taker gets the lock, nobody can slip in
     # between the removal and the re-creation.
     if mkdir "$LOCK_DIR" 2>/dev/null; then
-      echo "$$" > "$LOCK_DIR/pid"
+      write_lock_pid
       HAVE_LOCK=1
       release_takeover_mutex
       return 0
     fi
     release_takeover_mutex
   done
-  echo "$$" > "$LOCK_DIR/pid"
+  write_lock_pid
   HAVE_LOCK=1
 }
-cleanup() {
-  cd /
-  rm -rf "$TMP_DIR"
-  release_takeover_mutex
-  # Only ever delete a lock that is still ours: a stuck run that was taken
-  # over must not delete its successor's lock on the way out.
-  if [ -n "$HAVE_LOCK" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK_DIR"; fi
-}
-# The lock and the temp dir go away however the script exits. Set before the
-# lock is taken so no exit path can leak it; a busy exit never held it.
-trap cleanup EXIT
+# The lock and the temp dir go away however the script exits: the EXIT trap
+# (on_exit, near the top) runs cleanup, and was set before the lock is taken
+# so no exit path can leak it; a busy exit never held it.
 acquire_lock
 test_gate "${GAFFER_UPDATE_TEST_HOLD_GATE:-}"
 
@@ -436,7 +495,7 @@ stop_daemon() {
 # out of a git repo; rsync --delete would clobber uncommitted work.
 if [ -d "$PANEL_DIR/../.git" ] || [ -d "$PANEL_DIR/.git" ]; then
   echo "ERROR: panel dir is inside a git repo (dev install), refusing to update. Use git pull instead."
-  echo "err:dev-install"
+  result_line "err:dev-install"
   exit 1
 fi
 
@@ -543,7 +602,7 @@ swap_runtime() {
 
 if ! recover_runtime; then
   echo "ERROR: could not repair daemon/runtime from an earlier interrupted update"
-  echo "err:runtime-swap"
+  result_line "err:runtime-swap"
   exit 1
 fi
 
@@ -566,7 +625,11 @@ fi
 # "Force stop & retry", whose second updater exits busy against this lock,
 # so a slow run is never corrupted, only late. A 4xx answer (404 on a
 # missing asset) is final: curl does not retry it.
-mkdir -p "$EXTRACT_DIR"
+if ! mkdir -p "$EXTRACT_DIR"; then
+  echo "ERROR: could not create the temporary folder $EXTRACT_DIR (disk full or read-only?)"
+  result_line "err:internal"
+  exit 1
+fi
 echo "Downloading $ASSET_SOURCE"
 # Wrapped so a curl or tar failure (which under set -e would end the script
 # with curl's own message as the last log line) still ends the log with an
@@ -580,7 +643,7 @@ download_and_extract() {
 }
 if ! download_and_extract; then
   echo "ERROR: download or extract failed"
-  echo "err:download"
+  result_line "err:download"
   exit 1
 fi
 # New archives always carry daemon/daemon.mjs (the bundle) and daemon/index.js
@@ -589,6 +652,7 @@ fi
 # run it with here: refused.
 if [ ! -f "$EXTRACT_DIR/version.json" ] || [ ! -f "$EXTRACT_DIR/daemon/daemon.mjs" ]; then
   echo "ERROR: downloaded archive is not a Gaffer release (missing version.json or daemon/daemon.mjs)"
+  result_line "err:archive"
   exit 1
 fi
 
@@ -601,6 +665,7 @@ LATEST_VERSION="$(json_field version "$EXTRACT_DIR/version.json")"
 LATEST_COMMIT="$(json_field commit "$EXTRACT_DIR/version.json")"
 if [ -z "$LATEST_VERSION" ]; then
   echo "ERROR: release version.json has no version"
+  result_line "err:archive"
   exit 1
 fi
 echo "Release: v$LATEST_VERSION ($LATEST_COMMIT)"
@@ -608,31 +673,39 @@ echo "Release: v$LATEST_VERSION ($LATEST_COMMIT)"
 # Before any file of the install is replaced, with the daemon still running.
 if ! stage_runtime; then
   echo "ERROR: could not stage Gaffer's runtime, nothing was changed"
-  echo "err:runtime"
+  result_line "err:runtime"
   exit 1
 fi
 
 # Backup chat history, legacy single file plus per-AE-version files
-# (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
+# (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json), and
+# .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.): without
+# this it's silently wiped by rsync --delete on every update. Wrapped like
+# download_and_extract: nothing has changed yet, a backup that cannot be
+# written (a full disk) ends the run with err:internal before anything does.
 BACKUP=""
-if [ -f "$PANEL_DIR/chat-history.json" ]; then
-  BACKUP="$TMP_DIR/chat-history.backup.json"
-  cp "$PANEL_DIR/chat-history.json" "$BACKUP"
-fi
 HISTORY_BACKUP_DIR="$TMP_DIR/chat-history-backups"
-mkdir -p "$HISTORY_BACKUP_DIR"
-shopt -s nullglob
-for f in "$PANEL_DIR"/chat-history-*.json; do
-  cp "$f" "$HISTORY_BACKUP_DIR/"
-done
-shopt -u nullglob
-
-# Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.):
-# without this it's silently wiped by rsync --delete on every update.
 CONFIG_BACKUP=""
-if [ -f "$PANEL_DIR/.gaffer-config.json" ]; then
-  CONFIG_BACKUP="$TMP_DIR/gaffer-config.backup.json"
-  cp "$PANEL_DIR/.gaffer-config.json" "$CONFIG_BACKUP"
+backup_user_data() {
+  local f
+  if [ -f "$PANEL_DIR/chat-history.json" ]; then
+    BACKUP="$TMP_DIR/chat-history.backup.json"
+    cp "$PANEL_DIR/chat-history.json" "$BACKUP" || return 1
+  fi
+  mkdir -p "$HISTORY_BACKUP_DIR" || return 1
+  for f in "$PANEL_DIR"/chat-history-*.json; do
+    [ -e "$f" ] || continue
+    cp "$f" "$HISTORY_BACKUP_DIR/" || return 1
+  done
+  if [ -f "$PANEL_DIR/.gaffer-config.json" ]; then
+    CONFIG_BACKUP="$TMP_DIR/gaffer-config.backup.json"
+    cp "$PANEL_DIR/.gaffer-config.json" "$CONFIG_BACKUP" || return 1
+  fi
+}
+if ! backup_user_data; then
+  echo "ERROR: could not back up the chat history and settings to the temporary folder (disk full?), nothing was changed"
+  result_line "err:internal"
+  exit 1
 fi
 
 # Stop existing daemon (panel will detect disconnect and continue)
@@ -641,7 +714,7 @@ stop_daemon
 
 if ! swap_runtime; then
   echo "ERROR: could not move the new runtime into place"
-  echo "err:runtime-swap"
+  result_line "err:runtime-swap"
   exit 1
 fi
 
@@ -673,23 +746,30 @@ sync_files() {
 }
 if ! sync_files; then
   echo "ERROR: replacing the panel files failed (rsync)"
-  echo "err:sync"
+  result_line "err:sync"
   exit 1
 fi
 
-# Restore chat history
-if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
-  cp "$BACKUP" "$PANEL_DIR/chat-history.json"
-fi
-shopt -s nullglob
-for f in "$HISTORY_BACKUP_DIR"/chat-history-*.json; do
-  cp "$f" "$PANEL_DIR/"
-done
-shopt -u nullglob
-
-# Restore .gaffer-config.json
-if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then
-  cp "$CONFIG_BACKUP" "$PANEL_DIR/.gaffer-config.json"
+# Restore chat history and .gaffer-config.json. rsync excluded them, so a
+# failure here leaves them as they were; it still ends with err:sync, the
+# files were replaced and the run is not finished.
+restore_user_data() {
+  local f
+  if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
+    cp "$BACKUP" "$PANEL_DIR/chat-history.json" || return 1
+  fi
+  for f in "$HISTORY_BACKUP_DIR"/chat-history-*.json; do
+    [ -e "$f" ] || continue
+    cp "$f" "$PANEL_DIR/" || return 1
+  done
+  if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then
+    cp "$CONFIG_BACKUP" "$PANEL_DIR/.gaffer-config.json" || return 1
+  fi
+}
+if ! restore_user_data; then
+  echo "ERROR: could not restore the chat history and settings after replacing the panel files"
+  result_line "err:sync"
+  exit 1
 fi
 
 # Stop any daemon that respawned from the half-copied tree during the update
@@ -699,8 +779,12 @@ stop_daemon
 
 # LAST step: put the release's version.json in place with an atomic rename,
 # so the panel and daemon only ever see the old file or the complete new one.
-cp "$EXTRACT_DIR/version.json" "$PANEL_DIR/version.json.tmp"
-mv -f "$PANEL_DIR/version.json.tmp" "$PANEL_DIR/version.json"
+if ! { cp "$EXTRACT_DIR/version.json" "$PANEL_DIR/version.json.tmp" && mv -f "$PANEL_DIR/version.json.tmp" "$PANEL_DIR/version.json"; }; then
+  rm -f "$PANEL_DIR/version.json.tmp"
+  echo "ERROR: could not write version.json after replacing the panel files"
+  result_line "err:sync"
+  exit 1
+fi
 
 echo "=== Update complete: $(date) ==="
-echo "ok:$LATEST_VERSION"
+result_line "ok:$LATEST_VERSION"
