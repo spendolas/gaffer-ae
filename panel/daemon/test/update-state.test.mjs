@@ -339,3 +339,46 @@ test('updateWaitStep: err:archive and err:internal fail at once with their code'
       { action: 'fail', code });
   }
 });
+
+// ---- toasts for an update or repair (live AE test 2026-10-24) ----
+// With the daemon down the welcome screen covers the chat, so the chat
+// notice and the update banner are invisible; toasts sit above it. One
+// toast key ('daemon') is shared by the launch error and the update/repair
+// toasts, so each replaces the last instead of stacking.
+test('updateToast start: a persistent neutral toast with the run\'s wording, keyed with the launch error', () => {
+  assert.deepEqual(plain(U.updateToast('start', 'repair')), { key: 'daemon', type: 'neutral', text: "Repairing Gaffer's runtime...", duration: 0, action: null });
+  assert.deepEqual(plain(U.updateToast('start', 'update')), { key: 'daemon', type: 'neutral', text: 'Updating Gaffer...', duration: 0, action: null });
+});
+
+test('updateToast ok: a short success toast before the reload', () => {
+  const r = plain(U.updateToast('ok', 'repair'));
+  assert.equal(r.type, 'success');
+  assert.equal(r.text, 'Gaffer is repaired');
+  assert.equal(r.key, 'daemon');
+  assert.ok(r.duration > 0 && r.duration <= 6000, 'short, not persistent');
+  assert.equal(plain(U.updateToast('ok', 'update')).text, 'Gaffer is updated');
+  assert.ok(U.RELOAD_AFTER_OK_MS >= 800 && U.RELOAD_AFTER_OK_MS <= 3000, 'the reload waits just long enough to read it');
+});
+
+test('updateToast fail: a persistent error toast with exactly the chat notice text; repair failures offer Settings', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  for (const mode of ['update', 'repair']) {
+    for (const code of ['archive', 'runtime', 'runtime-swap', 'internal', 'download', null]) {
+      const t = plain(U.updateToast('fail', mode, code, log));
+      assert.equal(t.type, 'error');
+      assert.equal(t.duration, 0, 'persistent until dismissed');
+      assert.equal(t.key, 'daemon');
+      assert.equal(t.text, U.updateFailureText(mode, code, log).notice, mode + ' ' + code);
+      assert.ok(!/[–—]/.test(t.text));
+      assert.equal(t.action, mode === 'repair' || code === 'runtime-swap' ? 'settings' : null, mode + ' ' + code);
+    }
+  }
+  assert.equal(plain(U.updateToast('fail', 'repair', 'archive', log)).text, 'Repair failed: the downloaded update was not a valid Gaffer release. Open the updater log for details, or reinstall.');
+  assert.equal(U.updateToast('bogus', 'update'), null);
+});
+
+test('launchErrorToast: persistent, same key as the update toasts, Open Settings only when Repair can fix it', () => {
+  assert.deepEqual(plain(U.launchErrorToast('runtime-damaged', 'Gaffer\'s runtime is damaged.')), { key: 'daemon', type: 'error', text: "Gaffer's runtime is damaged.", duration: 0, action: 'settings' });
+  assert.equal(plain(U.launchErrorToast('no-claude', 'x')).action, null);
+  assert.equal(U.launchErrorToast('runtime-blocked', 'x').key, U.updateToast('start', 'repair').key, 'Repair starting replaces the launch error toast');
+});

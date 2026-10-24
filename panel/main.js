@@ -510,7 +510,7 @@
     daemonLaunchCode = code;
     console.error('Gaffer: daemon not launched: ' + code);
     setStatus('disconnected', daemonLaunchError);
-    try { showToast('error', daemonLaunchError, { duration: 0 }); } catch (e) { /* ignore */ }
+    try { showKeyedToast(UpdateState.launchErrorToast(code, daemonLaunchError)); } catch (e) { /* ignore */ }
     try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ } // offers Repair
   }
 
@@ -2445,6 +2445,27 @@
     return { el: t, dismiss: dismiss };
   }
 
+  // A toast that replaces the previous one with the same key instead of
+  // stacking under it. spec comes from GafferUpdateState (updateToast,
+  // launchErrorToast): { key, type, text, duration, action }. action
+  // 'settings' turns the toast's button into "Open Settings" (the welcome
+  // screen covers the footer's Settings button while the daemon is down).
+  var keyedToasts = {};
+  function showKeyedToast(spec) {
+    if (!spec) return null;
+    var prev = keyedToasts[spec.key];
+    if (prev) { try { prev.dismiss(); } catch (e) { /* already gone */ } }
+    var opts = { duration: spec.duration };
+    if (spec.action === 'settings') {
+      opts.actionIcon = 'settings';
+      opts.actionTitle = 'Open Settings';
+      opts.onAction = function () { openSettings(); };
+    }
+    var handle = showToast(spec.type, spec.text, opts);
+    keyedToasts[spec.key] = handle;
+    return handle;
+  }
+
   // Dev-only toast trigger: Cmd/Ctrl+Shift+T fires a demo toast, cycling
   // info -> success -> warning -> error -> neutral on repeat presses. Gated on a
   // localStorage flag so end users never trigger it; enable it (persists across
@@ -2980,6 +3001,9 @@
     window.__gafferUpdating = false;
     syncSettingsUpdateButton();
     var text = UpdateState.updateFailureText(run.mode, code, run.logPath);
+    // The banner and chat notice live in the chat view, which the welcome
+    // screen covers while the daemon is down; the toast is seen on any screen.
+    showKeyedToast(UpdateState.updateToast('fail', run.mode, code, run.logPath));
     updateTextEl.textContent = text.banner;
     if (actionsEl) actionsEl.style.display = '';
     updateBtnEl.style.display = 'none';
@@ -3020,7 +3044,8 @@
         if (step.action === 'reload') {
           clearInterval(timer);
           try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
-          location.reload(); // fresh panel + fresh daemon
+          showKeyedToast(UpdateState.updateToast('ok', run.mode));
+          setTimeout(function () { location.reload(); }, UpdateState.RELOAD_AFTER_OK_MS); // fresh panel + fresh daemon
         } else if (step.action === 'fail') {
           clearInterval(timer);
           // Reported here; the post-reload verdict must not report it again.
@@ -3051,7 +3076,9 @@
       if (actionsEl) actionsEl.style.display = 'none';
       window.__gafferUpdating = true;
       syncSettingsUpdateButton();
-      beginUpdateRun(updateRunPlan().mode); // its result lands in the log from here on
+      var waitMode = updateRunPlan().mode;
+      beginUpdateRun(waitMode); // its result lands in the log from here on
+      showKeyedToast(UpdateState.updateToast('start', waitMode));
       waitForUpdatedVersion(versionData.version, actionsEl);
       return;
     }
@@ -3106,6 +3133,9 @@
         }));
       } catch (e) { /* ignore */ }
       updateTextEl.textContent = plan.mode === 'repair' ? 'Repairing…' : 'Updating…';
+      // Seen on every screen (the banner is not, under the welcome screen);
+      // replaces a launch error toast for the problem being repaired.
+      showKeyedToast(UpdateState.updateToast('start', plan.mode));
       var actionsEl = updateBannerEl.querySelector('.actions');
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
       // Repair starts from Settings with no banner up: show it, so the run is visible.

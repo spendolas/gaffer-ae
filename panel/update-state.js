@@ -234,8 +234,52 @@
     return { banner: head, notice: head + '. The updater log has details: ' + where + '.' };
   }
 
+  // ---- Toasts for an update or repair ----
+  // While the daemon is down (the state Repair is for) the welcome screen
+  // covers the chat, so the chat notice and the update banner cannot be
+  // seen; toasts sit above every screen. The launch error and the update or
+  // repair toasts share one key, so each replaces the one before instead of
+  // stacking: Repair starting replaces the launch error, the result replaces
+  // the progress toast. Each spec is { key, type, text, duration (ms, 0 =
+  // until dismissed), action ('settings' = the toast's button opens
+  // Settings, where Repair is; null = a plain dismiss button) }.
+  var DAEMON_TOAST_KEY = 'daemon';
+  // How long the success toast is up before the panel reloads.
+  var RELOAD_AFTER_OK_MS = 1500;
+
+  // phase 'start' | 'ok' | 'fail'; code and logPath only for 'fail'.
+  function updateToast(phase, mode, code, logPath) {
+    var repair = mode === 'repair';
+    if (phase === 'start') {
+      return { key: DAEMON_TOAST_KEY, type: 'neutral', text: repair ? "Repairing Gaffer's runtime..." : 'Updating Gaffer...', duration: 0, action: null };
+    }
+    if (phase === 'ok') {
+      return { key: DAEMON_TOAST_KEY, type: 'success', text: repair ? 'Gaffer is repaired' : 'Gaffer is updated', duration: 4000, action: null };
+    }
+    if (phase === 'fail') {
+      return {
+        key: DAEMON_TOAST_KEY,
+        type: 'error',
+        text: updateFailureText(mode, code, logPath).notice,
+        duration: 0,
+        action: repair || failureNeedsRepair(code) ? 'settings' : null
+      };
+    }
+    return null;
+  }
+
+  // The launch-refused notice (daemon-launch.js text) as a toast. A notice
+  // Repair can fix offers Settings: the welcome screen covers the Settings
+  // button in the footer, so this is the way there while it shows.
+  function launchErrorToast(code, text) {
+    return { key: DAEMON_TOAST_KEY, type: 'error', text: text, duration: 0, action: isRepairableLaunchError(code) ? 'settings' : null };
+  }
+
   root.GafferUpdateState = {
     UPDATE_ASSETS: UPDATE_ASSETS,
+    RELOAD_AFTER_OK_MS: RELOAD_AFTER_OK_MS,
+    updateToast: updateToast,
+    launchErrorToast: launchErrorToast,
     isRepairableLaunchError: isRepairableLaunchError,
     settingsUpdateAction: settingsUpdateAction,
     lastUpdaterResult: lastUpdaterResult,

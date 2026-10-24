@@ -180,3 +180,33 @@ test('err:runtime-swap leaves the panel offering Repair (Settings button and the
   assert.ok(fnBody('syncSettingsUpdateButton').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
   assert.ok(fnBody('updateRunPlan').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
 });
+
+// Live AE test 2026-10-24: with the daemon down the welcome screen covers
+// the chat, so a Repair's progress and result (chat notice + banner) were
+// invisible for 7+ minutes. Toasts sit above every screen; the decisions
+// live in GafferUpdateState (updateToast, launchErrorToast), main.js wires.
+test('one keyed toast for the daemon: the launch error, Repair/Update start, the result replace each other', () => {
+  const keyed = fnBody('showKeyedToast');
+  assert.ok(keyed.includes('var prev = keyedToasts[spec.key];') && keyed.includes('prev.dismiss()'), 'a toast with the same key is dismissed first, never stacked');
+  assert.ok(keyed.includes("spec.action === 'settings'") && keyed.includes('openSettings()'), 'the settings action opens Settings');
+  assert.ok(fnBody('showLaunchError').includes('showKeyedToast(UpdateState.launchErrorToast(code, daemonLaunchError))'), 'the launch error goes through the keyed toast');
+  assert.ok(!fnBody('showLaunchError').includes("showToast('error', daemonLaunchError"), 'no unkeyed launch error toast left');
+  const run = fnBody('runUpdate');
+  assert.ok(run.includes("showKeyedToast(UpdateState.updateToast('start', plan.mode))"), 'Update/Repair shows a toast at once (replacing the launch error)');
+  assert.ok(fnBody('forceStopAndRetryUpdate').includes("showKeyedToast(UpdateState.updateToast('start', "), 'waiting on a running updater shows the progress toast too');
+  const fail = fnBody('showUpdateFailure');
+  assert.ok(fail.includes("showKeyedToast(UpdateState.updateToast('fail', run.mode, code, run.logPath))"), 'a failure also shows a persistent error toast');
+  assert.ok(fail.includes('showChatNotice(text.notice)'), 'the chat notice stays for the chat view');
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes("showKeyedToast(UpdateState.updateToast('ok', run.mode))"), 'success shows a toast');
+  assert.ok(/setTimeout\(function \(\) \{ location\.reload\(\); \}, UpdateState\.RELOAD_AFTER_OK_MS\)/.test(wait), 'the reload waits for the success toast to be read');
+});
+
+test('Settings stays reachable while the welcome screen covers the footer: the settings modal sits above it, the launch toast opens it', () => {
+  const card = html.indexOf('id="signInCard"');
+  const settings = html.indexOf('id="settingsModal"');
+  assert.ok(card !== -1 && settings !== -1 && card < settings, 'settingsModal comes after signInCard, so at the same z-index it paints above it');
+  assert.match(html, /\.signin-card \{ position: absolute; inset: 0; z-index: 3000;/);
+  assert.match(html, /\.settings-modal \{\s*position: fixed;\s*inset: 0;\s*z-index: 3000;/);
+  assert.match(html, /\.toast-stack \{[^}]*z-index: 4000;/, 'toasts paint above the welcome screen');
+});
