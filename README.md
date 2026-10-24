@@ -34,7 +34,7 @@ Before you begin, read these rules. They apply to every step below.
 - Do not change proxy, certificate or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
 - Do not add shell aliases, modify the user's PATH, or change any config outside the paths explicitly named in these steps.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
-- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry, step 5 names Gaffer's mirror).
+- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror).
 - Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <file>`. Bash expands `$` inside double quotes, so the .ps1 file is the safer choice.
 - After the install completes, run the verification step. Do not skip it.
 
@@ -43,7 +43,7 @@ Before you begin, read these rules. They apply to every step below.
 1. **Check prerequisites.** Run these checks and report the results to the user before proceeding:
 
    - Claude: either the Claude desktop app is installed (step 10 shows where its bundled Claude Code lives) or `claude --version` works in a terminal. At least one must be present. Gaffer itself does not need the standalone CLI. Sign-in is NOT required at install time: the Gaffer panel has its own Sign in button, so do not stop if the desktop app's copy reports "Not logged in" or the CLI prompts for login. Only a missing Claude is a blocker.
-   - Confirm with the user that After Effects 2022 or later is installed
+   - After Effects 2022 or later: look for it yourself before asking. On macOS run `ls -d "/Applications/Adobe After Effects"* 2>/dev/null`; on Windows run `Get-ChildItem "C:\Program Files\Adobe" -Directory -Filter "Adobe After Effects*"` in PowerShell. A folder named `Adobe After Effects 2022` or a later year means it is installed. Ask the user only if nothing 2022 or later is found.
 
    If any prerequisite is missing or not ready, STOP. Tell the user what's missing and link them to the install page. Do not proceed until the user confirms all prerequisites are ready.
 
@@ -74,7 +74,7 @@ Before you begin, read these rules. They apply to every step below.
    $env:PROCESSOR_ARCHITECTURE
    ```
 
-   On macOS the command prints the platform name used in steps 5 to 8 (`darwin-arm64` for Apple Silicon, `darwin-x64` for Intel). Do not use `uname -m` instead: it reports `x86_64` in a terminal running under Rosetta on Apple Silicon. On Windows, `AMD64` or `ARM64` means the platform is `win-x64` (Windows on ARM runs it under its x64 emulation). Anything else (`x86`): stop and tell the user that Gaffer needs 64-bit Windows.
+   On macOS the command prints the platform name used in steps 5 to 8 (`darwin-arm64` for Apple Silicon, `darwin-x64` for Intel). On an Intel Mac, `sysctl -n hw.optional.arm64` run on its own prints `sysctl: unknown oid 'hw.optional.arm64'`: that is expected and means Intel (the command above hides it and prints `darwin-x64`). Do not ask the user to confirm the platform. Do not use `uname -m` instead: it reports `x86_64` in a terminal running under Rosetta on Apple Silicon. On Windows, `AMD64` or `ARM64` means the platform is `win-x64` (Windows on ARM runs it under its x64 emulation). Anything else (`x86`): stop and tell the user that Gaffer needs 64-bit Windows.
 
 4. **Download the Gaffer package, verify it, and extract it** into the CEP extensions directory. The package and its checksum file come from the same GitHub release. Each block downloads into a new private folder and prints its path, and creates the install folder only after the checksum passed.
 
@@ -109,9 +109,9 @@ Before you begin, read these rules. They apply to every step below.
    Remove-Item -Recurse -Force $dl
    ```
 
-   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If a download fails or the checksum does not match, stop and report it; do not extract the package. If the extract fails, remove the install folder (path in step 2) before you stop: a partial folder is not an install. After any failure, also delete the download folder the block printed.
+   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If the checksum does not match, or a download fails in any way other than the `SHA256SUMS.txt` 404 described in the next paragraph, stop and report it; do not extract the package. If the extract fails, remove the install folder (path in step 2) before you stop: a partial folder is not an install. After any failure, also delete the download folder the block printed.
 
-   If only the `SHA256SUMS.txt` download fails with HTTP 404 (curl prints `The requested URL returned error: 404`; its exit code can be 22 or 56), a new Gaffer release is still being published. Delete the download folder, wait a few minutes and run this step again unchanged. Do not work around it: do not skip the checksum and do not take the package from another release. If it still fails after 15 minutes, stop and tell the user.
+   If only the `SHA256SUMS.txt` download fails with HTTP 404 (curl prints `The requested URL returned error: 404`; its exit code can be 22 or 56), a new Gaffer release is still being published. This is the one failure in this step where you do not stop at once. Delete the download folder, wait 2 minutes (`sleep 120` on macOS, `Start-Sleep -Seconds 120` on Windows), then run this step again unchanged. Retry up to 5 times. Do not work around it: do not skip the checksum and do not take the package from another release. If it still fails after the 5th retry, stop and tell the user.
 
 <!-- runtime-pins:begin. Generated from panel/daemon/runtime-pins.json by scripts/readme-pins.mjs; edit the script, then run: node scripts/readme-pins.mjs --write -->
 5. **Download the Node.js runtime.** Gaffer runs on the official Node.js v24.22.1 from nodejs.org, kept as a single file inside Gaffer's own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed. The block creates a new download folder and prints its path; steps 6 and 7 need that path.
