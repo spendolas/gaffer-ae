@@ -22,7 +22,7 @@ echo "=== Update started: $(date) ==="
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed, always right after an ERROR line. Codes:
-#                           err:dev-install, err:lock, err:download, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal
+#                           err:dev-install, err:lock, err:download, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal, err:stopped
 #                           err:dev-install: the panel is a git checkout, refused
 #                           err:lock: the update lock could not be created or taken
 #                           err:download: the asset could not be fetched or unpacked
@@ -34,8 +34,11 @@ echo "=== Update started: $(date) ==="
 #                           err:sync: replacing the panel files (or restoring user data, or writing
 #                           version.json) failed: the install may be unfinished
 #                           err:internal: the catch-all. Any other way out (a command failing under
-#                           set -e, the temp folder or a backup that cannot be written, a disk full,
-#                           SIGTERM, SIGINT or SIGHUP) before a result line was printed.
+#                           set -e, the temp folder or a backup that cannot be written, a disk full)
+#                           before a result line was printed.
+#                           err:stopped: SIGTERM, SIGINT or SIGHUP arrived before a result line was
+#                           printed. Usually a newer updater took over a stuck run (stop_lock_holder)
+#                           and will print its own result after this line, so a panel keeps waiting.
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy (128 + n when stopped by signal n).
 # Every result line goes through result_line, so the EXIT trap knows one was
@@ -59,8 +62,8 @@ cleanup() {
 }
 # The catch-all: a run that ends without having printed ok:, err: or busy:
 # (whatever the exit status, a zero one included) gets an ERROR line and
-# err:internal, and a non-zero status. One that printed its result line gets
-# nothing after it.
+# err:internal (err:stopped when a signal ended it), and a non-zero status.
+# One that printed its result line gets nothing after it.
 on_exit() {
   local rc=$?
   trap - EXIT
@@ -68,10 +71,11 @@ on_exit() {
   if [ -z "$RESULT_LINE" ]; then
     if [ -n "$CAUGHT_SIGNAL" ]; then
       echo "ERROR: the updater was stopped by SIG$CAUGHT_SIGNAL before it reported a result"
+      echo "err:stopped"
     else
       echo "ERROR: the updater stopped unexpectedly (exit $rc) before it reported a result"
+      echo "err:internal"
     fi
-    echo "err:internal"
     [ "$rc" -ne 0 ] || rc=1
   fi
   exit "$rc"

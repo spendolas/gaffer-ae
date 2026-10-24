@@ -508,8 +508,8 @@ test('update.ps1 never treats its own pid as a holder and matches the script nam
 });
 
 test('download budgets pin the panel windows: 180s give-up plus one 180s extension', () => {
-  assert.ok(mainJs.includes('} else if (waited >= 180000) {'), 'the panel gives up after 180s');
-  assert.ok(mainJs.includes('if (!extended && runningUpdaterPid()) {\n            extended = true;\n            waited = 0;'), 'the panel extends exactly once, by another 180s');
+  assert.ok(mainJs.includes('var atLimit = waited >= 180000;') && mainJs.includes('} else if (atLimit) {'), 'the panel gives up after 180s');
+  assert.ok(mainJs.includes('var extend = atLimit && !extended && !!runningUpdaterPid();') && mainJs.includes('if (extend) {\n            extended = true;\n            waited = 0;'), 'the panel extends exactly once, by another 180s');
   for (const [name, text] of [['update.sh', sh], ['update.ps1', ps1]]) {
     // Comments wrap: join continuation lines before looking for the phrase.
     const prose = text.replace(/\n#\s*/g, ' ');
@@ -941,7 +941,8 @@ test('update.sh swap_runtime failing mid-swap really ends the run with err:runti
 // line, so the panel waited out its 180 s fallback. The rule now: every
 // non-zero exit prints a result line first, and a catch-all (update.sh: an
 // EXIT trap, update.ps1: a top-level try/catch) prints err:internal for any
-// way out that did not.
+// way out that did not (update.sh: err:stopped when a signal ended it, so a
+// panel keeps waiting for the updater that took over a stuck run).
 
 // The codes each updater may print, as documented in its header contract.
 const ERR_CODES = ['dev-install', 'lock', 'download', 'archive', 'runtime', 'runtime-swap', 'sync', 'internal'];
@@ -1015,7 +1016,7 @@ test('update.sh: every failure exit ends the log with an err: code, never a bare
 // SIGINT is trapped too (static check below), but a background job of a
 // non-interactive shell starts with SIGINT ignored, which bash cannot trap,
 // so only TERM and HUP are sent here.
-test('update.sh: an updater stopped by SIGTERM or SIGHUP still ends the log with err:internal (run under bash, real script)', () => {
+test('update.sh: an updater stopped by SIGTERM or SIGHUP ends the log with err:stopped, not err:internal (run under bash, real script)', () => {
   for (const sig of ['SIGTERM', 'SIGHUP']) {
     const r = runUpdateSh(GOOD_SRC + PACK, {
       env: { GAFFER_UPDATE_TEST_HOLD_GATE: 'GATE' },
@@ -1031,7 +1032,8 @@ kill -${sig.slice(3)} "$pid"; wait "$pid"; echo "rc=$?"`;
       },
     });
     assert.notEqual(r.status, 0, sig + ': non-zero exit');
-    assert.equal(r.last, 'err:internal', sig + ': last log line\n' + r.log);
+    assert.equal(r.last, 'err:stopped', sig + ': last log line\n' + r.log);
+    assert.doesNotMatch(r.log, /^err:internal$/m, sig + ': no err:internal');
     assert.match(r.log, new RegExp('ERROR: the updater was stopped by ' + sig), sig + ': the ERROR line names the signal');
   }
 });
@@ -1044,7 +1046,7 @@ function runResult(body) {
   return runShSnippet(sh, RES_FIRST, RES_LAST, pre + body, {});
 }
 
-test('update.sh exit trap: err:internal for any way out without a result line, never a second line after ok:/err:/busy: (run under bash)', () => {
+test('update.sh exit trap: err:internal for any way out without a result line (err:stopped for a signal), never a second line after ok:/err:/busy: (run under bash)', () => {
   const lines = (r) => r.stdout.split('\n').filter(Boolean);
   const died = runResult('echo working\nfalse\necho unreachable');
   assert.equal(died.status, 1, 'a set -e death keeps a non-zero status');
@@ -1063,7 +1065,12 @@ test('update.sh exit trap: err:internal for any way out without a result line, n
   assert.equal(lines(silent).pop(), 'err:internal');
   const term = runResult('kill -TERM $$; sleep 2; echo unreachable');
   assert.equal(term.status, 143);
-  assert.deepEqual(lines(term).slice(-2), ['ERROR: the updater was stopped by SIGTERM before it reported a result', 'err:internal']);
+  assert.deepEqual(lines(term).slice(-2), ['ERROR: the updater was stopped by SIGTERM before it reported a result', 'err:stopped']);
+  const hup = runResult('kill -HUP $$; sleep 2; echo unreachable');
+  assert.equal(hup.status, 129);
+  assert.deepEqual(lines(hup).slice(-2), ['ERROR: the updater was stopped by SIGHUP before it reported a result', 'err:stopped']);
+  const termAfterOk = runResult('result_line "ok:9.9.9"; kill -TERM $$; sleep 2');
+  assert.deepEqual(lines(termAfterOk), ['ok:9.9.9'], 'a signal after ok: adds no line');
   const gone = runResult('touch "$TMP_DIR/x"; result_line "ok:1"');
   assert.ok(!existsSync(gone.stdout.split('\n')[0]), 'cleanup still runs');
 });
@@ -1101,6 +1108,7 @@ test('update.sh static scan: every non-zero exit follows a result_line, result l
   const header = sh.slice(0, sh.indexOf('REPAIR=""'));
   for (const c of ERR_CODES) assert.ok(header.includes('err:' + c), 'header contract does not name err:' + c);
   assert.ok(used.includes('archive') && sh.includes('echo "err:internal"'), 'err:archive is used, err:internal is the trap\'s');
+  assert.ok(sh.includes('echo "err:stopped"') && header.includes('err:stopped'), 'err:stopped is the signal trap\'s, documented in the header');
   // The trap is installed before anything can fail: right after the log
   // redirect and before the lock.
   assert.ok(sh.indexOf('exec >> "$LOG" 2>&1') < sh.indexOf('trap on_exit EXIT') && sh.indexOf('trap on_exit EXIT') < sh.indexOf('\nacquire_lock\n'));

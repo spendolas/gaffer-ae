@@ -27,6 +27,9 @@
     span.innerHTML = (typeof GafferIcons !== 'undefined' && GafferIcons[name]) || '';
     return span;
   }
+  // Open keyed toasts by key (showKeyedToast). Set up here, before anything
+  // that could show one (showLaunchError runs during startup).
+  var keyedToasts = {};
   var ws = null;
   var reconnectDelay = 1000;
   var maxDelay = 30000;
@@ -2450,7 +2453,6 @@
   // launchErrorToast): { key, type, text, duration, action }. action
   // 'settings' turns the toast's button into "Open Settings" (the welcome
   // screen covers the footer's Settings button while the daemon is down).
-  var keyedToasts = {};
   function showKeyedToast(spec) {
     if (!spec) return null;
     var prev = keyedToasts[spec.key];
@@ -3015,7 +3017,9 @@
   // Poll every 5 s until the run is over (GafferUpdateState.updateWaitStep):
   // the updater's ok:<version> (a repair keeps its version, so this is its
   // only signal) or a moved version.json reloads the panel; its err:<code>
-  // ends the wait at once with that code's text. The updater writes
+  // ends the wait at once with that code's text, except err:stopped (a
+  // signalled updater, usually a stuck one a newer updater took over): the
+  // taker's result follows in the same log, so that wait goes on to the give-up. The updater writes
   // version.json last, so reloading earlier would load half-copied files.
   // After 180s with neither the banner offers "Force stop & retry", unless
   // the updater still holds its lock: then it is alive and working (a slow
@@ -3034,12 +3038,17 @@
         // No result in the log (unreadable, or the ExtendScript route's updater
         // saw another TMPDIR and wrote elsewhere): use callSystem's output if it has one.
         if (!UpdateState.lastUpdaterResult(logText) && run.output && UpdateState.lastUpdaterResult(run.output)) logText = run.output;
+        // Give up at 180 s, or one window later while an updater still holds
+        // the lock (see below).
+        var atLimit = waited >= 180000;
+        var extend = atLimit && !extended && !!runningUpdaterPid();
         var step = UpdateState.updateWaitStep({
           mode: run.mode,
           startVersion: startVersion,
           diskJson: result,
           logText: logText,
-          exited: run.exited
+          exited: run.exited,
+          giveUp: atLimit && !extend
         });
         if (step.action === 'reload') {
           clearInterval(timer);
@@ -3051,8 +3060,8 @@
           // Reported here; the post-reload verdict must not report it again.
           try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
           showUpdateFailure(run, step.code, actionsEl);
-        } else if (waited >= 180000) {
-          if (!extended && runningUpdaterPid()) {
+        } else if (atLimit) {
+          if (extend) {
             extended = true;
             waited = 0;
             updateTextEl.textContent = 'Still updating, this is taking longer than usual…';

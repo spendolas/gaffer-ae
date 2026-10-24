@@ -176,8 +176,13 @@
   // One poll while an update or repair runs. o = { mode: 'update'|'repair',
   // startVersion, diskJson (version.json as read), logText (log gained since
   // the start, or null when the panel cannot read it), exited (the updater
-  // the panel started has exited) }. Returns { action: 'reload' } |
-  // { action: 'fail', code } | { action: 'wait' }.
+  // the panel started has exited), giveUp (the panel's wait is over: the
+  // give-up time passed and no updater holds the lock any more) }. Returns
+  // { action: 'reload' } | { action: 'fail', code } | { action: 'wait' }.
+  //   err:stopped a signal ended an updater (update.sh), usually a stuck one
+  //               a newer updater took over: that one appends its own result
+  //               later, so wait for it or for version.json, and fail (generic
+  //               text) only at the give-up
   //   err:<code>  fail at once (never reload on a failure)
   //   ok:<v>      reload (a repair keeps the version, so this is its signal)
   //   version.json moved: reload (no readable log, the pre-0.12 signal)
@@ -187,6 +192,10 @@
   //   runtime), an update keeps waiting for the version or the give-up
   function updateWaitStep(o) {
     var r = lastUpdaterResult(o.logText);
+    if (r && r.kind === 'err' && r.code === 'stopped') {
+      if (shouldReloadAfterUpdate(o.startVersion, o.diskJson)) return { action: 'reload' };
+      return o.giveUp ? { action: 'fail', code: 'stopped' } : { action: 'wait' };
+    }
     if (r && r.kind === 'err') return { action: 'fail', code: r.code };
     if (r && r.kind === 'ok') return { action: 'reload' };
     if (shouldReloadAfterUpdate(o.startVersion, o.diskJson)) return { action: 'reload' };
@@ -211,7 +220,7 @@
   // update"), and so does err:runtime-swap (the install may be unfinished),
   // and err:archive (the download unpacked but is not a Gaffer release, the
   // install is untouched); every other code (err:internal, the updaters'
-  // catch-all, included), or none, gets the generic text naming the updater
+  // catch-all, and err:stopped, included), or none, gets the generic text naming the updater
   // log (logPath when known, else both platforms' usual place).
   function updateFailureText(mode, code, logPath) {
     var repair = mode === 'repair';

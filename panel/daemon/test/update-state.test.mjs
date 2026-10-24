@@ -340,6 +340,39 @@ test('updateWaitStep: err:archive and err:internal fail at once with their code'
   }
 });
 
+// A stuck updater taken over by a newer one (update.sh stop_lock_holder
+// TERMs it) prints err:stopped into the shared log while the taker carries
+// on: that must not end the wait, the taker's result follows.
+test('updateWaitStep: err:stopped followed by the taker\'s ok: later in the slice reloads', () => {
+  const log = 'ERROR: the updater was stopped by SIGTERM before it reported a result\nerr:stopped\nStopping an update...\nok:0.12.1\n';
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: log, exited: true })), { action: 'reload' });
+});
+
+test('updateWaitStep: err:stopped alone keeps waiting while an updater is alive (the give-up not reached)', () => {
+  const log = 'ERROR: the updater was stopped by SIGTERM before it reported a result\nerr:stopped\n';
+  for (const mode of ['update', 'repair']) {
+    for (const exited of [true, false]) {
+      assert.deepEqual(plain(U.updateWaitStep({ mode, startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: log, exited, giveUp: false })), { action: 'wait' }, mode + ' exited=' + exited);
+    }
+  }
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.1"}', logText: log, exited: true })), { action: 'reload' }, 'version.json moved: reload');
+});
+
+test('updateWaitStep: err:stopped alone at the give-up fails with the generic text', () => {
+  const log = 'ERROR: the updater was stopped by SIGTERM before it reported a result\nerr:stopped\n';
+  const step = plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: log, exited: true, giveUp: true }));
+  assert.deepEqual(step, { action: 'fail', code: 'stopped' });
+  const p = '/var/folders/x/T/gaffer-update.log';
+  assert.deepEqual(plain(U.updateFailureText('update', step.code, p)), plain(U.updateFailureText('update', null, p)));
+  assert.deepEqual(plain(U.updateFailureText('repair', 'stopped', p)), plain(U.updateFailureText('repair', null, p)));
+  assert.equal(U.failureNeedsRepair('stopped'), false);
+});
+
+test('updateWaitStep: giveUp does not change any other err: or ok: result', () => {
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:internal\n', exited: false, giveUp: false })), { action: 'fail', code: 'internal' });
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'err:stopped\nERROR: y\nerr:sync\n', exited: false })), { action: 'fail', code: 'sync' }, 'the taker failing is reported');
+});
+
 // ---- toasts for an update or repair (live AE test 2026-10-24) ----
 // With the daemon down the welcome screen covers the chat, so the chat
 // notice and the update banner are invisible; toasts sit above it. One
