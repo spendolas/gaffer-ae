@@ -51,7 +51,9 @@
 # for byte as it was, daemon never stopped; an updater killed between the two
 # swap renames is recovered by the next run; runtime.old restored at start
 # (and a damaged one is not); an archive without daemon/daemon.mjs (pre-bundle
-# layout) is refused; repair (update.sh --repair, the panel's Repair button)
+# layout) is refused with err:archive (plain and --repair), a truncated
+# archive ends with err:download and one without version.json with
+# err:archive; repair (update.sh --repair, the panel's Repair button)
 # at the same version downloads a current runtime again and swaps in a fresh
 # folder, a damaged runtime at the same version is re-provisioned by a plain
 # update (stamp check), a repair whose download fails ends with err:runtime
@@ -593,6 +595,39 @@ set -e
 if [ "$NB_EXIT" -eq 1 ]; then pass "pre-bundle archive: refused (exit 1)"; else fail "pre-bundle archive: exit $NB_EXIT, expected 1"; fi
 if grep -q '^ERROR: downloaded archive is not a Gaffer release (missing version.json or daemon/daemon.mjs)$' "$LOG"; then pass "pre-bundle archive: the ERROR line names daemon/daemon.mjs"; else fail "pre-bundle archive: last lines: $(tail -n2 "$LOG" | tr '\n' '|')"; fi
 if [ "$BEFORE" = "$(full_tree_hash "$RT_NOBUNDLE")" ] && [ ! -e "$RT_NOBUNDLE/daemon/runtime" ]; then pass "pre-bundle archive: install untouched"; else fail "pre-bundle archive: install changed"; fi
+# The live Repair failure of 2026-10-24: this exit printed no err: line and
+# the panel waited out its 180 s fallback.
+if [ "$(tail -n1 "$LOG")" = "err:archive" ]; then pass "pre-bundle archive: the log ends with err:archive"; else fail "pre-bundle archive: last log line: $(tail -n1 "$LOG")"; fi
+: > "$LOG"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET_NO_BUNDLE" bash "$RT_NOBUNDLE/daemon/update.sh" --repair
+NB_EXIT=$?
+set -e
+if [ "$NB_EXIT" -eq 1 ] && [ "$(tail -n1 "$LOG")" = "err:archive" ]; then pass "pre-bundle archive, --repair: exit 1, log ends with err:archive"; else fail "pre-bundle archive, --repair: exit $NB_EXIT, last log line: $(tail -n1 "$LOG")"; fi
+if [ "$BEFORE" = "$(full_tree_hash "$RT_NOBUNDLE")" ]; then pass "pre-bundle archive, --repair: install untouched"; else fail "pre-bundle archive, --repair: install changed"; fi
+
+# ---------- Case R5b: a truncated archive and one without version.json end with an err: code ----------
+# Every failure exit ends the log with err:<code> (the contract the panel
+# waits on); a truncated download is err:download, an archive that unpacks
+# but carries no version.json is err:archive.
+RT_TRUNCATED="$SCRATCH/Application Support/rt-truncated/com.gaffer.panel"
+new_install "$RT_TRUNCATED"
+BEFORE="$(full_tree_hash "$RT_TRUNCATED")"
+ASSET_TRUNCATED="$SCRATCH/dist/gaffer-update-truncated.tar.gz"
+head -c "$(( $(wc -c < "$ASSET") / 2 ))" "$ASSET" > "$ASSET_TRUNCATED"
+ASSET_NO_VERSION="$SCRATCH/dist/gaffer-update-no-version.tar.gz"
+repack_asset "$SCRATCH/pins-$RT_V1.json" "$ASSET_NO_VERSION" version.json
+for pair in "$ASSET_TRUNCATED:err:download" "$ASSET_NO_VERSION:err:archive"; do
+  src="${pair%%:err:*}"; want="err:${pair#*:err:}"
+  : > "$LOG"
+  set +e
+  PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$src" bash "$RT_TRUNCATED/daemon/update.sh"
+  RC=$?
+  set -e
+  if [ "$RC" -eq 1 ] && [ "$(tail -n1 "$LOG")" = "$want" ]; then pass "$(basename "$src"): exit 1, log ends with $want"; else fail "$(basename "$src"): exit $RC, last log line: $(tail -n1 "$LOG")"; fi
+  if grep -q '^ERROR: ' "$LOG"; then pass "$(basename "$src"): an ERROR line names the cause"; else fail "$(basename "$src"): no ERROR line"; fi
+done
+if [ "$BEFORE" = "$(full_tree_hash "$RT_TRUNCATED")" ] && [ ! -e "$LOCK_DIR" ]; then pass "truncated / no-version archives: install untouched, lock released"; else fail "truncated / no-version archives: install changed or lock left"; fi
 
 # ---------- Case 3: a second updater exits busy while a live one holds the lock ----------
 BUSY_INSTALL="$SCRATCH/Application Support/busy/com.gaffer.panel"

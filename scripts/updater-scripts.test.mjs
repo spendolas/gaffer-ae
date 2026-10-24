@@ -6,7 +6,7 @@
 // on the platform a developer is not running.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -108,7 +108,7 @@ test('update.sh ends a failed rsync step with an ERROR line and err:sync, and ha
   assert.ok(sh.includes('sync_files() {'));
   const sync = sh.split('sync_files() {')[1].split('\n}\n')[0];
   assert.ok(sync.includes('"$EXTRACT_DIR/" "$PANEL_DIR/" || return 1'), 'rsync failure returns, not set -e exit');
-  assert.ok(sh.includes('if ! sync_files; then\n  echo "ERROR: replacing the panel files failed (rsync)"\n  echo "err:sync"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! sync_files; then\n  echo "ERROR: replacing the panel files failed (rsync)"\n  result_line "err:sync"\n  exit 1\nfi'));
   assert.ok(!sh.includes('install_deps'), 'the npm block is gone');
   assert.ok(!/\bnpm\b/.test(sh.replace(/^\s*#.*$/gm, '')), 'no npm call outside comments');
   assert.ok(!sh.includes('err:npm'), 'err:npm is gone from the script and its contract comment');
@@ -138,7 +138,7 @@ test('update.sh checks the archive for daemon/daemon.mjs and orders recovery, st
   assert.ok(at('stop_daemon\n') < at('if ! swap_runtime; then'), 'stopped before the swap');
   assert.ok(at('if ! swap_runtime; then') < at('if ! sync_files; then'), 'swap, then sync');
   assert.ok(at('if ! sync_files; then') < at('mv -f "$PANEL_DIR/version.json.tmp" "$PANEL_DIR/version.json"'), 'version.json last');
-  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  echo "err:runtime"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  result_line "err:runtime"\n  exit 1\nfi'));
   const block = sh.slice(sh.indexOf(RT_FIRST), sh.indexOf(RT_LAST));
   assert.ok(block.includes('bash "$script" --stage-only --into "$DAEMON_DIR"'), 'runs the ARCHIVE copy of fetch-runtime.sh, stage only');
   assert.ok(block.includes('local script="$EXTRACT_DIR/daemon/fetch-runtime.sh"'));
@@ -228,8 +228,8 @@ test('update.sh drops the GAFFER_FETCH_* test seams unless the harness set GAFFE
 });
 
 test('update.ps1 still ends a failed download, robocopy or npm step with an ERROR line and its err: code', () => {
-  assert.ok(ps1.includes('function Exit-Update([string] $message, [string] $code = "") {'));
-  assert.ok(ps1.includes('if ($code) { Write-Output "err:$code" }'), 'the code line follows the ERROR line');
+  assert.ok(ps1.includes('function Exit-Update([string] $message, [string] $code = "internal") {'));
+  assert.ok(ps1.includes('Write-Host "ERROR: $message"\n    if (-not $code) { $code = "internal" }\n    Write-Result "err:$code"'), 'the code line follows the ERROR line');
   assert.ok(ps1.includes('Exit-Update "download or extract failed: $($_.Exception.Message)" "download"'), 'a failed download ends with err:download like Mac');
   assert.ok(ps1.includes('Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync"'));
 });
@@ -251,7 +251,7 @@ test('update.sh ends a failed download or extract with an ERROR line and err:dow
   const fn = sh.split('download_and_extract() {')[1].split('\n}\n')[0];
   assert.ok(/curl -fsSL[^\n]* \|\| return 1 ;;/.test(fn), 'curl failure returns, not set -e exit');
   assert.ok(fn.includes('tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" || return 1'), 'tar failure returns too');
-  assert.ok(sh.includes('if ! download_and_extract; then\n  echo "ERROR: download or extract failed"\n  echo "err:download"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! download_and_extract; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
   assert.ok(sh.includes('err:dev-install, err:lock, err:download'), 'the contract comment names the new code');
 });
 
@@ -266,7 +266,7 @@ test('update.sh serializes takeovers with a second mkdir mutex and re-checks the
   assert.ok(inside.includes('if lock_holder_is_updater "$holder"; then\n      stop_lock_holder "$holder"'), 'the holder itself is re-read inside the mutex right before it is stopped');
   assert.ok(inside.includes('is already gone, not stopping it.'), 'a holder that vanished at the gate is logged, not signalled');
   assert.ok(inside.indexOf('stop_lock_holder "$holder"') < inside.indexOf('mv "$LOCK_DIR" "$stale"'), 'the holder is stopped inside the mutex, before the rename');
-  assert.ok(inside.includes('if mkdir "$LOCK_DIR" 2>/dev/null; then\n      echo "$$" > "$LOCK_DIR/pid"'), 'the taker creates its lock while still holding the mutex');
+  assert.ok(inside.includes('if mkdir "$LOCK_DIR" 2>/dev/null; then\n      write_lock_pid'), 'the taker creates its lock while still holding the mutex');
   assert.ok(inside.includes('The abandoned lock now belongs to pid ${now_holder:-unknown}, rechecking.'), 'the re-read rejection is logged so the harness can tell the path');
 });
 
@@ -323,8 +323,8 @@ test('update.ps1 test gates count only next to GAFFER_UPDATE_ASSET, every one th
 });
 
 test('update.sh exit trap only deletes a lock that still holds its own pid', () => {
-  assert.ok(sh.includes('if [ -n "$HAVE_LOCK" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK_DIR"; fi'));
-  assert.ok(sh.includes('release_takeover_mutex\n  # Only ever delete'), 'trap also releases a held takeover mutex');
+  assert.ok(sh.includes('if [ -n "${HAVE_LOCK:-}" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK_DIR"; fi'));
+  assert.ok(sh.includes('if declare -F release_takeover_mutex >/dev/null; then release_takeover_mutex; fi\n  # Only ever delete'), 'trap also releases a held takeover mutex');
 });
 
 test('update.sh stops a stuck holder and its whole process tree before taking over', () => {
@@ -373,7 +373,7 @@ test('update.ps1 serializes takeovers with a CreateNew marker and re-checks the 
   assert.ok(inside.includes('The abandoned lock now belongs to pid $label, rechecking.'), 'the re-read rejection is logged so the harness can tell the path');
   assert.ok(inside.includes('$state = Get-LockHolderState $proc $lockWrittenUtc'), 'the holder (pid and creation time) is re-read inside the mutex');
   assert.ok(inside.includes('if ($state -eq "same") {\n            Stop-LockHolder $proc $ancestors'), 'only the same live updater is stopped, never its pid\'s new owner, never this updater\'s own parent chain');
-  assert.ok(inside.includes('if ($state -eq "unverified") {\n            Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."\n            Exit-TakeoverMutex\n            Write-Output "busy:already-running"'), 'an Unverified re-read inside the mutex releases the mutex and exits busy, it never takes over');
+  assert.ok(inside.includes('if ($state -eq "unverified") {\n            Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."\n            Exit-TakeoverMutex\n            Write-Result "busy:already-running"'), 'an Unverified re-read inside the mutex releases the mutex and exits busy, it never takes over');
   assert.ok(inside.indexOf('$state -eq "unverified"') < inside.indexOf('$state -eq "same"'), 'unverified is handled before the stop');
   assert.ok(inside.includes('is already gone, not stopping it.'), 'a holder that vanished at the gate is logged, not signalled');
   assert.ok(inside.indexOf('Stop-LockHolder $proc') < inside.indexOf('Remove-Item -LiteralPath $lockPath'), 'the holder is stopped inside the mutex, before the removal');
@@ -396,8 +396,8 @@ test('update.ps1 never stops a hand-run holder or its own parent chain, and ends
   for (const cmd of ['"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"', 'powershell -NoProfile -Command Start-Sleep -Seconds 300', 'powershell -File my-update.ps1', 'powershell -File daemon\\update.sh']) assert.ok(!re.test(cmd), 'should not match: ' + cmd);
   const loop = ps1.split('$lockIsOld = ($lockAge -ge $stuckAfter)')[1].split('Wait-TestGate $env:GAFFER_UPDATE_TEST_GATE')[0];
   assert.ok(loop.includes('try { $ancestors = @(Get-AncestorProcessIds) } catch {'), 'this updater\'s own parent chain is built from Win32_Process');
-  assert.ok(loop.includes('if ($ancestors -contains [int] $proc.ProcessId) {\n            Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."\n            Write-Output "err:lock"'), 'a holder on the parent chain is refused with err:lock');
-  assert.ok(loop.includes('if (-not $proc.Stoppable) {\n            Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."\n            Write-Output "err:lock"'), 'a name-only holder past the stuck age is refused with err:lock, never stopped');
+  assert.ok(loop.includes('if ($ancestors -contains [int] $proc.ProcessId) {\n            Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."\n            Write-Result "err:lock"'), 'a holder on the parent chain is refused with err:lock');
+  assert.ok(loop.includes('if (-not $proc.Stoppable) {\n            Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."\n            Write-Result "err:lock"'), 'a name-only holder past the stuck age is refused with err:lock, never stopped');
   assert.ok(loop.indexOf('$ancestors -contains') < loop.indexOf('-not $proc.Stoppable'), 'the parent-chain refusal comes first');
   assert.ok(ps1.includes('Stop-LockHolder $proc $ancestors'), 'the parent chain is passed to the stop as protected pids');
   const desc = ps1.split('function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, [int[]] $protect) {')[1].split('\n}\n')[0];
@@ -448,7 +448,7 @@ test('update.ps1 stops a stuck holder through Win32_Process descendants, taskkil
   assert.ok(ps1.includes('if ($script:testFailList) { $script:testFailList = $false; throw "GAFFER_UPDATE_TEST_FAIL_LIST" }'), 'the harness can make the first listing fail');
   assert.ok(ps1.includes('$script:testFailList = [bool] ($env:GAFFER_UPDATE_ASSET -and $env:GAFFER_UPDATE_TEST_FAIL_LIST)'), 'that knob is gated like the stuck-age knob');
   assert.ok(ps1.includes('Residual risk, left for a later release: two clocks are compared'), 'the deferred clock risks are noted next to the reuse guard');
-  const tryAt = ps1.indexOf('\ntry {');
+  const tryAt = ps1.indexOf('\ntry {\n');
   const dotSource = ps1.indexOf('. "$PSScriptRoot\\stop-daemon.ps1"');
   const lockLoopEnd = ps1.lastIndexOf('$script:haveLock = $true');
   assert.ok(tryAt !== -1 && dotSource !== -1 && lockLoopEnd !== -1);
@@ -488,7 +488,7 @@ test('update.ps1 recognises a holder by process name and creation time, keeps th
   assert.ok(fn.includes('$createdUtc = ([DateTime] $proc.CreationDate).ToUniversalTime()'));
   assert.ok(fn.includes('if ($createdUtc -gt $lockUtc.AddSeconds(5)) { return $null }'), 'created after the lock was written (plus 5 s) is a reused pid, whatever the name or path');
   assert.ok(fn.indexOf('if (-not ($nameOk -or $scriptOk))') < fn.indexOf('$createdUtc'), 'the creation-time condition applies to both forms');
-  assert.ok(ps1.includes('if ($proc -and $proc.Unverified) {\n        Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."\n        Write-Output "busy:already-running"'), 'Unverified means busy');
+  assert.ok(ps1.includes('if ($proc -and $proc.Unverified) {\n        Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."\n        Write-Result "busy:already-running"'), 'Unverified means busy');
   assert.ok(fn.includes('Unverified = $true; Stoppable = $false'), 'an Unverified holder is never stoppable');
   assert.ok(ps1.includes('pid reused).'), 'a live non-holder pid is logged before the takeover');
   for (const line of ps1.split('\n').filter((l) => l.includes('Get-CimInstance'))) {
@@ -674,7 +674,7 @@ test('update.ps1 restores runtime.old at the start only when runtime is missing 
   const fn = ps1.split('function Test-RuntimeStamp([string] $dir) {')[1].split('\n}\n')[0];
   assert.ok(fn.includes('$stamp = Join-Path $dir "VERIFIED"'));
   assert.ok(fn.includes('$fields[0] -eq [string] (Get-Item -LiteralPath $exe).Length'), 'the size check compares the stamp with the file');
-  const dev = ps1Body.indexOf('Write-Output "err:dev-install"');
+  const dev = ps1Body.indexOf('Write-Result "err:dev-install"');
   const recover = ps1Body.indexOf('if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {');
   const download = ps1Body.indexOf('Get-ReleaseAsset $assetSource $zipPath');
   assert.ok(dev !== -1 && recover !== -1 && download !== -1);
@@ -734,7 +734,7 @@ test('test-5 never lets the updater fetch the real runtime and requires a zero-d
 test('update.ps1 keeps the v0.11.3 lock, process-tree and hand-run-terminal rules and stays PowerShell 5.1 syntax', () => {
   for (const s of ['function Stop-LockHolder($proc, [int[]] $protect) {', 'function Get-AncestorProcessIds {',
     'An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes.',
-    'Write-Output "busy:already-running"', 'Write-Output "ok:$latestVersion"', '. "$PSScriptRoot\\stop-daemon.ps1"',
+    'Write-Result "busy:already-running"', 'Write-Result "ok:$latestVersion"', '. "$PSScriptRoot\\stop-daemon.ps1"',
     'Move-Item -LiteralPath $versionTmp -Destination "$panelDir\\version.json" -Force']) {
     assert.ok(ps1.includes(s), 'missing ' + s);
   }
@@ -894,9 +894,9 @@ test('update.sh has no pkill fallback left: the lsof-on-port stop is the only da
 });
 
 test('update.sh: a failure after the install may have changed ends with err:runtime-swap, a stage failure keeps err:runtime', () => {
-  assert.ok(sh.includes('if ! recover_runtime; then\n  echo "ERROR: could not repair daemon/runtime from an earlier interrupted update"\n  echo "err:runtime-swap"\n  exit 1\nfi'));
-  assert.ok(sh.includes('if ! swap_runtime; then\n  echo "ERROR: could not move the new runtime into place"\n  echo "err:runtime-swap"\n  exit 1\nfi'));
-  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  echo "err:runtime"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! recover_runtime; then\n  echo "ERROR: could not repair daemon/runtime from an earlier interrupted update"\n  result_line "err:runtime-swap"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! swap_runtime; then\n  echo "ERROR: could not move the new runtime into place"\n  result_line "err:runtime-swap"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! stage_runtime; then\n  echo "ERROR: could not stage Gaffer\'s runtime, nothing was changed"\n  result_line "err:runtime"\n  exit 1\nfi'));
   assert.ok(sh.includes('err:runtime-swap'), 'the contract comment names err:runtime-swap');
   assert.ok(/#   err:<code>[^\n]*err:runtime-swap/.test(sh) || /\n#[^\n]*err:runtime-swap/.test(sh.slice(0, sh.indexOf('REPAIR=""'))), 'named in the header contract');
 });
@@ -921,14 +921,231 @@ test('update.ps1: a failed restore of runtime.old at the start ends with err:run
   assert.ok(!block.includes('Could not restore daemon\\runtime from runtime.old:'), 'no log-and-continue');
   assert.ok(ps1Body.indexOf('function Exit-Update(') < recover, 'Exit-Update is defined before the recovery');
   const exitFn = ps1Body.slice(ps1Body.indexOf('function Exit-Update('), ps1Body.indexOf('\n}\n', ps1Body.indexOf('function Exit-Update(')));
-  assert.ok(exitFn.includes('if ($code) { Write-Output "err:$code" }') && exitFn.includes('exit 1'), 'Exit-Update prints err:<code> and exits 1, as update.sh does');
+  assert.ok(exitFn.includes('Write-Result "err:$code"') && exitFn.includes('exit 1'), 'Exit-Update prints err:<code> and exits 1, as update.sh does');
   assert.ok(/#[^\n]*restoring an interrupted\n#[^\n]*swap's runtime\.old failed/.test(ps1), 'the header contract names the recovery failure');
 });
 
 test('update.sh swap_runtime failing mid-swap really ends the run with err:runtime-swap (run under bash)', () => {
   // The block from the swap call to its fi. swap_runtime is not defined in
   // the snippet, so the call fails (127), as a failed swap would.
-  const r = runShSnippet(sh, 'if ! swap_runtime; then', 'fi', '', {});
+  const start = sh.indexOf('if ! swap_runtime; then');
+  const snip = sh.slice(start, sh.indexOf('\nfi\n', start) + 3);
+  const r0 = spawnSync('bash', ['-c', 'set -euo pipefail\nresult_line() { echo "$1"; }\n' + snip], { encoding: 'utf8' });
+  const r = { status: r0.status, stdout: r0.stdout.trim() };
   assert.equal(r.status, 1);
   assert.equal(r.stdout.split('\n').pop(), 'err:runtime-swap');
+});
+
+// ---- every way out ends the log with ok:, err: or busy: (live AE test 2026-10-24) ----
+// A Repair whose download was not a Gaffer release exited 1 with no err:
+// line, so the panel waited out its 180 s fallback. The rule now: every
+// non-zero exit prints a result line first, and a catch-all (update.sh: an
+// EXIT trap, update.ps1: a top-level try/catch) prints err:internal for any
+// way out that did not.
+
+// The codes each updater may print, as documented in its header contract.
+const ERR_CODES = ['dev-install', 'lock', 'download', 'archive', 'runtime', 'runtime-swap', 'sync', 'internal'];
+
+// Runs the real update.sh from a scratch install (no git repo above it, so
+// no dev-install refusal) against a local asset built by `build` (a bash
+// snippet that writes "$ASSET" from "$SRC", or anything else). Every case
+// fails before the daemon would be stopped, so no lsof/kill ever runs; PATH
+// gets a no-op lsof anyway. Returns { status, last, log }.
+function runUpdateSh(build, { env = {}, during } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'gaffer-errcode-'));
+  try {
+    const panel = join(root, 'Application Support', 'com.gaffer.panel');
+    const tmp = join(root, 'tmp');
+    const shim = join(root, 'shim');
+    mkdirSync(join(panel, 'daemon'), { recursive: true });
+    mkdirSync(tmp);
+    mkdirSync(shim);
+    writeFileSync(join(shim, 'lsof'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    copyFileSync(fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url)), join(panel, 'daemon', 'update.sh'));
+    writeFileSync(join(panel, 'version.json'), '{"version":"0.12.0","commit":"x"}\n');
+    const asset = join(root, 'asset.tar.gz');
+    const b = spawnSync('/bin/bash', ['-c', 'set -euo pipefail\nSRC="$1"; ASSET="$2"; mkdir -p "$SRC/daemon"\n' + build, 'build', join(root, 'src'), asset], { encoding: 'utf8' });
+    assert.equal(b.status, 0, 'building the asset failed: ' + b.stderr);
+    const before = readFileSync(join(panel, 'version.json'), 'utf8');
+    const args = [join(panel, 'daemon', 'update.sh'), ...(env.REPAIR ? ['--repair'] : [])];
+    const fullEnv = { PATH: shim + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmp, GAFFER_UPDATE_ASSET: asset, ...env };
+    let r;
+    if (during) {
+      r = during(args, fullEnv, tmp);
+    } else {
+      r = spawnSync('/bin/bash', args, { encoding: 'utf8', env: fullEnv, timeout: 60000 });
+    }
+    const log = readFileSync(join(tmp, 'gaffer-update.log'), 'utf8');
+    const lines = log.split('\n').filter((l) => l !== '');
+    assert.equal(readFileSync(join(panel, 'version.json'), 'utf8'), before, 'the install was left as it was');
+    assert.ok(!existsSync(join(tmp, 'gaffer-update.lock')), 'the lock was released');
+    return { status: r.status, signal: r.signal, last: lines[lines.length - 1], log };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+// A Gaffer-shaped archive: version.json and daemon/daemon.mjs, optionally
+// minus some of it.
+const GOOD_SRC = 'echo \'{"version":"9.9.9","commit":"abc"}\' > "$SRC/version.json"; echo "// bundle" > "$SRC/daemon/daemon.mjs"\n';
+const PACK = 'COPYFILE_DISABLE=1 tar -czf "$ASSET" -C "$SRC" .\n';
+
+test('update.sh: every failure exit ends the log with an err: code, never a bare ERROR line (run under bash, real script)', () => {
+  const cases = [
+    ['not a gzip (an HTML error page saved as the asset)', 'echo "<html>Not Found</html>" > "$ASSET"', 'download'],
+    ['truncated archive', GOOD_SRC + 'head -c 4096 /dev/urandom > "$SRC/daemon/pad.bin"\n' + PACK + 'n=$(wc -c < "$ASSET"); head -c $((n / 2)) "$ASSET" > "$ASSET.cut"; mv "$ASSET.cut" "$ASSET"', 'download'],
+    ['missing asset file (copy fails)', 'true', 'download'],
+    ['archive without daemon/daemon.mjs (the live Repair failure)', GOOD_SRC + 'rm "$SRC/daemon/daemon.mjs"\n' + PACK, 'archive'],
+    ['archive without version.json', GOOD_SRC + 'rm "$SRC/version.json"\n' + PACK, 'archive'],
+    ['version.json without a version', GOOD_SRC + 'echo \'{"commit":"abc"}\' > "$SRC/version.json"\n' + PACK, 'archive'],
+    ['release without fetch-runtime.sh (runtime cannot be staged)', GOOD_SRC + PACK, 'runtime'],
+  ];
+  for (const [name, build, code] of cases) {
+    for (const repair of [false, true]) {
+      const r = runUpdateSh(build, { env: repair ? { REPAIR: '1' } : {} });
+      const label = name + (repair ? ' (--repair)' : '');
+      assert.equal(r.status, 1, label + ': exit ' + r.status + '\n' + r.log);
+      assert.equal(r.last, 'err:' + code, label + ': last log line\n' + r.log);
+      assert.match(r.log, /\nERROR: [^\n]+\nerr:/, label + ': an ERROR line comes right before the code');
+      assert.equal((r.log.match(/^(ok:|err:|busy:)/gm) || []).length, 1, label + ': exactly one result line');
+      assert.doesNotMatch(r.log, /^Stopping daemon/m, label + ': the daemon was never stopped');
+    }
+  }
+});
+
+// SIGINT is trapped too (static check below), but a background job of a
+// non-interactive shell starts with SIGINT ignored, which bash cannot trap,
+// so only TERM and HUP are sent here.
+test('update.sh: an updater stopped by SIGTERM or SIGHUP still ends the log with err:internal (run under bash, real script)', () => {
+  for (const sig of ['SIGTERM', 'SIGHUP']) {
+    const r = runUpdateSh(GOOD_SRC + PACK, {
+      env: { GAFFER_UPDATE_TEST_HOLD_GATE: 'GATE' },
+      during: (args, env, tmp) => {
+        const gate = join(tmp, 'hold-gate');
+        env.GAFFER_UPDATE_TEST_HOLD_GATE = gate;
+        // Background the updater, wait for it to hold the lock, signal it.
+        const script = `"$0" "$@" & pid=$!
+for i in $(seq 1 300); do [ -e "${gate}.ready" ] && break; sleep 0.1; done
+kill -${sig.slice(3)} "$pid"; wait "$pid"; echo "rc=$?"`;
+        const out = spawnSync('/bin/bash', ['-c', script, '/bin/bash', ...args], { encoding: 'utf8', env, timeout: 60000 });
+        return { status: Number((out.stdout.match(/rc=(\d+)/) || [])[1]), signal: null };
+      },
+    });
+    assert.notEqual(r.status, 0, sig + ': non-zero exit');
+    assert.equal(r.last, 'err:internal', sig + ': last log line\n' + r.log);
+    assert.match(r.log, new RegExp('ERROR: the updater was stopped by ' + sig), sig + ': the ERROR line names the signal');
+  }
+});
+
+// The result-line section of update.sh, run on its own with a body after it.
+const RES_FIRST = '# ---- result line and exit trap ----';
+const RES_LAST = '# ---- end result line and exit trap ----';
+function runResult(body) {
+  const pre = 'T="$(mktemp -d)"; TMP_DIR="$T/tmp"; mkdir -p "$TMP_DIR"\n';
+  return runShSnippet(sh, RES_FIRST, RES_LAST, pre + body, {});
+}
+
+test('update.sh exit trap: err:internal for any way out without a result line, never a second line after ok:/err:/busy: (run under bash)', () => {
+  const lines = (r) => r.stdout.split('\n').filter(Boolean);
+  const died = runResult('echo working\nfalse\necho unreachable');
+  assert.equal(died.status, 1, 'a set -e death keeps a non-zero status');
+  assert.deepEqual(lines(died).slice(-2), ['ERROR: the updater stopped unexpectedly (exit 1) before it reported a result', 'err:internal']);
+  const ok = runResult('result_line "ok:9.9.9"');
+  assert.equal(ok.status, 0);
+  assert.deepEqual(lines(ok), ['ok:9.9.9'], 'nothing after ok:');
+  const err = runResult('echo "ERROR: x"; result_line "err:sync"; exit 1');
+  assert.equal(err.status, 1);
+  assert.deepEqual(lines(err), ['ERROR: x', 'err:sync'], 'nothing after err:');
+  const busy = runResult('result_line "busy:already-running"; exit 3');
+  assert.equal(busy.status, 3, 'busy keeps exit 3');
+  assert.deepEqual(lines(busy), ['busy:already-running']);
+  const silent = runResult('exit 0');
+  assert.equal(silent.status, 1, 'ending with neither result nor error is a failure too');
+  assert.equal(lines(silent).pop(), 'err:internal');
+  const term = runResult('kill -TERM $$; sleep 2; echo unreachable');
+  assert.equal(term.status, 143);
+  assert.deepEqual(lines(term).slice(-2), ['ERROR: the updater was stopped by SIGTERM before it reported a result', 'err:internal']);
+  const gone = runResult('touch "$TMP_DIR/x"; result_line "ok:1"');
+  assert.ok(!existsSync(gone.stdout.split('\n')[0]), 'cleanup still runs');
+});
+
+// Static scan, both scripts: every non-zero exit is preceded by its result
+// line (or is the catch-all's own exit), every result line goes through the
+// helper that records it, and every code is from the documented list.
+function codeLines(text) {
+  return text.split('\n').map((l, i) => ({ l, i })).filter(({ l }) => l.trim() && !/^\s*#/.test(l));
+}
+test('update.sh static scan: every non-zero exit follows a result_line, result lines only through result_line, codes documented', () => {
+  const lines = codeLines(sh);
+  const resStart = sh.indexOf(RES_FIRST), resEnd = sh.indexOf(RES_LAST);
+  assert.ok(resStart !== -1 && resEnd > resStart, 'result-line section markers');
+  const resLines = sh.slice(0, resStart).split('\n').length - 1;
+  const resEndLine = sh.slice(0, resEnd).split('\n').length - 1;
+  let exits = 0;
+  lines.forEach(({ l, i }, k) => {
+    const m = /(?:^|[\s;{(])exit(?:\s+("?\$?[\w{}#:-]+"?))?\s*(?:;|$|\))/.exec(l.replace(/#.*$/, ''));
+    if (!m) return;
+    const arg = m[1];
+    if (arg === '0') return;
+    if (i > resLines && i < resEndLine) return; // the catch-all itself
+    exits++;
+    assert.ok(arg !== undefined, 'bare exit (status of the last command) at line ' + (i + 1) + ': ' + l.trim());
+    const prev = lines[k - 1].l;
+    assert.match(prev, /^\s*result_line "(err:[a-z-]+|busy:already-running)"\s*$/, 'exit ' + arg + ' at line ' + (i + 1) + ' not preceded by its result line: ' + prev.trim());
+  });
+  assert.ok(exits >= 10, 'the scan found the exits (' + exits + ')');
+  assert.ok(!/^\s*echo "(ok|err|busy):/m.test(sh.slice(0, resStart) + sh.slice(resEnd)), 'a result line printed with a bare echo (the trap would not know it was printed)');
+  assert.ok(sh.includes('trap on_exit EXIT'), 'the catch-all is installed');
+  for (const t of ["trap 'on_signal TERM 143' TERM", "trap 'on_signal INT 130' INT", "trap 'on_signal HUP 129' HUP"]) assert.ok(sh.includes(t), t);
+  const used = [...sh.matchAll(/result_line "err:([a-z-]+)"/g)].map((m) => m[1]);
+  for (const c of used) assert.ok(ERR_CODES.includes(c), 'undocumented code err:' + c);
+  const header = sh.slice(0, sh.indexOf('REPAIR=""'));
+  for (const c of ERR_CODES) assert.ok(header.includes('err:' + c), 'header contract does not name err:' + c);
+  assert.ok(used.includes('archive') && sh.includes('echo "err:internal"'), 'err:archive is used, err:internal is the trap\'s');
+  // The trap is installed before anything can fail: right after the log
+  // redirect and before the lock.
+  assert.ok(sh.indexOf('exec >> "$LOG" 2>&1') < sh.indexOf('trap on_exit EXIT') && sh.indexOf('trap on_exit EXIT') < sh.indexOf('\nacquire_lock\n'));
+});
+
+test('update.ps1 static scan: every non-zero exit follows its result line or is Exit-Update / the top-level catch, codes documented', () => {
+  const lines = codeLines(ps1);
+  let exits = 0;
+  // The functions and blocks whose exit is their own result: Exit-Update
+  // (writes err:<code> itself) and the top-level catch (err:internal).
+  const exitFn = ps1.slice(ps1.indexOf('function Exit-Update('), ps1.indexOf('\n}\n', ps1.indexOf('function Exit-Update(')));
+  assert.ok(exitFn.includes('Write-Result "err:$code"') && exitFn.includes('exit 1'), 'Exit-Update always writes err:<code>');
+  assert.ok(/function Exit-Update\(\[string\] \$message, \[string\] \$code = "internal"\)/.test(ps1), 'a call without a code still ends with err:internal');
+  const catchAt = ps1.indexOf('\n} catch { # top level');
+  assert.ok(catchAt !== -1, 'the top-level catch exists');
+  const catchBlock = ps1.slice(catchAt);
+  assert.ok(/if \(-not \$script:resultWritten\) \{\n\s*Write-Host "ERROR: the updater stopped unexpectedly: [^\n]*\n\s*Write-Result "err:internal"\n\s*\}/.test(catchBlock), 'the catch writes an ERROR line and err:internal unless a result was already written');
+  assert.ok(catchBlock.includes('exit $script:resultExit'), 'the catch keeps the exit code of a result already written (0 after ok:)');
+  const skip = [[ps1.indexOf('function Exit-Update('), ps1.indexOf('function Exit-Update(') + exitFn.length], [catchAt, ps1.length]];
+  let offset = 0;
+  const offsets = ps1.split('\n').map((l) => { const o = offset; offset += l.length + 1; return o; });
+  lines.forEach(({ l, i }, k) => {
+    const m = /(?:^|[\s;{])exit(?:\s+(\S+?))?\s*(?:;|$|\})/.exec(l);
+    if (!m) return;
+    if (m[1] === '0') return;
+    if (skip.some(([a, b]) => offsets[i] >= a && offsets[i] < b)) return;
+    exits++;
+    assert.ok(m[1] !== undefined, 'bare exit at line ' + (i + 1));
+    let j = k - 1;
+    while (/^\s*Stop-Transcript\s*$/.test(lines[j].l)) j--;
+    assert.match(lines[j].l, /^\s*Write-Result "(err:[a-z-]+|busy:already-running)"\s*$/, 'exit at line ' + (i + 1) + ' not preceded by its result line: ' + lines[j].l.trim());
+  });
+  assert.ok(exits >= 8, 'the scan found the exits (' + exits + ')');
+  assert.ok(!/Write-Output "(ok|err|busy):/.test(ps1.replace(/function Write-Result[^\n]*\n(?:[^\n]*\n)*?\}\n/, '')), 'a result line written without Write-Result');
+  for (const call of ps1.split('\n').filter((l) => /Exit-Update "/.test(l))) {
+    assert.match(call, /Exit-Update "(?:[^"`]|`.)*" "([a-z-]+)"/, 'Exit-Update without an explicit code: ' + call.trim());
+  }
+  const used = [...ps1.matchAll(/Write-Result "err:([a-z-]+)"/g), ...ps1.matchAll(/Exit-Update "(?:[^"`]|`.)*" "([a-z-]+)"/g)].map((m) => m[1]);
+  for (const c of used) assert.ok(ERR_CODES.includes(c), 'undocumented code err:' + c);
+  const header = ps1.slice(0, ps1.indexOf('$lockPath = '));
+  for (const c of ERR_CODES) assert.ok(header.includes('err:' + c), 'header contract does not name err:' + c);
+  assert.ok(ps1.includes('Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\\daemon.mjs)" "archive"'), 'the not-a-release check ends err:archive');
+  // The top-level try opens right after the transcript starts, before the lock.
+  const outer = ps1.indexOf('\ntry { # top level');
+  assert.ok(outer !== -1 && ps1.indexOf('Start-Transcript -Path $logPath -Append') < outer && outer < ps1.indexOf('\n$tries = 0\n'), 'the top-level try wraps the lock and everything after it');
+  // A cleanup failure after ok: must not turn a success into a failure.
+  assert.ok(ps1.includes('Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue\n\n    Write-Host "=== Update complete'), 'the temp cleanup before ok: cannot throw');
 });
