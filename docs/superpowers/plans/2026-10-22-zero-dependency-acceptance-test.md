@@ -260,7 +260,7 @@ Expect: AE loads the panel; the daemon starts from the runtime; no Gatekeeper di
 ### A18. arm64 and Intel on CI [gate]
 
 Prep: E1 step 1.
-Expect: the `smoke` job's three legs (`macos-15`, `macos-15-intel`, `windows-latest`) are green; the tools/list hash and runJSX capture hash are identical across legs and equal to the source run in the same job; the arm64 leg prints `file runtime/node` with `arm64` and `TeamIdentifier=HX7739G8FX`; daemon suite passes on each leg. Also record the full SHA-256 of the extracted arm64 `node` (expected to start `6f320694` and end `f329`, 122,545,856 bytes, design P8) and fill `darwin-arm64.binarySha256` in the pins with it if still a placeholder. Hashes, archive sizes and startup times should match P8 (tools/list `68693916...8223`, runJSX capture `db239664...7faf`); a difference is recorded and explained.
+Expect: the `smoke` job's three legs (`macos-15`, `macos-15-intel`, `windows-latest`) are green; the tools/list hash and runJSX capture hash are identical across legs and equal to the source run in the same job; the arm64 leg prints `file runtime/node` with `arm64` and `TeamIdentifier=HX7739G8FX`; daemon suite passes on each leg. Also record the full SHA-256 of the extracted arm64 `node` (expected to start `6f320694` and end `f329`, 122,545,856 bytes, design P8) and fill `darwin-arm64.binarySha256` in the pins with it if still a placeholder. Hashes, archive sizes and startup times should match P8 (runJSX capture `db239664...7faf`) and, for tools/list, `scripts/smoke/parity-baseline.json` (`9620aefd...2e25`; P8's `68693916...8223` moved with the zod 4 upgrade of 2026-10-24, same schemas in a different JSON layout); a difference is recorded and explained.
 
 ### A19. Agent trust when nodejs.org is blocked [gate]
 

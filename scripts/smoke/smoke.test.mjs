@@ -27,7 +27,7 @@ function goodSteps() {
     mcp_foreign_host: { status: 403 },
     mcp_initialize: { status: 200, sessionId: true, serverInfo: { name: 'gaffer', version: '0.12.0' } },
     mcp_tools_list: { status: 200, count: 26 },
-    tools_sha256: { sha256: baseline.toolsSha256, bytes: 36641 },
+    tools_sha256: { sha256: baseline.toolsSha256, bytes: 35952 },
     mcp_runJSX: { status: 200, result: { content: [{ type: 'text', text: '{"ok":true}' }] } },
     jsx_captured: { captured: true, sha256: baseline.jsxSha256, agentUndoGroupStripped: true, gafferUndoGroupPresent: true, guardPresent: true },
     runjsx_timeout: { status: 200, elapsedMs: 60001, isError: true, text: '{"ok":false,"error":"runJSX timed out after 60s"}' },
@@ -39,7 +39,8 @@ const allOpts = { auth: true, timeoutCheck: true, expectVersion: '0.12.0', expec
 test('parity: the PoC probe inputs are unchanged (the P8 hashes depend on them)', () => {
   assert.equal(PROBE_CODE, 'app.beginUndoGroup("agent group");\nvar comp = app.project.activeItem;\nvar a = 1 + 41;\napp.endUndoGroup();\na');
   assert.equal(PROBE_UNDO_LABEL, 'poc probe');
-  assert.equal(baseline.toolsSha256, '68693916750f82147194bef71e6c39926e8b8886004662567653b2d1feab8223');
+  // P8 was 68693916...8223; moved with zod 4 (parity-baseline.json "note").
+  assert.equal(baseline.toolsSha256, '9620aefdc3524d6e84ce219e582c99ea3bf0d7a1953b8690b58e766564d22e25');
   assert.equal(baseline.jsxSha256, 'db239664e741baa4ca260e0b29251f91fbc910c67c478529dc941d2b76717faf');
 });
 
