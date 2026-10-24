@@ -24,7 +24,7 @@
 - No npm cache or config may land in the home directory from dev tooling (use `npm_config_cache` etc., spec section 9).
 - Error/status contract strings (exact): `runtime:current`, `runtime:installed <version> <platform>`, `err:runtime`, `err:runtime-damaged`, `err:runtime-missing`, `pid:<N> runtime|node`, `ok:<version>`, `busy:already-running`.
 - Pin values (version, URLs, SHA-256s, sizes, Team ID) come only from `panel/daemon/runtime-pins.json`, exactly as in spec section 2. The darwin-arm64 `binarySha256` is not fully known: use the literal placeholder `"PENDING-FIRST-ACCEPTANCE-RUN"` and make the code treat a placeholder as "skip the binary-hash check, still check size and signature" with a log line.
-- PoC reference material (copy ideas and verified code, do not depend on it at runtime): scratchpad `/private/tmp/claude-501/-Volumes-Origami-Users-spendolas-Library-CloudStorage-Dropbox-Tools-AE-Tools-Gaffer/1910bfc5-4a96-4619-8b6f-3bbfb17d82d1/scratchpad/` subfolders `poc-ae/changes.diff` (Mac panel change), `poc-ae-win/changes-vs-mac-poc.diff`, `poc-ae-win/guest-scripts/`, `poc-mac/`, `ci-poc/branch-files/` (the CI smoke scripts and parity checks), `bundle/daemon.mjs`.
+- PoC reference material (kept outside the repo, local scratch only; the verified results are recorded in the spec's proof evidence table): the Mac and Windows panel changes, the CI smoke scripts and the parity checks.
 
 ## Review Focus
 
