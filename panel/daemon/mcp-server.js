@@ -4,6 +4,7 @@ import { hostHeaderValidation } from '@modelcontextprotocol/sdk/server/middlewar
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { closeToolInputs } from './closed-object.js';
 import { register as registerProjectSummary } from './tools/projectSummary.js';
 import { register as registerEffectMatchNames } from './tools/effectMatchNames.js';
 import { register as registerCaptureActiveComp } from './tools/captureActiveComp.js';
@@ -102,6 +103,7 @@ export function startMcpServer(port, queue, ctx) {
       { name: 'gaffer', version: GAFFER_VERSION },
       { capabilities: { logging: {} } }
     );
+    closeToolInputs(server, z);
 
     server.registerTool(
       'runJSX',
