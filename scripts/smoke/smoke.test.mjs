@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs as parityArgs, evaluate, PROBE_CODE, PROBE_UNDO_LABEL } from './parity.mjs';
 import {
-  parseArgs as smokeArgs, strippedEnv, checkBinaryAgainstPin, teamIdFromCodesign,
+  parseArgs as smokeArgs, strippedEnv, envForPowerShell, checkBinaryAgainstPin, teamIdFromCodesign,
   parseTapCounts, compareParity, findNodeModules, PLACEHOLDER_PIN,
   nonLoopbackAddresses, listenAddrsFromLsof, listenersLoopbackOnly,
 } from './run-smoke.mjs';
@@ -189,4 +189,9 @@ test('run-smoke starts the daemon with GAFFER_TEST=1, so its port overrides are 
   const line = src.split('\n').find((l) => l.includes('const daemonEnv = strippedEnv('));
   assert.ok(line, 'no daemonEnv line');
   assert.ok(line.includes("GAFFER_TEST: '1'") && line.includes('GAFFER_WS_PORT') && line.includes('GAFFER_MCP_PORT'), line);
+});
+
+test('envForPowerShell drops PSModulePath in any case and keeps the rest', () => {
+  const e = envForPowerShell({ PSModulePath: 'C:\\Program Files\\PowerShell\\7\\Modules', psmodulepath: 'x', Path: 'C:\\Windows', GAFFER_SMOKE_BIN: 'b' });
+  assert.deepEqual(Object.keys(e).sort(), ['GAFFER_SMOKE_BIN', 'Path']);
 });

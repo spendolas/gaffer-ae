@@ -90,6 +90,15 @@ export function strippedEnv(platform, env, extra) {
 }
 
 // The pin entry for a platform, and the checks a binary must pass against it.
+// A pwsh 7 parent leaves PowerShell 7 module folders in PSModulePath; Windows
+// PowerShell 5.1 then fails to autoload Microsoft.PowerShell.Security
+// (Get-AuthenticodeSignature "could not be loaded"). Drop it for powershell.exe.
+export function envForPowerShell(env) {
+  const out = Object.assign({}, env);
+  for (const k of Object.keys(out)) if (k.toUpperCase() === 'PSMODULEPATH') delete out[k];
+  return out;
+}
+
 export function checkBinaryAgainstPin(pins, platform, actual) {
   const p = pins && pins.node && pins.node.platforms && pins.node.platforms[platform];
   if (!p) return { ok: false, problems: ['no pin for ' + platform] };
@@ -278,7 +287,11 @@ async function main() {
     GAFFER_MODEL_CACHE_PATH: path.join(state, 'model-cache.json'),
   };
   const daemonEnv = strippedEnv(o.platform, process.env, Object.assign({}, isolation, { GAFFER_TEST: '1', GAFFER_WS_PORT: String(o.wsPort), GAFFER_MCP_PORT: String(o.mcpPort) }));
-  const run = (cmd, args, opts) => spawnSync(cmd, args, Object.assign({ encoding: 'utf8', windowsHide: true, timeout: 120000 }, opts || {}));
+  const run = (cmd, args, opts) => {
+    const o2 = Object.assign({ encoding: 'utf8', windowsHide: true, timeout: 120000 }, opts || {});
+    if (/powershell\.exe$/i.test(String(cmd))) o2.env = envForPowerShell(o2.env || process.env);
+    return spawnSync(cmd, args, o2);
+  };
 
   // ---- R1 runtime
   if (!fs.existsSync(runtime)) { row('R1', 'runtime binary present', 'FAIL', runtime); return finish(o, results); }
