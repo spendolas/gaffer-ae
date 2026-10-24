@@ -167,10 +167,20 @@ test('README rules block carries the agent-trial wording', () => {
   assert.ok(!rules.includes('(Node.js, Claude Code, After Effects)'), 'Node is no longer a prerequisite to install');
 });
 
+test('README step 1 looks for After Effects itself before asking', () => {
+  const s = step(1);
+  assert.ok(s.includes('ls -d "/Applications/Adobe After Effects"* 2>/dev/null'));
+  assert.ok(s.includes('Get-ChildItem "C:\\Program Files\\Adobe" -Directory -Filter "Adobe After Effects*"'));
+  assert.ok(s.includes('Ask the user only if nothing 2022 or later is found.'));
+  assert.ok(!s.includes('Confirm with the user that After Effects'));
+});
+
 test('README step 3 detects the platform read-only', () => {
   const s = step(3);
   assert.ok(s.includes('sysctl -n hw.optional.arm64'));
   assert.ok(s.includes('$env:PROCESSOR_ARCHITECTURE'));
+  assert.ok(s.includes("prints `sysctl: unknown oid 'hw.optional.arm64'`: that is expected and means Intel"));
+  assert.ok(s.includes('Do not ask the user to confirm the platform.'));
   assert.ok(!/\buname -m`? (to|for)/.test(s));
 });
 
@@ -206,9 +216,10 @@ test('README step 4 downloads the latest release package and verifies it against
   // work around it.
   assert.ok(s.includes('If only the `SHA256SUMS.txt` download fails with HTTP 404'));
   assert.ok(s.includes('a new Gaffer release is still being published'));
-  assert.ok(s.includes('wait a few minutes and run this step again unchanged'));
+  assert.ok(s.includes('wait 2 minutes (`sleep 120` on macOS, `Start-Sleep -Seconds 120` on Windows), then run this step again unchanged. Retry up to 5 times.'));
+  assert.ok(s.includes('a download fails in any way other than the `SHA256SUMS.txt` 404 described in the next paragraph, stop'), 'the general stop sentence must not contradict the wait and retry');
   assert.ok(s.includes('do not skip the checksum'));
-  assert.ok(s.includes('If it still fails after 15 minutes, stop and tell the user.'));
+  assert.ok(s.includes('If it still fails after the 5th retry, stop and tell the user.'));
 });
 
 test('README downloads into new private folders, never a fixed name in a shared temp directory', () => {
