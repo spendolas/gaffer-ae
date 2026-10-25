@@ -27,3 +27,8 @@ Removed on 2026-10-19: the old iso LEGO block clip (`Iso LEGO Block.mov`) and th
 
 Titles, descriptions and copyright holders live in `scripts/site/clip-meta.json`. A new clip needs an entry
 there (a test fails otherwise); `node scripts/site/tag-clips.mjs` writes them into the files, then rebuild the manifest.
+
+Images: `scripts/site/asset-meta.json` holds the title, description and holder of the share image and the icons;
+posters take their clip's entry from `clip-meta.json`. `node scripts/site/tag-images.mjs` writes them with
+exiftool (strips every other tag first). Run it after `build-icons.mjs` or `figma-export-og.mjs` and commit the
+result; the deploy workflow tags the generated posters itself.
