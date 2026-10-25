@@ -1,0 +1,24 @@
+{
+  "year": 2026,
+  "url": "https://gafferae.com/",
+  "files": {
+    "og.jpg": {
+      "title": "Gaffer share image",
+      "description": "A grid of looping motion clips under the word Gaffer.",
+      "holder": "spendolas"
+    },
+    "icon.svg": {
+      "title": "Gaffer icon",
+      "description": "The Gaffer mark on a lime square.",
+      "holder": "spendolas"
+    },
+    "icon-192.png": { "same": "icon.svg" },
+    "icon-512.png": { "same": "icon.svg" },
+    "icon-512-maskable.png": { "same": "icon.svg" },
+    "apple-touch-icon.png": { "same": "icon.svg" }
+  },
+  "posters": {
+    "titleSuffix": " (poster frame)",
+    "descriptionPrefix": "Poster frame of the clip: "
+  }
+}
