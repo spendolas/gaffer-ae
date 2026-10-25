@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { mcpUrl } from './ports.js';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
@@ -633,7 +634,34 @@ export function augmentedEnv() {
   for (var p of extraPaths) {
     if (pathParts.indexOf(p) === -1) pathParts.push(p);
   }
-  return { ...process.env, PATH: pathParts.join(':') };
+  return claudeChildEnv({ ...process.env, PATH: pathParts.join(':') }, process.platform);
+}
+
+// Decision D7 (zero-dependency install): the launchers strip
+// NODE_EXTRA_CA_CERTS from the daemon and pass the original value on as
+// GAFFER_CLAUDE_EXTRA_CA_CERTS. Claude Code honours NODE_EXTRA_CA_CERTS
+// behind TLS-inspecting corporate proxies, so restore it here, in a copy used
+// only for claude children; the stash variable itself never reaches the
+// child and the daemon's own env is untouched. With no (or an empty) stash
+// the env is returned as is, so a dev run that set NODE_EXTRA_CA_CERTS
+// directly keeps it. Names match case-insensitively on win32.
+var CA_VAR = 'NODE_EXTRA_CA_CERTS';
+var CA_STASH = 'GAFFER_CLAUDE_EXTRA_CA_CERTS';
+export function claudeChildEnv(env, platform) {
+  var isWin = (platform || process.platform) === 'win32';
+  var same = function (a, b) { return isWin ? String(a).toUpperCase() === b : a === b; };
+  var out = {};
+  var stash;
+  for (var k of Object.keys(env || {})) {
+    if (same(k, CA_STASH)) { if (stash === undefined) stash = env[k]; continue; }
+    out[k] = env[k];
+  }
+  if (stash === undefined || stash === '') return out;
+  for (var key of Object.keys(out)) {
+    if (same(key, CA_VAR)) delete out[key];
+  }
+  out[CA_VAR] = stash;
+  return out;
 }
 
 export class ChatHandler {
@@ -889,7 +917,7 @@ export class ChatHandler {
     // Register the gaffer MCP server inline — chat must work even when the
     // installer's `claude mcp add` step never ran (e.g. CLI installed after
     // the panel). Merges with any user-scope registration of the same name.
-    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: 'http://127.0.0.1:9824/mcp' } } }));
+    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: mcpUrl() } } }));
 
     // Build allowedTools for every call so MCP toggle changes apply
     // immediately, even on resumed sessions.

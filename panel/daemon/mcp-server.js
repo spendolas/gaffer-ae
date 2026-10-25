@@ -4,6 +4,7 @@ import { hostHeaderValidation } from '@modelcontextprotocol/sdk/server/middlewar
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { closeToolInputs } from './closed-object.js';
 import { register as registerProjectSummary } from './tools/projectSummary.js';
 import { register as registerEffectMatchNames } from './tools/effectMatchNames.js';
 import { register as registerCaptureActiveComp } from './tools/captureActiveComp.js';
@@ -102,6 +103,7 @@ export function startMcpServer(port, queue, ctx) {
       { name: 'gaffer', version: GAFFER_VERSION },
       { capabilities: { logging: {} } }
     );
+    closeToolInputs(server, z);
 
     server.registerTool(
       'runJSX',
@@ -216,7 +218,11 @@ export function startMcpServer(port, queue, ctx) {
   });
 
   return new Promise((resolve, reject) => {
-    var server = app.listen(port, '127.0.0.1', () => {
+    // Express 5 passes a listen error to this callback (and the server also
+    // emits 'error'); reject here so EADDRINUSE reaches the caller instead of
+    // throwing a TypeError on server.address() == null.
+    var server = app.listen(port, '127.0.0.1', (err) => {
+      if (err) return reject(err);
       var addr = server.address();
       console.log('Gaffer: MCP on http://' + addr.address + ':' + addr.port + '/mcp');
       app.httpServer = server; // lets a test instance (port 0) read its port and close

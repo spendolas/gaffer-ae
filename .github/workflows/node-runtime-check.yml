@@ -1,0 +1,68 @@
+name: Node runtime check
+
+# Gaffer installs the official Node.js binary pinned in
+# panel/daemon/runtime-pins.json (zero-dependency install, spec section 10).
+# Once a week this asks upstream whether the pin is still good:
+#   - no security release on the pinned major line is newer than the pin,
+#     and the line is still LTS (nodejs.org/dist/index.json)
+#   - the pinned version's SHASUMS256.txt carries a good GPG signature from a
+#     Node.js release key, and every pinned archive SHA-256 equals it
+#   - Gaffer's mirror release (node-v<version>) is byte-identical to nodejs.org
+#   - releases/latest is a Gaffer v* release, never the mirror
+# A failure fails the job and the maintainer gets the email. Read-only: no
+# repository secrets, nothing opened, posted or committed. The logic lives in
+# scripts/node-runtime-check.mjs (unit-tested with fixtures).
+#
+# Schedule + manual dispatch only, never push/pull_request: this is about
+# upstream drift, not about changes in this repo.
+on:
+  schedule:
+    # Monday 08:30 UTC, after the CLI contract check (08:00).
+    - cron: '30 8 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Three archives (about 145 MB) from each of nodejs.org and the mirror.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Key source: https://github.com/nodejs/release-keys, the Node.js
+      # project's own repository of release signing keys. Its gpg/ directory
+      # is a ready keyring with every release key (past and active); its
+      # README documents exactly this command:
+      #   GNUPGHOME=/path/to/release-keys/gpg gpg --verify SHASUMS256.txt.sig SHASUMS256.txt
+      # The checker then reads the verified copy, never a second download.
+      - name: Download and verify SHASUMS256.txt (GPG, Node release keys)
+        run: |
+          set -euo pipefail
+          BASE="$(jq -r '.node.official' panel/daemon/runtime-pins.json)"
+          D="$RUNNER_TEMP/shasums"
+          mkdir -p "$D"
+          curl --fail --silent --show-error --location --proto '=https' --retry 3 -o "$D/SHASUMS256.txt" "${BASE}SHASUMS256.txt"
+          curl --fail --silent --show-error --location --proto '=https' --retry 3 -o "$D/SHASUMS256.txt.sig" "${BASE}SHASUMS256.txt.sig"
+          git clone --quiet --depth 1 https://github.com/nodejs/release-keys.git "$RUNNER_TEMP/release-keys"
+          echo "release-keys at $(git -C "$RUNNER_TEMP/release-keys" rev-parse HEAD)"
+          # --status-fd 1 puts the machine-readable VALIDSIG line (full signing
+          # key fingerprint) into the log.
+          GNUPGHOME="$RUNNER_TEMP/release-keys/gpg" gpg --batch --status-fd 1 --verify "$D/SHASUMS256.txt.sig" "$D/SHASUMS256.txt"
+
+      # GITHUB_TOKEN is this job's automatic token (contents: read, above),
+      # used only for the api.github.com releases/latest call so the shared
+      # anonymous rate limit of hosted runners cannot fail the check. No
+      # repository secrets are used.
+      - name: Run the runtime check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/node-runtime-check.mjs --shasums-file "$RUNNER_TEMP/shasums/SHASUMS256.txt"

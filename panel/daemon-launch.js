@@ -1,0 +1,322 @@
+// Pure daemon-launch decisions for the panel (zero-dependency install design,
+// spec section 4), kept out of main.js so they can be unit tested
+// (panel/daemon/test/daemon-launch.test.mjs loads this file into node:vm with
+// a stub window). Plain ES5, no spawn, no require: every filesystem access
+// goes through the injected fs, hashing through the injected hashFile.
+// Loaded by a <script> tag in index.html BEFORE main.js. main.js keeps the
+// side effects (launchDaemon: open the log, cp.spawn).
+(function (root) {
+  'use strict';
+
+  var REAL_SHA256 = /^[0-9a-f]{64}$/i;
+  var PENDING_PIN = 'PENDING-FIRST-ACCEPTANCE-RUN';
+  var STRIPPED_ENV = ['NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS'];
+  var CA_STASH = 'GAFFER_CLAUDE_EXTRA_CA_CERTS';
+  var NOTICES = {
+    'runtime-damaged': "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall.",
+    'runtime-missing': "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall.",
+    'launch-failed': 'Gaffer could not start its daemon. Open Settings and click Repair, or reinstall.',
+    'runtime-blocked': "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer."
+  };
+  // How soon after launch a SIGKILL / exit 137 still reads as Gatekeeper
+  // refusing the runtime (it kills at exec, well inside this window).
+  var GATEKEEPER_WINDOW_MS = 10000;
+
+  // CSInterface returns the extension path with forward slashes on Windows
+  // ("C:/Users/..."). The daemon's command line and cwd must be one native
+  // path, so convert before building anything from it (acceptance case A26).
+  // Trailing separators are dropped, except a drive root keeps its one.
+  function normalizeWinPath(p) {
+    var s = String(p == null ? '' : p).replace(/\//g, '\\');
+    s = s.replace(/\\+$/, '');
+    if (/^[A-Za-z]:$/.test(s)) s += '\\';
+    return s;
+  }
+
+  // Environment lookup; Windows names are case-insensitive.
+  function getEnv(env, name, isWin) {
+    if (!env) return undefined;
+    if (!isWin) return env[name];
+    if (Object.prototype.hasOwnProperty.call(env, name)) return env[name];
+    var want = name.toUpperCase();
+    for (var k in env) {
+      if (Object.prototype.hasOwnProperty.call(env, k) && String(k).toUpperCase() === want) return env[k];
+    }
+    return undefined;
+  }
+
+  // Copy of env without NODE_OPTIONS / NODE_PATH / NODE_EXTRA_CA_CERTS (they
+  // could inject code or flags, resolve modules from a system Node tree, or
+  // change TLS trust for the daemon). Case-insensitive on win32, exact on
+  // POSIX. Everything else stays (Claude needs USER/HOME; on Windows PATH,
+  // APPDATA, USERNAME, USERPROFILE). Decision D7: the original CA bundle is
+  // passed on as GAFFER_CLAUDE_EXTRA_CA_CERTS so the chat handler can restore
+  // it for the claude child only (corporate TLS-inspecting proxies).
+  function cleanDaemonEnv(env, platform) {
+    var isWin = platform === 'win32';
+    var out = {};
+    var ca;
+    for (var k in env) {
+      if (!Object.prototype.hasOwnProperty.call(env, k)) continue;
+      var key = isWin ? String(k).toUpperCase() : String(k);
+      if (STRIPPED_ENV.indexOf(key) !== -1) {
+        if (key === 'NODE_EXTRA_CA_CERTS' && ca === undefined) ca = env[k];
+        continue;
+      }
+      out[k] = env[k];
+    }
+    if (ca !== undefined && ca !== '' && getEnv(out, CA_STASH, isWin) === undefined) out[CA_STASH] = ca;
+    return out;
+  }
+
+  function launchNotice(code) {
+    return NOTICES[code] || NOTICES['launch-failed'];
+  }
+
+  // Failure modes "Gatekeeper kills the runtime (exit 137)": on macOS, the
+  // bundled runtime dying by SIGKILL (exit 137 when seen through a shell)
+  // within GATEKEEPER_WINDOW_MS of launch. o = { platform, kind, code,
+  // signal, elapsedMs, panelKilled }. A system node, another platform, a late
+  // kill, a kill the panel made itself (forceStopDaemonPort, or an updater it
+  // started stopping the daemon: panelKilled) or any other exit is not this
+  // case (today's behaviour applies).
+  function gatekeeperKilled(o) {
+    if (!o || o.platform !== 'darwin' || o.kind !== 'runtime') return false;
+    if (o.panelKilled) return false;
+    var t = o.elapsedMs;
+    if (typeof t !== 'number' || !(t >= 0) || t > GATEKEEPER_WINDOW_MS) return false;
+    return o.signal === 'SIGKILL' || o.code === 137;
+  }
+
+  // A spawn that fails at exec (the ChildProcess 'error' event, no pid): the
+  // launch code its notice uses. The bundled runtime refused by the kernel
+  // (EBADARCH: an x64 runtime on Apple Silicon without Rosetta; ENOEXEC: not
+  // an executable; EACCES: not executable by this user) is a runtime problem
+  // the Repair re-provisions; anything else, or a system node, is
+  // launch-failed. Both are repairable. libuv has no name for ENOEXEC (8) or
+  // macOS EBADARCH (86): Node throws those synchronously from spawn with code
+  // "Unknown system error -8" / "-86" and errno -8 / -86, so errno counts too
+  // (measured on Node 20, macOS: ENOEXEC throws, EACCES and ENOENT emit 'error').
+  var RUNTIME_EXEC_ERRORS = ['EBADARCH', 'ENOEXEC', 'EACCES'];
+  var RUNTIME_EXEC_ERRNOS = [-8, -86];
+  function spawnFailureCode(err, kind) {
+    if (kind !== 'runtime' || !err) return 'launch-failed';
+    if (typeof err.code === 'string' && RUNTIME_EXEC_ERRORS.indexOf(err.code) !== -1) return 'runtime-damaged';
+    if (RUNTIME_EXEC_ERRNOS.indexOf(err.errno) !== -1) return 'runtime-damaged';
+    return 'launch-failed';
+  }
+
+  function exists(fs, p) {
+    try { return !!fs.existsSync(p); } catch (e) { return false; }
+  }
+
+  // runtime/VERIFIED -> recorded size, or null when absent/unreadable/garbled.
+  // Spec form is "<size> <sha256>"; the PoC wrote "size=<n>" lines, read both.
+  function readStampSize(fs, stampPath) {
+    var raw;
+    try { raw = String(fs.readFileSync(stampPath, 'utf8')); } catch (e) { return null; }
+    var m = raw.match(/^\s*(\d+)(?:\s|$)/) || raw.match(/size=(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  // The pinned platform entry for a binary of this size. On macOS both darwin
+  // entries are candidates and the size picks one, so an x64 AE under Rosetta
+  // still finds the arm64 pin (and the reverse); sizes differ per platform.
+  function pinFor(pins, platform, size) {
+    var plats = pins && pins.node && pins.node.platforms;
+    if (!plats) return null;
+    var keys = platform === 'win32' ? ['win-x64'] : platform === 'darwin' ? ['darwin-arm64', 'darwin-x64'] : [];
+    for (var i = 0; i < keys.length; i++) {
+      var p = plats[keys[i]];
+      if (p && p.binaryBytes === size) return { key: keys[i], pin: p };
+    }
+    return null;
+  }
+
+  // Bundled runtime check. Returns { ok: true } or { ok: false, reason }.
+  function checkRuntime(o, bin, bundle, stampPath, notes) {
+    var fs = o.fs;
+    if (!exists(fs, bundle)) return { ok: false, reason: 'daemon.mjs missing next to the runtime' };
+    var size;
+    try { size = fs.statSync(bin).size; } catch (e) { return { ok: false, reason: 'cannot stat runtime: ' + (e && e.message) }; }
+
+    var stamped = readStampSize(fs, stampPath);
+    if (stamped !== null) {
+      if (stamped !== size) return { ok: false, reason: 'runtime size ' + size + ' does not match the stamp ' + stamped };
+    } else {
+      // Stamp-less first run (README install): verify once against the pin.
+      var match = pinFor(o.pins, o.platform, size);
+      if (!match) return { ok: false, reason: 'no stamp and runtime size ' + size + ' matches no pinned binary' };
+      var sha = match.pin.binarySha256;
+      if (sha === PENDING_PIN) {
+        // Only this exact literal skips the hash (the darwin-arm64 value is
+        // recorded by the first acceptance run). No stamp is written, so a
+        // later stamp-less run re-evaluates once the real pin ships.
+        notes.push('runtime: pinned sha256 for ' + match.key + ' is the placeholder ' + PENDING_PIN + ', skipping the hash check, size matched, no stamp written');
+      } else if (!REAL_SHA256.test(String(sha))) {
+        return { ok: false, reason: 'pinned sha256 for ' + match.key + ' is not a sha256 (' + sha + ')' };
+      } else {
+        var got;
+        try { got = String(o.hashFile(bin)).toLowerCase(); } catch (e) { return { ok: false, reason: 'cannot hash runtime: ' + (e && e.message) }; }
+        if (got !== String(sha).toLowerCase()) return { ok: false, reason: 'runtime sha256 ' + got + ' does not match the pin for ' + match.key };
+        notes.push('runtime: first run, sha256 matches the pin for ' + match.key);
+        try { fs.writeFileSync(stampPath, size + ' ' + got + '\n'); notes.push('runtime: wrote stamp ' + stampPath); }
+        catch (e) { notes.push('runtime: could not write the stamp (' + (e && e.message) + '), will verify again next launch'); }
+      }
+    }
+
+    // macOS: a binary whose size checks out but lost its exec bit (copied by
+    // a tool that drops modes) gets it back.
+    if (o.platform === 'darwin') {
+      var mode = 0;
+      try { mode = fs.statSync(bin).mode; } catch (e) {}
+      if ((mode & 73) === 0) { // 0o111
+        try { fs.chmodSync(bin, 493); } // 0o755
+        catch (e) { return { ok: false, reason: 'runtime is not executable and chmod failed: ' + (e && e.message) }; }
+        notes.push('runtime: exec bit was missing, restored with chmod 755');
+      }
+    }
+    return { ok: true };
+  }
+
+  // System node probe, same candidates and order as start.sh / start.ps1,
+  // then any node on PATH. Returns a path or null.
+  function findSystemNode(o, isWin) {
+    var fs = o.fs, env = o.env || {};
+    var candidates = [];
+    var exe = isWin ? 'node.exe' : 'node';
+    if (isWin) {
+      var pf = getEnv(env, 'ProgramFiles', true);
+      var la = getEnv(env, 'LOCALAPPDATA', true);
+      if (pf) candidates.push(normalizeWinPath(pf) + '\\nodejs\\node.exe');
+      if (la) candidates.push(normalizeWinPath(la) + '\\Programs\\nodejs\\node.exe');
+    } else {
+      candidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node');
+    }
+    var path = getEnv(env, 'PATH', isWin);
+    if (path) {
+      var dirs = String(path).split(isWin ? ';' : ':');
+      for (var d = 0; d < dirs.length; d++) {
+        if (!dirs[d]) continue;
+        var dir = isWin ? normalizeWinPath(dirs[d].replace(/^"|"$/g, '')) : dirs[d].replace(/\/+$/, '');
+        candidates.push(dir + (isWin ? '\\' : '/') + exe);
+      }
+    }
+    for (var i = 0; i < candidates.length; i++) {
+      if (exists(fs, candidates[i])) return candidates[i];
+    }
+    return null;
+  }
+
+  // Dev install = the panel is symlinked out of a git checkout (the repo's
+  // panel/ folder), so the checkout's .git sits next to the link's TARGET.
+  // POSIX: the kernel resolves <ext>/../.git through the symlink. Windows:
+  // the lexical ".." of a directory symlink or junction resolves against the
+  // link itself, so the target comes from fs.realpathSync first (a symlinked
+  // dev install made by scripts/install-win.ps1). Any error: not dev.
+  function isDevCheckout(fs, extPath, platform) {
+    try {
+      if (platform !== 'win32') return !!fs.existsSync(String(extPath).replace(/\/+$/, '') + '/../.git');
+      if (typeof fs.realpathSync !== 'function') return false;
+      var real = normalizeWinPath(fs.realpathSync(normalizeWinPath(extPath)));
+      var cut = real.lastIndexOf('\\');
+      if (cut <= 0) return false;
+      return !!fs.existsSync(real.slice(0, cut) + '\\.git');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // resolveDaemonLaunch({ daemonDir, platform, fs, pins, env, detectDev, hashFile, swapWaitExpired })
+  //   -> { bin, args, cwd, kind: 'runtime'|'node', notes }   or   { error, reason, notes }
+  //   or { retry: 'runtime-swapping', reason, notes }
+  // error is 'runtime-damaged' (runtime present but fails the check: NEVER
+  // falls back to a system node) or 'runtime-missing' (no runtime binary and
+  // no system node). retry: a packaged install with no runtime but a
+  // runtime.old or runtime.new next to it is inside an updater's swap window
+  // (another panel's update): not an error, the panel tries again in a few
+  // seconds. Once the panel's bounded wait is over (swapWaitExpired) the
+  // system node probe applies as before. notes are log lines for the daemon log.
+  function resolveDaemonLaunch(o) {
+    var isWin = o.platform === 'win32';
+    var sep = isWin ? '\\' : '/';
+    var daemonDir = isWin ? normalizeWinPath(o.daemonDir) : String(o.daemonDir).replace(/\/+$/, '');
+    var notes = [];
+    var bin = daemonDir + sep + 'runtime' + sep + (isWin ? 'node.exe' : 'node');
+    var bundle = daemonDir + sep + 'daemon.mjs';
+    var stampPath = daemonDir + sep + 'runtime' + sep + 'VERIFIED';
+
+    var dev = false;
+    try { dev = !!(o.detectDev && o.detectDev()); } catch (e) { dev = false; }
+
+    if (!dev && exists(o.fs, bin)) {
+      var chk = checkRuntime(o, bin, bundle, stampPath, notes);
+      if (!chk.ok) {
+        notes.push('runtime: ' + chk.reason);
+        return { error: 'runtime-damaged', reason: chk.reason, notes: notes };
+      }
+      return { bin: bin, args: ['daemon.mjs'], cwd: daemonDir, kind: 'runtime', notes: notes };
+    }
+
+    if (!dev && !o.swapWaitExpired) {
+      var swapDirs = [];
+      if (exists(o.fs, daemonDir + sep + 'runtime.old')) swapDirs.push('runtime.old');
+      if (exists(o.fs, daemonDir + sep + 'runtime.new')) swapDirs.push('runtime.new');
+      if (swapDirs.length) {
+        var why = 'no runtime but ' + swapDirs.join(' and ') + ' present, an update is swapping the runtime';
+        notes.push('runtime: ' + why + ', retrying shortly');
+        return { retry: 'runtime-swapping', reason: why, notes: notes };
+      }
+    }
+
+    // Dev install, or no runtime binary (0.11.x mid-migration, or deleted).
+    if (dev) notes.push('runtime: dev install, using the system node with index.js');
+    else notes.push('runtime: no bundled runtime at ' + bin + ', probing for a system node');
+    var node = findSystemNode(o, isWin);
+    if (!node) return { error: 'runtime-missing', reason: 'no bundled runtime and no system node found', notes: notes };
+    // A dev checkout runs its live sources (a gitignored daemon.mjs from
+    // build.sh may be stale); a packaged tree prefers the bundle.
+    var entry = (!dev && exists(o.fs, bundle)) ? 'daemon.mjs' : 'index.js';
+    return { bin: node, args: [entry], cwd: daemonDir, kind: 'node', notes: notes };
+  }
+
+  // The ExtendScript route's launcher output (start.sh / start.ps1, spec
+  // section 5), one contract line:
+  //   pid:<N> runtime | pid:<N> node | err:runtime-damaged |
+  //   err:runtime-missing | err:runtime-updating | err:launch-failed
+  // -> { pid, kind } | { retry: 'runtime-updating' } | { error: code } | {}.
+  // err:runtime-updating is the launchers' form of resolveDaemonLaunch's
+  // swap-window retry (no runtime, runtime.old or runtime.new present): not
+  // an error, the panel tries again shortly. launch-usage (launch.cjs called
+  // wrongly) reads as launch-failed. Anything else (no output: callSystem
+  // failed) is {} and shows nothing, as before.
+  function parseLauncherOutput(result) {
+    var s = String(result == null ? '' : result);
+    if (/(^|\s)err:runtime-updating(\s|$)/.test(s)) return { retry: 'runtime-updating' };
+    var m = s.match(/(^|\s)err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)(\s|$)/);
+    if (m) return { error: m[2] === 'launch-usage' ? 'launch-failed' : m[2] };
+    m = s.match(/(^|\s)pid:(\d+) (runtime|node)(\s|$)/);
+    if (m) return { pid: Number(m[2]), kind: m[3] };
+    return {};
+  }
+
+  // Argument the panel hands start.sh / start.ps1 once its bounded swap wait
+  // is over: the launcher then skips the swap-window rule, like
+  // resolveDaemonLaunch with swapWaitExpired.
+  var SWAP_WAIT_EXPIRED_ARG = 'swap-wait-expired';
+
+  var api = {
+    resolveDaemonLaunch: resolveDaemonLaunch,
+    parseLauncherOutput: parseLauncherOutput,
+    SWAP_WAIT_EXPIRED_ARG: SWAP_WAIT_EXPIRED_ARG,
+    cleanDaemonEnv: cleanDaemonEnv,
+    normalizeWinPath: normalizeWinPath,
+    launchNotice: launchNotice,
+    gatekeeperKilled: gatekeeperKilled,
+    spawnFailureCode: spawnFailureCode,
+    isDevCheckout: isDevCheckout,
+    GATEKEEPER_WINDOW_MS: GATEKEEPER_WINDOW_MS
+  };
+  root.GafferLaunch = api;
+  if (typeof module !== 'undefined' && module && module.exports) module.exports = api;
+})(window);

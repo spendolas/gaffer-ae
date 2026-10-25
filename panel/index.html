@@ -423,6 +423,12 @@
       align-items: center;
       gap: 8px; /* Toast stack itemSpacing 8 */
       padding: 24px 0; /* Toast stack 480:23820 pad [24,0,24,0] */
+      /* Hug the widest toast, but never wider than the panel minus a 16px
+         gutter each side: a long label then wraps instead of clipping both
+         edges. width:max-content keeps short toasts exactly as before (with
+         left:50% a plain shrink-to-fit stack would cap at half the panel). */
+      width: max-content;
+      max-width: calc(100vw - 2 * var(--space-16));
       z-index: 4000;
       pointer-events: none;
     }
@@ -455,7 +461,9 @@
       padding: 4px;
       font-size: calc(12px * var(--chat-text, 1));
       line-height: calc(16px * var(--chat-text, 1));
-      white-space: nowrap;
+      white-space: normal; /* single line when it fits; long text wraps inside the stack's max-width */
+      overflow-wrap: anywhere;
+      min-width: 0;
     }
 
     /* Bubble image attachments */
@@ -1878,6 +1886,7 @@
   <script src="lib/marked.min.js"></script>
   <script src="icons.js"></script>
   <script src="update-state.js"></script>
+  <script src="daemon-launch.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

@@ -1,12 +1,51 @@
-﻿$ErrorActionPreference = "Stop"
+﻿# install-win.ps1: Gaffer developer installer for Windows (from a checkout).
+#
+# Usage (Windows PowerShell 5.1 or later):
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-win.ps1
+#       [-ExtensionsDir <path>] [-NoSymlink] [-NoStopDaemon] [-NoRegistry] [-NoMcp]
+#
+# With no switches it does everything, exactly as before the switches existed:
+# stops a running daemon, installs into the real CEP extensions folder
+# (%APPDATA%\Adobe\CEP\extensions), sets PlayerDebugMode in the registry and
+# registers Gaffer's MCP server with Claude Code. The switches are for tests
+# (scripts\windows-tests\test-7-install-win.ps1), not user steps:
+#   -ExtensionsDir  install into <path>\com.gaffer.panel instead of the real
+#                   CEP extensions folder
+#   -NoSymlink      always copy the panel (the fallback path when symlinks are
+#                   not allowed), so a copy with a built daemon.mjs fetches the
+#                   pinned runtime
+#   -NoStopDaemon   do not stop a daemon on port 9823 or any matching node.exe
+#   -NoRegistry     do not write PlayerDebugMode under HKCU\Software\Adobe
+#   -NoMcp          do not run claude mcp get/add (no ~/.claude.json change)
+# Temp files (chat history backup, fetch-runtime's download folder) go to
+# %TEMP%; a test points TEMP at its scratch folder.
+#
+# Keep this file ASCII-only with a UTF-8 BOM (node scripts/check-ps-encoding.mjs).
+param(
+    [string] $ExtensionsDir = "",
+    [switch] $NoSymlink,
+    [switch] $NoStopDaemon,
+    [switch] $NoRegistry,
+    [switch] $NoMcp
+)
+
+$ErrorActionPreference = "Stop"
 
 $extensionId = "com.gaffer.panel"
-$installDir = "$env:APPDATA\Adobe\CEP\extensions\$extensionId"
+if (-not $ExtensionsDir) { $ExtensionsDir = "$env:APPDATA\Adobe\CEP\extensions" }
+$ExtensionsDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ExtensionsDir)
+$installDir = Join-Path $ExtensionsDir $extensionId
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = Split-Path -Parent $scriptDir
-$panelDir = "$repoDir\panel"
+$panelDir = Join-Path $repoDir "panel"
 
 Write-Host "=== Gaffer Installer (Windows) ==="
+# Developer installer from a checkout. A symlinked install runs the daemon
+# from source with the system Node.js (npm install below). When symlinks are
+# not allowed the panel is copied instead; a copy that carries a built
+# daemon\daemon.mjs (scripts/build.sh) gets the pinned Node runtime from
+# daemon\fetch-runtime.ps1 and needs no Node.js at all. End users follow
+# README.md, which needs neither Node.js nor npm.
 
 # 1. Look for a runnable Claude. The panel chat works with either the Claude
 # desktop app's bundled Claude Code or a standalone CLI (the daemon finds
@@ -78,72 +117,170 @@ if (-not $claudeBin -and $npmShim) {
     Write-Host "  Claude CLI: $claudeBin"
 }
 
-$nodeVersion = & node --version 2>$null
-if (-not $nodeVersion) {
-    Write-Host "ERROR: Node.js not found. Install from https://nodejs.org"
-    exit 1
+# Node.js is checked only where it is needed (the npm path below).
+function Assert-SystemNode {
+    # Under the script's "Stop" preference a bare "& node" with no node on
+    # PATH throws CommandNotFoundException before the message below can
+    # print, so look the command up first; the preference set here is local.
+    $ErrorActionPreference = "Continue"
+    $nodeVersion = $null
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $nodeVersion = & node --version 2>$null
+    }
+    if (-not $nodeVersion) {
+        Write-Host "ERROR: this install runs the daemon from source and needs Node.js 20+ and npm."
+        Write-Host "  To install Gaffer without Node.js, follow the install steps in README.md instead."
+        exit 1
+    }
+    Write-Host "  Node.js: $nodeVersion"
 }
-Write-Host "  Node.js: $nodeVersion"
+
+# npm's cache, logs and userconfig stay inside the repo, so nothing lands in
+# the developer's profile (spec section 9). The previous values come back
+# afterwards because a dot-sourced run shares the caller's environment.
+function Invoke-DevNpmInstall([string] $daemonDir) {
+    Assert-SystemNode
+    $saved = @{}
+    $npmEnv = @{
+        npm_config_cache = "$repoDir\.npm-cache"
+        npm_config_logs_dir = "$repoDir\.npm-cache\_logs"
+        npm_config_userconfig = "$repoDir\.npmrc-dev"
+    }
+    foreach ($k in $npmEnv.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
+        [Environment]::SetEnvironmentVariable($k, $npmEnv[$k], "Process")
+    }
+    try {
+        Write-Host "Installing daemon dependencies..."
+        Push-Location $daemonDir
+        try { & npm install --omit=dev } finally { Pop-Location }
+    } finally {
+        foreach ($k in $npmEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
+    }
+}
 
 # 2. Stop any running daemon - a live process holds its cwd inside the old
 # install (blocks Remove-Item) and would keep serving stale code after update
-Write-Host "Stopping any running daemon..."
-Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
-# match by COMMAND LINE - Get-Process .Path is node.exe and never matches the script
-Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*daemon*index.js*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 1
+if ($NoStopDaemon) {
+    Write-Host "Not stopping any daemon (-NoStopDaemon)."
+} else {
+    Write-Host "Stopping any running daemon..."
+    Get-Process -Name "gaffer-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Whatever listens on the daemon port (runtime\node.exe daemon.mjs or a
+    # system node with index.js), same helper as update.ps1.
+    $stopHelper = Join-Path $panelDir "daemon\stop-daemon.ps1"
+    if (Test-Path -LiteralPath $stopHelper -PathType Leaf) {
+        try { . $stopHelper; Stop-Daemon } catch { Write-Host "  (could not stop the daemon by port: $($_.Exception.Message))" }
+    }
+    # match by COMMAND LINE - Get-Process .Path is node.exe and never matches the script
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { ($_.CommandLine -like "*daemon*index.js*") -or ($_.CommandLine -like "*daemon*daemon.mjs*") } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+}
 
 # 3. Symlink extension (or copy on systems without symlink support),
 # preserving chat history across reinstalls (the 0.1.0 -> latest path) -
 # both the legacy single file and per-AE-version files
 # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
 $historyBackup = $null
-if (Test-Path "$installDir\chat-history.json") {
+if (Test-Path -LiteralPath "$installDir\chat-history.json") {
     $historyBackup = Join-Path $env:TEMP "gaffer-chat-history-$PID.json"
-    Copy-Item "$installDir\chat-history.json" $historyBackup
+    Copy-Item -LiteralPath "$installDir\chat-history.json" -Destination $historyBackup
 }
 $historyBackupDir = Join-Path $env:TEMP "gaffer-chat-history-versions-$PID"
 New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
-Get-ChildItem -Path $installDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
-    ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
+if (Test-Path -LiteralPath $installDir -PathType Container) {
+    Get-ChildItem -LiteralPath $installDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $historyBackupDir }
+}
 Write-Host "Installing extension to $installDir..."
-if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
-try {
-    New-Item -ItemType SymbolicLink -Path $installDir -Target $panelDir -Force | Out-Null
-    Write-Host "  (symlinked)"
-} catch {
-    # Symlinks may require admin on some Windows configs - fall back to copy
-    robocopy "$panelDir" "$installDir" /E /XD node_modules dist /XF package-lock.json .debug | Out-Null
+New-Item -ItemType Directory -Path $ExtensionsDir -Force | Out-Null
+if (Test-Path -LiteralPath $installDir) {
+    $existing = Get-Item -LiteralPath $installDir -Force
+    if ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        # A symlinked dev install: remove only the link. Remove-Item -Recurse
+        # on a directory link in PowerShell 5.1 can delete the checkout's files.
+        [System.IO.Directory]::Delete($installDir, $false)
+    } else {
+        Remove-Item -LiteralPath $installDir -Recurse -Force
+    }
+}
+$installKind = "symlink"
+if ($NoSymlink) {
+    $installKind = "copy"
+} else {
+    try {
+        New-Item -ItemType SymbolicLink -Path $installDir -Target $panelDir -Force | Out-Null
+        Write-Host "  (symlinked)"
+    } catch {
+        # Symlinks may require admin on some Windows configs - fall back to copy.
+        $installKind = "copy"
+    }
+}
+if ($installKind -eq "copy") {
+    # Never copy a checkout's runtime folders or local session history; the
+    # copy gets its own verified runtime below.
+    robocopy "$panelDir" "$installDir" /E /XD node_modules dist .remember runtime runtime.new runtime.old /XF package-lock.json .debug | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        Write-Host "ERROR: copying the panel failed (robocopy exit $LASTEXITCODE)."
+        exit 1
+    }
     Write-Host "  (copied)"
 }
-if ($historyBackup -and (Test-Path $historyBackup)) {
-    Copy-Item $historyBackup "$installDir\chat-history.json" -Force
-    Remove-Item $historyBackup -Force
+if ($historyBackup -and (Test-Path -LiteralPath $historyBackup)) {
+    Copy-Item -LiteralPath $historyBackup -Destination "$installDir\chat-history.json" -Force
+    Remove-Item -LiteralPath $historyBackup -Force
     Write-Host "  (chat history preserved)"
 }
-$restoredVersioned = Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue
+$restoredVersioned = Get-ChildItem -LiteralPath $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue
 if ($restoredVersioned) {
-    $restoredVersioned | ForEach-Object { Copy-Item $_.FullName "$installDir\" -Force }
+    $restoredVersioned | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination "$installDir\" -Force }
     Write-Host "  (per-version chat history preserved)"
 }
-Remove-Item -Recurse -Force $historyBackupDir -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $historyBackupDir -Recurse -Force -ErrorAction SilentlyContinue
 
-# 4. Install daemon dependencies INTO THE DEPLOYED install - installing into
-# the source checkout leaves a copied install without node_modules and the
-# daemon can never start (symlinked installs resolve to the same place)
-Write-Host "Installing daemon dependencies..."
-Push-Location "$installDir\daemon"
-& npm install --omit=dev
-Pop-Location
+# 4. Daemon code and runtime, INTO THE DEPLOYED install (symlinked installs
+# resolve to the checkout itself).
+#   symlink:                npm install, system node runs index.js
+#   copy with daemon.mjs:   fetch-runtime.ps1 provisions the pinned runtime, no Node.js needed
+#   copy without daemon.mjs: npm install like a symlink (run scripts/build.sh first to avoid it)
+$deployedDaemon = Join-Path $installDir "daemon"
+if ($installKind -eq "copy" -and (Test-Path -LiteralPath "$deployedDaemon\daemon.mjs" -PathType Leaf)) {
+    Write-Host "Installing the pinned Node runtime..."
+    # A separate PowerShell process: fetch-runtime.ps1 ends with exit, and its
+    # last output line is the contract (runtime:current / runtime:installed / err:runtime).
+    $psExe = (Get-Process -Id $PID).Path
+    # Continue inside the block: under "Stop", a stderr line from the child
+    # would end this installer before the contract line is read.
+    $fetchOut = & {
+        $ErrorActionPreference = "Continue"
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File "$deployedDaemon\fetch-runtime.ps1" -Into $deployedDaemon 2>&1
+    }
+    $fetchOut | ForEach-Object { Write-Host "  $_" }
+    $last = [string] ($fetchOut | Select-Object -Last 1)
+    if ($last -notmatch '^runtime:(current|installed)') {
+        Write-Host "ERROR: could not install Gaffer's Node runtime (see the lines above). Check the network and run this installer again."
+        exit 1
+    }
+} else {
+    if ($installKind -eq "copy") {
+        Write-Host "  This checkout has no daemon\daemon.mjs (scripts/build.sh builds it), so the copy runs from source with npm."
+    }
+    Invoke-DevNpmInstall $deployedDaemon
+}
 
 # 5. Registry: PlayerDebugMode
-Write-Host "Setting PlayerDebugMode in registry..."
-foreach ($ver in @("11", "12")) {
-    $key = "HKCU:\Software\Adobe\CSXS.$ver"
-    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-    Set-ItemProperty -Path $key -Name "PlayerDebugMode" -Value 1 -Type DWord
+if ($NoRegistry) {
+    Write-Host "Not setting PlayerDebugMode (-NoRegistry)."
+} else {
+    Write-Host "Setting PlayerDebugMode in registry..."
+    # A user preference that lets AE load extensions not signed through Adobe.
+    foreach ($ver in @("11", "12", "13")) {
+        $key = "HKCU:\Software\Adobe\CSXS.$ver"
+        if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+        Set-ItemProperty -LiteralPath $key -Name "PlayerDebugMode" -Value 1 -Type DWord
+    }
 }
 
 # 6. Register MCP server (only used by Claude Code outside AE; the panel chat
@@ -151,7 +288,9 @@ foreach ($ver in @("11", "12")) {
 # Claude, or when the desktop app copy does not run from the command line.
 # Native command failures must never abort the install, so they are caught.
 $registerMcp = $false
-if (-not $claudeBin) {
+if ($NoMcp) {
+    Write-Host "Not registering the MCP server with Claude Code (-NoMcp)."
+} elseif (-not $claudeBin) {
     Write-Host "Skipping MCP server registration (no Claude found)."
 } elseif ($claudeKind -eq "app") {
     $answers = $false
@@ -169,6 +308,8 @@ if ($registerMcp) {
 }
 if ($registerMcp) {
     Write-Host "Registering Gaffer MCP server..."
+    Write-Host "  This adds an entry named gaffer to your Claude Code user settings (%USERPROFILE%\.claude.json)."
+    Write-Host "  To remove it later: claude mcp remove gaffer -s user"
     $registered = $false
     try {
         $registered = ((Invoke-Native $claudeBin @("mcp", "add", "--transport", "http", "-s", "user", "gaffer", "http://127.0.0.1:9824/mcp")) -eq 0)

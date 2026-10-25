@@ -2,6 +2,8 @@
   var cs = new CSInterface();
   // Pure update-check logic (panel/update-state.js, loaded before this file).
   var UpdateState = window.GafferUpdateState;
+  // Pure daemon-launch decisions (panel/daemon-launch.js, loaded before this file).
+  var Launch = window.GafferLaunch;
 
   // Single source of truth for the install links. The daemon can run Claude
   // Code from the Claude desktop app or from a standalone CLI, so the
@@ -25,6 +27,9 @@
     span.innerHTML = (typeof GafferIcons !== 'undefined' && GafferIcons[name]) || '';
     return span;
   }
+  // Open keyed toasts by key (showKeyedToast). Set up here, before anything
+  // that could show one (showLaunchError runs during startup).
+  var keyedToasts = {};
   var ws = null;
   var reconnectDelay = 1000;
   var maxDelay = 30000;
@@ -387,77 +392,261 @@
   }
 
   // ── Daemon auto-start ──
+  //
+  // Zero-dependency install (spec section 4): the daemon is <ext>/daemon/
+  // daemon.mjs run by the bundled runtime <ext>/daemon/runtime/node(.exe).
+  // The decisions (stamp check, first-run hash, exec bit, dev/system-node
+  // probe, Windows path normalisation, env cleaning) live in the pure
+  // GafferLaunch module; this file only does the I/O.
 
+  var daemonLaunchError = null; // notice text while the launch is refused
+  // Its code (runtime-damaged, runtime-missing, runtime-blocked, launch-failed):
+  // Settings offers Repair while it is set (GafferUpdateState.isRepairableLaunchError).
+  var daemonLaunchCode = null;
+  // When the panel itself last killed the daemon (forceStopDaemonPort): a
+  // SIGKILL it caused is never reported as Gatekeeper (gatekeeperKilled).
+  var daemonKilledByPanelAt = 0;
+  // Swap-window waits (GafferLaunch retry 'runtime-swapping': another panel's
+  // updater is between its runtime renames). Bounded: after SWAP_RETRY_MAX
+  // tries SWAP_RETRY_MS apart the launch resolves as before.
+  var swapRetries = 0;
+  var SWAP_RETRY_MAX = 6;
+  var SWAP_RETRY_MS = 5000;
+
+  function daemonLogPath() {
+    return process.platform === 'win32'
+      ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-daemon.log'
+      : '/tmp/gaffer-daemon.log';
+  }
+
+  function appendDaemonLog(fs, lines) {
+    if (!lines || !lines.length) return;
+    var stamp = new Date().toISOString();
+    var text = '';
+    for (var i = 0; i < lines.length; i++) text += stamp + ' Gaffer panel: ' + lines[i] + '\n';
+    try { fs.appendFileSync(daemonLogPath(), text); } catch (e) { /* ignore */ }
+  }
+
+  // sha256 of a file, read in chunks so the 90 to 125 MB runtime is never held
+  // in memory at once. Only called on a stamp-less first run.
+  function sha256FileSync(fs, crypto, p) {
+    var h = crypto.createHash('sha256');
+    var fd = fs.openSync(p, 'r');
+    try {
+      var buf = require('buffer').Buffer.alloc(4 * 1024 * 1024); // CEP may not expose a global Buffer
+      var n;
+      while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(n === buf.length ? buf : buf.subarray(0, n));
+    } finally { fs.closeSync(fd); }
+    return h.digest('hex');
+  }
+
+  // Dev install = the panel is symlinked out of a git checkout
+  // (GafferLaunch.isDevCheckout: <ext>/../.git through the kernel on macOS,
+  // the realpath's parent on Windows), done synchronously because the launch
+  // decision cannot wait for evalScript. A Windows dev install then runs its
+  // live sources (index.js), never a stale gitignored daemon.mjs.
+  function isDevCheckoutSync(fs, extPath) {
+    return Launch.isDevCheckout(fs, extPath, process.platform);
+  }
+
+  function readRuntimePins(fs, daemonDir) {
+    try { return JSON.parse(String(fs.readFileSync(daemonDir + '/runtime-pins.json', 'utf8'))); }
+    catch (e) { return null; }
+  }
+
+  // launch = { bin, args, cwd } from Launch.resolveDaemonLaunch. Spawn shape
+  // per spec: detached, log opened in append mode for stdout and stderr,
+  // no console window on Windows, cleaned env. Returns the ChildProcess, or
+  // null when the spawn threw (the notice is already showing).
+  function launchDaemon(cp, fs, launch) {
+    var env = Launch.cleanDaemonEnv(process.env, process.platform);
+    var fd = fs.openSync(daemonLogPath(), 'a');
+    var child;
+    // A spawn that fails at exec never starts the daemon. Without a notice
+    // the panel would sit on "Disconnected" with no Repair offered and
+    // nothing retrying. Node reports it two ways: a synchronous throw for
+    // errnos libuv cannot name (ENOEXEC, macOS EBADARCH: an x64 runtime on
+    // Apple Silicon without Rosetta), or an 'error' event with no 'exit' and
+    // no pid (EACCES, ENOENT).
+    function spawnFailed(e) {
+      var code = Launch.spawnFailureCode(e, launch.kind);
+      appendDaemonLog(fs, ['daemon not launched: err:' + code + ' (' + ((e && e.code) || 'error') + ' ' + ((e && e.message) || e) + ')']);
+      showLaunchError(code);
+    }
+    try {
+      child = cp.spawn(launch.bin, launch.args, {
+        cwd: launch.cwd,
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        windowsHide: true,
+        env: env,
+      });
+    } catch (e) {
+      console.error('Gaffer: daemon spawn threw', e);
+      spawnFailed(e);
+      return null;
+    } finally {
+      try { fs.closeSync(fd); } catch (e) { /* the child keeps its own handle */ }
+    }
+    child.on('error', function (e) {
+      console.error('Gaffer: daemon spawn error', e);
+      if (child.pid) return; // a later error on a running child (kill, ipc) is not a launch failure
+      spawnFailed(e);
+    });
+    // Gatekeeper refusing the runtime kills it at exec (SIGKILL / 137). An
+    // exit listener holds no stdio and does not keep the daemon tied to the
+    // panel; any other exit keeps today's behaviour. A kill the panel made
+    // (Force stop, or an updater it started) is not Gatekeeper.
+    var launchedAt = Date.now();
+    child.on('exit', function (code, signal) {
+      if (!Launch.gatekeeperKilled({ platform: process.platform, kind: launch.kind, code: code, signal: signal, elapsedMs: Date.now() - launchedAt,
+        panelKilled: daemonKilledByPanelAt >= launchedAt || !!window.__gafferUpdating })) return;
+      appendDaemonLog(fs, ['daemon not running: err:runtime-blocked (runtime killed ' + (signal || 'exit ' + code) + ' ' + (Date.now() - launchedAt) + ' ms after launch, macOS Gatekeeper)']);
+      showLaunchError('runtime-blocked');
+    });
+    child.unref();
+    return child;
+  }
+
+  function showLaunchError(code) {
+    daemonLaunchError = Launch.launchNotice(code);
+    daemonLaunchCode = code;
+    console.error('Gaffer: daemon not launched: ' + code);
+    setStatus('disconnected', daemonLaunchError);
+    try { showKeyedToast(UpdateState.launchErrorToast(code, daemonLaunchError)); } catch (e) { /* ignore */ }
+    try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ } // offers Repair
+  }
+
+  // Another panel's updater is swapping the runtime (resolveDaemonLaunch
+  // retry, or err:runtime-updating from start.sh / start.ps1 on the
+  // ExtendScript route): not an error, try again shortly (the "Starting
+  // daemon..." status stays up). Bounded by swapRetries / SWAP_RETRY_MAX.
+  function scheduleSwapRetry() {
+    swapRetries++;
+    setTimeout(function () {
+      daemonStartAttempted = false;
+      if (window.__gafferUpdating || (ws && ws.readyState === 1)) return; // ours is updating, or a daemon came up
+      startDaemon();
+    }, SWAP_RETRY_MS);
+  }
+
+  // Returns 'started', 'refused' (a notice is showing or about to),
+  // 'retry' (swap window, a retry is scheduled), or false only when
+  // CEP Node integration or GafferLaunch is unavailable (then the ExtendScript
+  // route runs). Any other failure is refused with a notice: falling through
+  // to the launcher scripts could bypass a runtime verdict.
   function spawnViaNode() {
     // Direct Node spawn — works on Apple Silicon AE where system.callSystem
-    // silently fails. Returns true on success, false if Node integration
-    // unavailable (legacy CEP context).
-    if (typeof require === 'undefined') return false;
+    // silently fails.
+    if (typeof require === 'undefined' || !Launch) return false;
+    var cp, fs, crypto;
     try {
-      var cp = require('child_process');
-      var fs = require('fs');
+      cp = require('child_process');
+      fs = require('fs');
+      crypto = require('crypto');
+    } catch (e) {
+      console.error('Gaffer: CEP Node modules unavailable, using the ExtendScript route:', e);
+      return false;
+    }
+    try {
       var extPath = cs.getSystemPath(SystemPath.EXTENSION);
       var daemonDir = extPath + '/daemon';
-      var isWin = process.platform === 'win32';
-
-      var nodeBin = null;
-      var candidates = isWin
-        ? []
-        : ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
-      for (var i = 0; i < candidates.length; i++) {
-        try { if (fs.existsSync(candidates[i])) { nodeBin = candidates[i]; break; } } catch (e) {}
-      }
-      if (!nodeBin) nodeBin = isWin ? 'node' : '/usr/bin/env';
-      var args = (nodeBin === '/usr/bin/env') ? ['node', 'index.js'] : ['index.js'];
-
-      var logPath = isWin
-        ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-daemon.log'
-        : '/tmp/gaffer-daemon.log';
-      var out = fs.openSync(logPath, 'a');
-
-      var child = cp.spawn(nodeBin, args, {
-        cwd: daemonDir,
-        detached: true,
-        stdio: ['ignore', out, out],
-        windowsHide: true,
+      var launch = Launch.resolveDaemonLaunch({
+        daemonDir: daemonDir,
+        platform: process.platform,
+        fs: fs,
+        pins: readRuntimePins(fs, daemonDir),
+        env: process.env,
+        detectDev: function () { return isDevCheckoutSync(fs, extPath); },
+        hashFile: function (p) { return sha256FileSync(fs, crypto, p); },
+        swapWaitExpired: swapRetries >= SWAP_RETRY_MAX,
       });
-      child.on('error', function (e) { console.error('Gaffer: daemon spawn error', e); });
-      child.unref();
-      console.log('Gaffer: daemon spawned via Node, pid=' + child.pid + ' bin=' + nodeBin);
-      return true;
+      appendDaemonLog(fs, launch.notes);
+      if (launch.retry) {
+        scheduleSwapRetry();
+        return 'retry';
+      }
+      swapRetries = 0;
+      if (launch.error) {
+        // Never fall through to the ExtendScript route: its launcher would
+        // reach the same verdict, and a damaged runtime must not be bypassed.
+        appendDaemonLog(fs, ['daemon not launched: err:' + launch.error + (launch.reason ? ' (' + launch.reason + ')' : '')]);
+        showLaunchError(launch.error);
+        return 'refused';
+      }
+      appendDaemonLog(fs, ['launching daemon via ' + launch.kind + ': ' + launch.bin + ' ' + launch.args.join(' ') + ' (cwd ' + launch.cwd + ')']);
+      var child = launchDaemon(cp, fs, launch);
+      if (!child || !child.pid) {
+        // The spawn failed at exec: the notice is showing already (a throw)
+        // or its 'error' event shows it on the next tick. Not started.
+        console.error('Gaffer: daemon spawn failed, bin=' + launch.bin);
+        return 'refused';
+      }
+      console.log('Gaffer: daemon spawned, pid=' + child.pid + ' ' + launch.kind + ' bin=' + launch.bin);
+      return 'started';
     } catch (e) {
       console.error('Gaffer: spawnViaNode failed:', e);
-      return false;
+      appendDaemonLog(fs, ['daemon not launched: err:launch-failed (' + (e && e.message ? e.message : e) + ')']);
+      showLaunchError('launch-failed');
+      return 'refused';
     }
   }
 
   function spawnViaExtendScript() {
     // Fallback for CEP contexts without Node integration.
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+    // Once the bounded swap wait is over, the launcher skips its swap-window
+    // rule (resolveDaemonLaunch's swapWaitExpired), so a stranded runtime.old
+    // or runtime.new never blocks the launch forever.
+    var arg = (Launch && swapRetries >= SWAP_RETRY_MAX) ? ' ' + Launch.SWAP_WAIT_EXPIRED_ARG : '';
     var jsx = '(function() {'
       + 'var isWin = $.os.indexOf("Windows") !== -1;'
       + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
       + 'if (isWin) {'
-      + '  return system.callSystem("powershell -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"");'
+      // -NoProfile: a user profile could re-introduce NODE_OPTIONS or change
+      // the PATH that start.ps1's system-node search sees. powershell -File
+      // accepts the forward slashes.
+      + '  return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/start.ps1\\"' + arg + '");'
       + '} else {'
-      + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"");'
+      + '  return system.callSystem("bash \\"" + dir + "/start.sh\\"' + arg + '");'
       + '}'
       + '})()';
     cs.evalScript(jsx, function (result) {
       console.log('Gaffer: daemon spawn via ExtendScript: ' + result);
+      // Launcher contract: pid:<N> runtime|node, or err:<code>
+      // (GafferLaunch.parseLauncherOutput).
+      var out;
+      if (Launch) {
+        out = Launch.parseLauncherOutput(result);
+      } else {
+        var m = String(result).match(/err:(runtime-damaged|runtime-missing|launch-failed|launch-usage)/);
+        out = m ? { error: m[1] === 'launch-usage' ? 'launch-failed' : m[1] } : {};
+      }
+      if (out.retry) {
+        // err:runtime-updating: an updater is swapping the runtime, no
+        // user-facing error, the same bounded retry as the Node route.
+        scheduleSwapRetry();
+        return;
+      }
+      swapRetries = 0;
+      if (out.error) showLaunchError(out.error);
     });
   }
 
   function startDaemon() {
     if (daemonStartAttempted) return;
     daemonStartAttempted = true;
+    daemonLaunchError = null;
+    daemonLaunchCode = null;
+    // Shown first: a stamp-less first run hashes the runtime synchronously
+    // (up to about 3 s). A refused launch replaces it with its notice.
     setStatus('starting', 'Starting daemon...');
 
     // Prefer Node spawn (works on Apple Silicon). Fall back to ExtendScript
-    // system.callSystem if Node integration isn't available.
-    if (!spawnViaNode()) {
-      spawnViaExtendScript();
-    }
+    // system.callSystem only if CEP Node integration isn't available.
+    var res = spawnViaNode();
+    if (res === 'refused' || res === 'retry') return;
+    if (!res) spawnViaExtendScript();
   }
 
   // ── WebSocket ──
@@ -1147,7 +1336,7 @@
 
     ws.onclose = function () {
       console.log('Gaffer: disconnected from daemon');
-      setStatus('disconnected', 'Disconnected');
+      setStatus('disconnected', daemonLaunchError || 'Disconnected');
       // If daemon crashed after being connected, allow restart
       if (wasConnected) {
         daemonStartAttempted = false;
@@ -2259,6 +2448,26 @@
     return { el: t, dismiss: dismiss };
   }
 
+  // A toast that replaces the previous one with the same key instead of
+  // stacking under it. spec comes from GafferUpdateState (updateToast,
+  // launchErrorToast): { key, type, text, duration, action }. action
+  // 'settings' turns the toast's button into "Open Settings" (the welcome
+  // screen covers the footer's Settings button while the daemon is down).
+  function showKeyedToast(spec) {
+    if (!spec) return null;
+    var prev = keyedToasts[spec.key];
+    if (prev) { try { prev.dismiss(); } catch (e) { /* already gone */ } }
+    var opts = { duration: spec.duration };
+    if (spec.action === 'settings') {
+      opts.actionIcon = 'settings';
+      opts.actionTitle = 'Open Settings';
+      opts.onAction = function () { openSettings(); };
+    }
+    var handle = showToast(spec.type, spec.text, opts);
+    keyedToasts[spec.key] = handle;
+    return handle;
+  }
+
   // Dev-only toast trigger: Cmd/Ctrl+Shift+T fires a demo toast, cycling
   // info -> success -> warning -> error -> neutral on repeat presses. Gated on a
   // localStorage flag so end users never trigger it; enable it (persists across
@@ -2687,6 +2896,7 @@
   // script could abort the update mid-run). Best-effort: callback always
   // fires, even if the kill itself failed or nothing was listening.
   function forceStopDaemonPort(callback) {
+    daemonKilledByPanelAt = Date.now(); // its SIGKILL must not read as Gatekeeper
     try {
       var cp = require('child_process');
       var isWin = process.platform === 'win32';
@@ -2739,13 +2949,84 @@
     }
   }
 
-  // Poll the on-disk version.json and reload ONLY once its version moves.
-  // The updater writes that file last, so reloading earlier would load
-  // half-copied files and flag a false failure. After 180s without a change
-  // the banner offers "Force stop & retry", unless the updater still holds
-  // its lock: then it is alive and working (a slow npm install, say), a
-  // second updater would only exit busy, so wait one more window instead.
+  // The updater's log, where both scripts write their result line (update.sh:
+  // ${TMPDIR:-/tmp}/gaffer-update.log, update.ps1: Start-Transcript to
+  // %TEMP%\gaffer-update.log). The panel spawns them with its own env, so the
+  // same variables name the same file. Needs CEP Node; null without it.
+  function updaterLogPath() {
+    if (typeof require === 'undefined' || typeof process === 'undefined') return null;
+    return process.platform === 'win32'
+      ? (process.env.TEMP || 'C:\\Windows\\Temp') + '\\gaffer-update.log'
+      : String(process.env.TMPDIR || '/tmp').replace(/\/+$/, '') + '/gaffer-update.log';
+  }
+
+  // One update or repair the panel is waiting on: mode 'update' | 'repair',
+  // the log's size when it started (the result line is looked for only in
+  // what the log gains after that), and whether the updater the panel
+  // started has exited. Taken BEFORE the updater starts.
+  var updateRun = null;
+  // Set by an updater result err:runtime-swap (the runtime swap or recovery
+  // failed after the daemon was stopped): the install may be unfinished, so
+  // Settings offers Repair and the next run repairs. A reload clears it.
+  var updateLeftUnfinished = false;
+  function beginUpdateRun(mode) {
+    var run = { mode: mode, logPath: updaterLogPath(), logStart: 0, exited: false };
+    if (run.logPath) {
+      try { run.logStart = require('fs').statSync(run.logPath).size; } catch (e) { run.logStart = 0; }
+    }
+    updateRun = run;
+    return run;
+  }
+
+  // What the updater log gained since the run started (pure slice logic in
+  // GafferUpdateState.readUpdateLogSlice): '' when nothing yet or no log
+  // file, null when it cannot be read. A second updater (a manual run, or
+  // the one ours found busy) appends to the same log after our offset; its
+  // ok:/err: is the latest result and ends our wait too, which is intended.
+  function readUpdateLogSince(run) {
+    if (!run || !run.logPath) return null;
+    var fs, B;
+    try { fs = require('fs'); B = require('buffer').Buffer; } catch (e) { return null; } // CEP may not expose a global Buffer
+    return UpdateState.readUpdateLogSlice(fs, run.logPath, run.logStart, function (n) { return B.alloc(n); });
+  }
+
+  // Ends a wait that failed: the updater reported err:<code>, exited with no
+  // result line, or the give-up passed (code null). The banner stays up with
+  // "Force stop & retry" instead of hiding: a stuck update usually means
+  // something still holds the daemon port, and that button kills it directly
+  // rather than making the user hand-run a PowerShell command over chat.
+  function showUpdateFailure(run, code, actionsEl) {
+    updateRun = null;
+    if (UpdateState.failureNeedsRepair(code)) {
+      updateLeftUnfinished = true;
+    }
+    window.__gafferUpdating = false;
+    syncSettingsUpdateButton();
+    var text = UpdateState.updateFailureText(run.mode, code, run.logPath);
+    // The banner and chat notice live in the chat view, which the welcome
+    // screen covers while the daemon is down; the toast is seen on any screen.
+    showKeyedToast(UpdateState.updateToast('fail', run.mode, code, run.logPath));
+    updateTextEl.textContent = text.banner;
+    if (actionsEl) actionsEl.style.display = '';
+    updateBtnEl.style.display = 'none';
+    forceStopUpdateBtnEl.style.display = '';
+    updateBannerEl.classList.add('visible');
+    showChatNotice(text.notice);
+  }
+
+  // Poll every 5 s until the run is over (GafferUpdateState.updateWaitStep):
+  // the updater's ok:<version> (a repair keeps its version, so this is its
+  // only signal) or a moved version.json reloads the panel; its err:<code>
+  // ends the wait at once with that code's text, except err:stopped (a
+  // signalled updater, usually a stuck one a newer updater took over): the
+  // taker's result follows in the same log, so that wait goes on to the give-up. The updater writes
+  // version.json last, so reloading earlier would load half-copied files.
+  // After 180s with neither the banner offers "Force stop & retry", unless
+  // the updater still holds its lock: then it is alive and working (a slow
+  // runtime download, say), a second updater would only exit busy, so wait
+  // one more window instead.
   function waitForUpdatedVersion(startVersion, actionsEl) {
+    var run = updateRun || beginUpdateRun('update');
     var path = cs.getSystemPath(SystemPath.EXTENSION) + '/version.json';
     var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
     var waited = 0;
@@ -2753,31 +3034,41 @@
     var timer = setInterval(function () {
       waited += 5000;
       cs.evalScript(jsx, function (result) {
-        if (UpdateState.shouldReloadAfterUpdate(startVersion, result)) {
+        var logText = readUpdateLogSince(run);
+        // No result in the log (unreadable, or the ExtendScript route's updater
+        // saw another TMPDIR and wrote elsewhere): use callSystem's output if it has one.
+        if (!UpdateState.lastUpdaterResult(logText) && run.output && UpdateState.lastUpdaterResult(run.output)) logText = run.output;
+        // Give up at 180 s, or one window later while an updater still holds
+        // the lock (see below).
+        var atLimit = waited >= 180000;
+        var extend = atLimit && !extended && !!runningUpdaterPid();
+        var step = UpdateState.updateWaitStep({
+          mode: run.mode,
+          startVersion: startVersion,
+          diskJson: result,
+          logText: logText,
+          exited: run.exited,
+          giveUp: atLimit && !extend
+        });
+        if (step.action === 'reload') {
           clearInterval(timer);
           try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
-          location.reload(); // fresh panel + fresh daemon
-        } else if (waited >= 180000) {
-          if (!extended && runningUpdaterPid()) {
+          showKeyedToast(UpdateState.updateToast('ok', run.mode));
+          setTimeout(function () { location.reload(); }, UpdateState.RELOAD_AFTER_OK_MS); // fresh panel + fresh daemon
+        } else if (step.action === 'fail') {
+          clearInterval(timer);
+          // Reported here; the post-reload verdict must not report it again.
+          try { localStorage.removeItem('gafferUpdateAttempt'); } catch (e) { /* ignore */ }
+          showUpdateFailure(run, step.code, actionsEl);
+        } else if (atLimit) {
+          if (extend) {
             extended = true;
             waited = 0;
             updateTextEl.textContent = 'Still updating, this is taking longer than usual…';
             return;
           }
           clearInterval(timer);
-          window.__gafferUpdating = false;
-          syncSettingsUpdateButton();
-          // Stays up, offering a self-serve retry, instead of hiding —
-          // a stuck update usually means something still holds the
-          // daemon port, and this kills it directly rather than making
-          // the user hand-run a PowerShell command over chat.
-          updateTextEl.textContent = 'Update did not complete';
-          if (actionsEl) actionsEl.style.display = '';
-          updateBtnEl.style.display = 'none';
-          forceStopUpdateBtnEl.style.display = '';
-          updateBannerEl.classList.add('visible');
-          showChatNotice('Update did not complete. The updater log has details: '
-            + '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS).');
+          showUpdateFailure(run, null, actionsEl);
         }
       });
     }, 5000);
@@ -2794,6 +3085,9 @@
       if (actionsEl) actionsEl.style.display = 'none';
       window.__gafferUpdating = true;
       syncSettingsUpdateButton();
+      var waitMode = updateRunPlan().mode;
+      beginUpdateRun(waitMode); // its result lands in the log from here on
+      showKeyedToast(UpdateState.updateToast('start', waitMode));
       waitForUpdatedVersion(versionData.version, actionsEl);
       return;
     }
@@ -2803,6 +3097,18 @@
       forceStopUpdateBtnEl.disabled = false;
       runUpdate();
     });
+  }
+
+  // What a click on Update / Repair runs. repair: the launch was refused for
+  // a runtime reason, so the updater re-provisions the runtime even when it
+  // looks current (update.sh --repair, update.ps1 -Repair). mode 'repair'
+  // when no newer release is there (the version will not change), else
+  // 'update' (a newer release, which then also repairs).
+  function updateRunPlan() {
+    var repair = UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished;
+    var available = !!availableUpdateVersion
+      && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version);
+    return { repair: repair, mode: repair && !available ? 'repair' : 'update' };
   }
 
   function runUpdate() {
@@ -2820,19 +3126,29 @@
     }
     var extPath = cs.getSystemPath(SystemPath.EXTENSION);
     var daemonDir = extPath + '/daemon';
+    var plan = updateRunPlan();
+    // Before the updater starts: its result line is read from what the log
+    // gains after this point.
+    var run = beginUpdateRun(plan.mode);
 
     function reloadAfterUpdate() {
-      // The updater needs ~30-60s (download + npm); waitForUpdatedVersion
-      // reloads the panel once the on-disk version.json moves.
+      // The updater needs ~30-60s (download, plus about 54 MB when the
+      // runtime is re-provisioned); waitForUpdatedVersion reloads the panel
+      // on its ok: line or once the on-disk version.json moves.
       try {
         localStorage.setItem('gafferUpdateAttempt', JSON.stringify({
           target: availableUpdateVersion || null,
           at: Date.now(),
         }));
       } catch (e) { /* ignore */ }
-      updateTextEl.textContent = 'Updating…';
+      updateTextEl.textContent = plan.mode === 'repair' ? 'Repairing…' : 'Updating…';
+      // Seen on every screen (the banner is not, under the welcome screen);
+      // replaces a launch error toast for the problem being repaired.
+      showKeyedToast(UpdateState.updateToast('start', plan.mode));
       var actionsEl = updateBannerEl.querySelector('.actions');
       if (actionsEl) actionsEl.style.display = 'none'; // no CTAs mid-update
+      // Repair starts from Settings with no banner up: show it, so the run is visible.
+      if (plan.mode === 'repair') updateBannerEl.classList.add('visible');
       window.__gafferUpdating = true; // pauses daemon auto-respawn
       syncSettingsUpdateButton(); // prevent a second update launch from Settings
       waitForUpdatedVersion(versionData.version, actionsEl);
@@ -2842,11 +3158,16 @@
       var jsx = '(function(){'
         + 'var isWin = $.os.indexOf("Windows") !== -1;'
         + 'var dir = "' + extPath.replace(/\\/g, '/') + '/daemon";'
-        + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"");'
-        + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"");'
+        + 'if (isWin) return system.callSystem("powershell -NoProfile -ExecutionPolicy Bypass -File \\"" + dir + "/update.ps1\\"' + (plan.repair ? ' -Repair' : '') + '");'
+        + 'return system.callSystem("bash \\"" + dir + "/update.sh\\"' + (plan.repair ? ' --repair' : '') + '");'
         + '})()';
       cs.evalScript(jsx, function (result) {
         console.log('Gaffer: update result (ExtendScript):', result);
+        // callSystem returns when the updater has exited. Its output is the
+        // fallback result source when the log cannot be read (Windows prints
+        // the result line to stdout too; update.sh sends everything to its log).
+        run.exited = true;
+        run.output = String(result == null ? '' : result);
         reloadAfterUpdate();
       });
     }
@@ -2863,9 +3184,11 @@
           // bad resolution used to look like a successful no-op
           cmd = (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
           args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daemonDir + '\\update.ps1'];
+          if (plan.repair) args.push('-Repair');
         } else {
           cmd = 'bash';
           args = [daemonDir + '/update.sh'];
+          if (plan.repair) args.push('--repair');
         }
         // stdio must be real file handles: detached + stdio:'ignore' silently
         // kills the child on some Node/Windows combos (verified on Win11) —
@@ -2881,6 +3204,7 @@
         // process-scoped, not document-scoped. Mac keeps detached (proven).
         var child = cp.spawn(cmd, args, { detached: !isWin, stdio: ['ignore', uout, uout], windowsHide: true });
         var spawnFailed = false;
+        child.on('exit', function () { run.exited = true; });
         child.on('error', function (e) {
           spawnFailed = true;
           console.error('Gaffer: Node spawn of updater failed — ExtendScript fallback', e);
@@ -3750,10 +4074,17 @@
     // Show ONLY when a completed check has confirmed an available release
     // newer than the local version. Pre-check / in-flight / up-to-date all
     // leave availableUpdateVersion null (or not newer than local) -> no CTA.
-    var available = !!availableUpdateVersion
-      && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version)
-      && !window.__gafferUpdating;
-    button.hidden = !available;
+    // A refused daemon launch (damaged, missing or blocked runtime) turns it
+    // into Repair when no newer release is there to fix it.
+    var action = UpdateState.settingsUpdateAction({
+      available: !!availableUpdateVersion
+        && UpdateState.isNewerVersion(availableUpdateVersion, versionData && versionData.version),
+      repairable: UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished,
+      updating: !!window.__gafferUpdating,
+      dev: !!isDevInstall
+    });
+    button.hidden = !action;
+    if (action) button.textContent = action === 'repair' ? 'Repair' : 'Update';
   }
   function syncSettings() {
     // #setVersion (== versionTextEl) is written directly by loadVersion/detectDevInstall.

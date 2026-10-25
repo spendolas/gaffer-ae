@@ -34,6 +34,11 @@ assets/
 .claude/settings.local.json
 .claude/worktrees/
 
+.npm-cache/
+panel/daemon/runtime*/
+panel/daemon/daemon.mjs
+panel/daemon/daemon.mjs.map
+.npmrc-dev
 # Landing page (generated, never committed)
 site/media/_generated/
 site/items.json

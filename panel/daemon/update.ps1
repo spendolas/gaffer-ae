@@ -1,7 +1,20 @@
 ﻿# Gaffer update script (Windows): downloads the latest GitHub release asset,
-# replaces panel files, preserves user data, restarts daemon.
+# stages the pinned Node runtime when the release needs a new one (with the
+# archive's own fetch-runtime.ps1), replaces panel files, preserves user
+# data, restarts daemon. No npm: the daemon is one bundled file (daemon.mjs)
+# run by daemon\runtime\node.exe.
 # Windows PowerShell 5.1 compatible. Keep this file ASCII-only with a UTF-8
 # BOM (node scripts/check-ps-encoding.mjs).
+#
+# -Repair (the panel's Repair button, shown while the daemon launch is
+# refused because the runtime is damaged or missing): the runtime is
+# downloaded and verified again even when its stamps say it is current (the
+# archive's fetch-runtime.ps1 gets -Force), then the release's files are
+# synced as in any update. The version need not change; the panel waits for
+# ok:<version>. Same lock and last-line contract as a plain update.
+param(
+    [switch] $Repair
+)
 $ErrorActionPreference = "Stop"
 # PS 5.1 redraws a progress bar per downloaded chunk, which makes
 # Invoke-WebRequest many times slower. Nothing here reads it.
@@ -20,14 +33,45 @@ if ($env:GAFFER_UPDATE_ASSET) { $assetSource = $env:GAFFER_UPDATE_ASSET }
 $logPath = Join-Path $env:TEMP "gaffer-update.log"
 
 Start-Transcript -Path $logPath -Append
+# The result line (contract below) and the exit code it implies. Write-Result
+# is the only writer of ok:, err: and busy: lines, so the top-level catch
+# knows whether one was written.
+$script:resultWritten = $false
+$script:resultExit = 1
+function Write-Result([string] $line) {
+    Write-Output $line
+    $script:resultWritten = $true
+    if ($line -like "ok:*") { $script:resultExit = 0 } elseif ($line -like "busy:*") { $script:resultExit = 3 } else { $script:resultExit = 1 }
+}
+try { # top level: any terminating error nothing below handles ends the log with err:internal (catch at the bottom)
 Write-Host "=== Update started: $(Get-Date) ==="
+if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if it looks current" }
 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download,
-#                           err:sync, err:npm) after an ERROR line
+#                           err:sync, err:runtime) after an ERROR line
+#                           (err:runtime before the swap: install untouched;
+#                           err:runtime-swap: moving the new runtime into
+#                           place failed, or restoring an interrupted
+#                           swap's runtime.old failed, the install may be
+#                           unfinished; err:archive: the download unpacked
+#                           but is not a Gaffer release (no version.json,
+#                           no daemon\daemon.mjs, or no valid version in
+#                           version.json), the install is untouched;
+#                           err:sync also covers restoring the user data
+#                           and writing version.json after robocopy;
+#                           err:internal: the catch-all, any error nothing
+#                           else handled (a temp folder or backup that
+#                           cannot be written, a disk full, a bug), from
+#                           Exit-Update without a code or the top-level
+#                           catch at the bottom)
 #   busy:already-running    another updater holds the lock; this one did nothing
 # Exit codes: 0 ok, 1 failed, 3 busy.
+# Every result line goes through Write-Result, which records that one was
+# written; the top-level try/catch writes err:internal for any terminating
+# error that ends the run before that. Only a forced stop (Stop-Process,
+# taskkill /F, a closed console) can end a run without a result line.
 
 # Single-updater lock. Two updaters interleaving (the panel's "Force stop &
 # retry" after its 180s give-up, or a manual run next to the panel's) would
@@ -85,6 +129,12 @@ $stuckAfter = 900
 #   GAFFER_UPDATE_TEST_MARKER_GATE  after judging the takeover marker stale,
 #                                   before renaming it away
 #   GAFFER_UPDATE_TEST_HOLD_GATE    right after the lock is acquired
+#   GAFFER_UPDATE_TEST_SWAP_GATE    between the two runtime renames (runtime
+#                                   moved aside, runtime.new not yet in), so
+#                                   the harness can kill an updater there
+# Like the stuck-age knob below, every gate counts only next to
+# GAFFER_UPDATE_ASSET (the harness sets both, the panel sets neither): a
+# stray gate variable in a real environment never pauses an update.
 # GAFFER_UPDATE_TEST_STUCK_AFTER (whole seconds) lowers the 15 minute stuck
 # age so the harness can stage a stuck holder that really is older than its
 # lock (the pid-reuse guard below rejects a holder created after the lock,
@@ -102,6 +152,7 @@ $script:testFailList = [bool] ($env:GAFFER_UPDATE_ASSET -and $env:GAFFER_UPDATE_
 function Get-FileAgeSeconds($item) { return ([DateTime]::UtcNow - $item.LastWriteTimeUtc).TotalSeconds }
 function Wait-TestGate([string] $gate) {
     if (-not $gate) { return }
+    if (-not $env:GAFFER_UPDATE_ASSET) { return }
     try { [System.IO.File]::WriteAllText("$gate.ready", "$PID") } catch {}
     for ($i = 0; $i -lt 600; $i++) {
         if (Test-Path -LiteralPath $gate) { return }
@@ -235,8 +286,9 @@ function Get-DescendantProcessIds([int] $rootPid, $rootCreated, $createdBefore, 
     return @($found.Values)
 }
 
-# End the holder AND every process it started (its curl.exe, robocopy, npm,
-# and whatever those started); ending only the shell would orphan those.
+# End the holder AND every process it started (its curl.exe, robocopy, the
+# fetch-runtime.ps1 child, and whatever those started); ending only the
+# shell would orphan those.
 # Order: (1) while the holder is still alive, list its descendants from
 # Win32_Process (parent pid plus creation order, see above); (2) if that
 # listing failed, taskkill /T /F the holder right now, while it is alive,
@@ -382,7 +434,7 @@ while (-not $script:haveLock) {
         # the lock cannot be created here at all. Retry, bounded.
         if ($tries -gt 3) {
             Write-Host "ERROR: could not create the update lock at $lockPath"
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
@@ -397,14 +449,14 @@ while (-not $script:haveLock) {
     $holderParses = ([int]::TryParse($holder, [ref] $holderPid) -and $holderPid -gt 0)
     if (-not $holderParses -and $lockAge -ge -300 -and $lockAge -lt 30) {
         Write-Host "Another update is starting up (its lock is seconds old), leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
     $proc = Get-LockHolderProcess $holder $lockWrittenUtc
     if ($proc -and $proc.Unverified) {
         Write-Host "Could not inspect the process holding the lock (pid $holder), but it is alive: leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -413,7 +465,7 @@ while (-not $script:haveLock) {
     $lockIsOld = ($lockAge -ge $stuckAfter)
     if ($proc -and -not $lockIsOld) {
         Write-Host "Another update is already running (pid $holder), leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -426,19 +478,19 @@ while (-not $script:haveLock) {
     if ($proc) {
         try { $ancestors = @(Get-AncestorProcessIds) } catch {
             Write-Host "Could not inspect this process's own parent chain, leaving the update holding the lock (pid $holder) to finish."
-            Write-Output "busy:already-running"
+            Write-Result "busy:already-running"
             Stop-Transcript
             exit 3
         }
         if ($ancestors -contains [int] $proc.ProcessId) {
             Write-Host "This update was started from the terminal that holds the lock. Close that window and try again."
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
         if (-not $proc.Stoppable) {
             Write-Host "An update started by hand in PowerShell (pid $holder) has held the lock for over 15 minutes. Close that window or press Ctrl+C in it."
-            Write-Output "err:lock"
+            Write-Result "err:lock"
             Stop-Transcript
             exit 1
         }
@@ -448,14 +500,14 @@ while (-not $script:haveLock) {
     }
     if ($tries -gt 3) {
         Write-Host "ERROR: could not take the update lock at $lockPath"
-        Write-Output "err:lock"
+        Write-Result "err:lock"
         Stop-Transcript
         exit 1
     }
     Wait-TestGate $env:GAFFER_UPDATE_TEST_GATE
     if (-not (Enter-TakeoverMutex)) {
         Write-Host "Another update is taking over the abandoned lock, leaving it to finish."
-        Write-Output "busy:already-running"
+        Write-Result "busy:already-running"
         Stop-Transcript
         exit 3
     }
@@ -481,7 +533,7 @@ while (-not $script:haveLock) {
         if ($state -eq "unverified") {
             Write-Host "Could not inspect the process holding the lock (pid $($proc.ProcessId)), but it is alive: leaving it to finish."
             Exit-TakeoverMutex
-            Write-Output "busy:already-running"
+            Write-Result "busy:already-running"
             Stop-Transcript
             exit 3
         }
@@ -520,16 +572,54 @@ try {
 . "$PSScriptRoot\stop-daemon.ps1"
 
 # Every failure after this point goes through here: log, clean up, exit 1.
-# $code, when given, ends the log with err:<code> after the ERROR line (the
-# last-line contract above); the exit code stays 1 either way.
+# $code ends the log with err:<code> after the ERROR line (the last-line
+# contract above), err:internal when none is given; the exit code is 1.
 # The panel dir is untouched until the robocopy step, and version.json is
 # only replaced at the very end.
-function Exit-Update([string] $message, [string] $code = "") {
+function Exit-Update([string] $message, [string] $code = "internal") {
     Write-Host "ERROR: $message"
-    if ($code) { Write-Output "err:$code" }
+    if (-not $code) { $code = "internal" }
+    Write-Result "err:$code"
     if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
     Stop-Transcript
     exit 1
+}
+
+# The bundled Node runtime (spec sections 3 and 6). daemon\runtime holds
+# node.exe plus VERSION ("<version> <platform>") and VERIFIED ("<size>
+# <sha256>"); fetch-runtime.ps1 -StageOnly leaves a verified, stamped copy in
+# runtime.new. All three live inside daemon\ so every rename stays on one
+# volume. A running node.exe cannot be overwritten or deleted, but its folder
+# can be renamed, so the swap is two renames and never a copy.
+$runtimeDir = Join-Path $daemonDir "runtime"
+$runtimeNew = Join-Path $daemonDir "runtime.new"
+$runtimeOld = Join-Path $daemonDir "runtime.old"
+
+function Remove-Tree([string] $path) {
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# $true when $dir\node.exe exists and its size equals the first field of
+# $dir\VERIFIED (the launcher's size check).
+function Test-RuntimeStamp([string] $dir) {
+    $exe = Join-Path $dir "node.exe"
+    $stamp = Join-Path $dir "VERIFIED"
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf) -or -not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return $false }
+    try {
+        $fields = @(([System.IO.File]::ReadAllText($stamp)).Trim() -split '\s+')
+        return ($fields.Count -ge 1 -and $fields[0] -eq [string] (Get-Item -LiteralPath $exe).Length)
+    } catch { return $false }
+}
+
+# The GAFFER_FETCH_* seams of fetch-runtime.ps1 (local archives, skipped
+# signature check) are for the test harness only, which always sets
+# GAFFER_UPDATE_ASSET. Anywhere else a stray one is dropped before the child
+# that would read it starts, so a real update always verifies for real.
+if (-not $env:GAFFER_UPDATE_ASSET) {
+    foreach ($seam in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_PINS",
+        "GAFFER_FETCH_SKIP_CODESIGN", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_NO_TAR", "GAFFER_FETCH_NO_CURL")) {
+        Remove-Item -LiteralPath "Env:\$seam" -ErrorAction SilentlyContinue
+    }
 }
 
 # Download budget: the asset is a few MB. The download goes first through the
@@ -555,12 +645,16 @@ function Exit-Update([string] $message, [string] $code = "") {
 # budget, checked before every body read (a read may block for 20s, so the
 # last one is only started while at least 20s of the budget remain), so the
 # worst case stays at about 90 + 150 = 240s, under the curl-only worst case
-# of 270s, then extract + robocopy + npm. The panel (main.js
+# of 270s, then extract + the runtime step + robocopy. The runtime step is
+# instant when the runtime is current (no network call); a release that
+# changes the Node pin adds the Node archive download (spec section 8:
+# about 38 MB for win-x64, 94 MB once extracted; about 54 MB on macOS),
+# within fetch-runtime.ps1's own limits. The panel (main.js
 # waitForUpdatedVersion) gives up after 180s but extends once by 180s while
-# this lock is held, a 360s window; a worst-case download plus a slow npm
-# install can outlive it, and then the panel offers "Force stop & retry",
-# whose second updater exits busy against this lock, so a slow run is never
-# corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
+# this lock is held, a 360s window; a worst-case download plus a runtime
+# download on a slow link can outlive it, and then the panel offers
+# "Force stop & retry", whose second updater exits busy against this lock,
+# so a slow run is never corrupted, only late. Only a 404 or 410 from curl (the asset is not there)
 # is final: any other 4xx (403, 407, 429) is what a proxy intercepting
 # curl.exe answers, so those fall back like a connection failure. The .NET
 # path has nothing left to fall back to, so every 4xx is final there. Both
@@ -674,14 +768,35 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # latter terminates the script before the err: line is written.
     if ((Test-Path (Join-Path (Split-Path -Parent $panelDir) ".git")) -or (Test-Path "$panelDir\.git")) {
         Write-Host "ERROR: panel dir is inside a git repo (dev install) - refusing to update. Use git pull instead."
-        Write-Output "err:dev-install"
+        Write-Result "err:dev-install"
         Stop-Transcript
         exit 1
     }
 
+    # Recovery first (spec 6.8): an updater stopped between the two runtime
+    # renames leaves runtime.old and no runtime. Rename it back when it
+    # passes the size check; one that does not is left to the runtime step
+    # below, which provisions a fresh runtime and clears it. A rename back
+    # that fails ends err:runtime-swap before anything is fetched or changed,
+    # like update.sh (Repair, or reinstall).
+    if (-not (Test-Path -LiteralPath $runtimeDir) -and (Test-Path -LiteralPath $runtimeOld)) {
+        if (Test-RuntimeStamp $runtimeOld) {
+            try {
+                [System.IO.Directory]::Move($runtimeOld, $runtimeDir)
+                Write-Host "Restored daemon\runtime from runtime.old (an earlier update stopped between its two renames)"
+            } catch {
+                Exit-Update "could not restore daemon\runtime from runtime.old (an earlier update stopped between its two renames): $($_.Exception.Message)" "runtime-swap"
+            }
+        } else {
+            Write-Host "Found daemon\runtime.old without a runtime, but it fails the size check; the runtime step provisions a new one"
+        }
+    }
+
     # Download the release asset and extract it into a SUBFOLDER of tmpDir, so
     # the downloaded zip itself is never copied into the panel dir.
-    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    try { New-Item -ItemType Directory -Path $extractDir -Force | Out-Null } catch {
+        Exit-Update "could not create the temporary folder $extractDir (disk full or read-only?): $($_.Exception.Message)" "internal"
+    }
     $zipPath = Join-Path $tmpDir $assetName
     Write-Host "Downloading $assetSource"
     try {
@@ -694,8 +809,15 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     } catch {
         Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
     }
-    if (-not (Test-Path "$extractDir\version.json") -or -not (Test-Path "$extractDir\daemon\index.js")) {
-        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\index.js)"
+    # New archives always carry daemon\daemon.mjs (and, for 0.11.x updaters,
+    # the daemon\index.js shim too); the runtime step needs the archive's own
+    # fetch-runtime.ps1 and runtime-pins.json.
+    if (-not (Test-Path -LiteralPath "$extractDir\version.json" -PathType Leaf) -or -not (Test-Path -LiteralPath "$extractDir\daemon\daemon.mjs" -PathType Leaf)) {
+        Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\daemon.mjs)" "archive"
+    }
+    $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $extractDir "daemon\runtime-pins.json") -PathType Leaf)) {
+        Exit-Update "the release has no runtime provisioning (missing daemon\fetch-runtime.ps1 or daemon\runtime-pins.json)" "runtime"
     }
 
     # Version and commit come from the archive's own version.json, which the
@@ -703,88 +825,170 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     try {
         $release = Get-Content "$extractDir\version.json" -Raw | ConvertFrom-Json
     } catch {
-        Exit-Update "release version.json is not valid JSON"
+        Exit-Update "release version.json is not valid JSON" "archive"
     }
     $latestVersion = $release.version
     $latestCommit = $release.commit
-    if (-not $latestVersion) { Exit-Update "release version.json has no version" }
+    if (-not $latestVersion) { Exit-Update "release version.json has no version" "archive" }
     Write-Host "Release: v$latestVersion ($latestCommit)"
 
     # Backup chat history - legacy single file plus per-AE-version files
-    # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json)
-    $backup = $null
-    if (Test-Path "$panelDir\chat-history.json") {
-        $backup = Join-Path $tmpDir "chat-history.backup.json"
-        Copy-Item "$panelDir\chat-history.json" $backup
-    }
-    $historyBackupDir = Join-Path $tmpDir "chat-history-backups"
-    New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
-    Get-ChildItem -Path $panelDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
-
-    # Backup .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.) -
+    # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json) - and
+    # .gaffer-config.json (claudeBin, installId, shareUsageStats, etc.):
     # without this it is silently wiped by robocopy /PURGE on every update.
+    # Nothing has changed yet; a backup that cannot be written (a full disk)
+    # ends the run with err:internal before anything does.
+    $backup = $null
     $configBackup = $null
-    if (Test-Path "$panelDir\.gaffer-config.json") {
-        $configBackup = Join-Path $tmpDir "gaffer-config.backup.json"
-        Copy-Item "$panelDir\.gaffer-config.json" $configBackup
+    $historyBackupDir = Join-Path $tmpDir "chat-history-backups"
+    try {
+        if (Test-Path "$panelDir\chat-history.json") {
+            $backup = Join-Path $tmpDir "chat-history.backup.json"
+            Copy-Item "$panelDir\chat-history.json" $backup
+        }
+        New-Item -ItemType Directory -Path $historyBackupDir -Force | Out-Null
+        Get-ChildItem -Path $panelDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName $historyBackupDir }
+        if (Test-Path "$panelDir\.gaffer-config.json") {
+            $configBackup = Join-Path $tmpDir "gaffer-config.backup.json"
+            Copy-Item "$panelDir\.gaffer-config.json" $configBackup
+        }
+    } catch {
+        Exit-Update "could not back up the chat history and settings to the temporary folder (disk full?), nothing was changed: $($_.Exception.Message)" "internal"
     }
 
-    # Stop daemon
+    # Runtime step, BEFORE any file is replaced and while the daemon still
+    # runs (spec 6.2). The archive's fetch-runtime.ps1 compares daemon\runtime
+    # (VERSION and the VERIFIED size) with the archive's pins: current means
+    # no network call at all; otherwise it downloads, verifies (SHA-256,
+    # size, Authenticode, a smoke run that also warms up Defender) and
+    # leaves the stamped result in runtime.new. Any other outcome deletes
+    # runtime.new and ends with err:runtime, the install untouched.
+    # It runs as a child of the same PowerShell host, sharing this console
+    # (hidden when the panel started the update), so no window opens. -Into
+    # is $daemonDir, which never ends in a backslash (PowerShell quotes an
+    # argument with spaces, and a trailing backslash would escape the quote).
+    Write-Host "Checking the Node runtime..."
+    $psExe = Join-Path $PSHOME "powershell.exe"
+    if (-not (Test-Path -LiteralPath $psExe -PathType Leaf)) { $psExe = Join-Path $PSHOME "pwsh.exe" }
+    # Each line goes to the transcript as it arrives (so the log shows the
+    # download's progress even if this updater is killed mid-way) and is
+    # also collected for the last-line parse below.
+    $fetchLines = @()
+    $fetchExit = -1
+    # Repair: -Force makes fetch-runtime.ps1 skip its "already current" check.
+    # Splatted, so a plain update passes no extra argument at all (PS 5.1
+    # drops an empty string argument to a native command anyway).
+    $fetchExtra = @()
+    if ($Repair) { $fetchExtra = @('-Force') }
+    $ErrorActionPreference = "Continue"
+    try {
+        $fetchLines = @(& $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $fetchScript -StageOnly -Into $daemonDir @fetchExtra 2>&1 |
+            ForEach-Object { $l = "$_".Trim(); if ($l) { Write-Host $l; $l } })
+        $fetchExit = $LASTEXITCODE
+    } catch {
+        $fetchLines = @("runtime: ERROR: could not start fetch-runtime.ps1: $($_.Exception.Message)")
+        Write-Host $fetchLines[0]
+    }
+    $ErrorActionPreference = "Stop"
+    $fetchLast = ""
+    if ($fetchLines.Count -gt 0) { $fetchLast = $fetchLines[$fetchLines.Count - 1] }
+    # The child's own reason, for the ERROR line: its last "runtime: ERROR:"
+    # line (download, checksum, signature, smoke run, disk), else a generic one.
+    $fetchReason = "runtime staging failed: fetch-runtime.ps1 exit $fetchExit, last line '$fetchLast'"
+    $errLines = @($fetchLines | Where-Object { $_ -like "runtime: ERROR: *" })
+    if ($errLines.Count -gt 0) { $fetchReason = "runtime staging failed: " + $errLines[$errLines.Count - 1].Substring("runtime: ERROR: ".Length).TrimEnd('.') }
+    $stagedRuntime = $false
+    if ($fetchExit -eq 0 -and $fetchLast -eq "runtime:current") {
+        Write-Host "  the runtime is current, nothing to swap"
+    } elseif ($fetchExit -eq 0 -and $fetchLast -match '^runtime:installed \S+ \S+$') {
+        # Staged, swap needed. VERSION and VERIFIED are already inside.
+        if (-not (Test-RuntimeStamp $runtimeNew) -or -not (Test-Path -LiteralPath (Join-Path $runtimeNew "VERSION") -PathType Leaf)) {
+            Remove-Tree $runtimeNew
+            Exit-Update "fetch-runtime.ps1 reported a staged runtime, but daemon\runtime.new is incomplete. Your current version still works." "runtime"
+        }
+        $stagedRuntime = $true
+    } else {
+        Remove-Tree $runtimeNew
+        Exit-Update "$fetchReason. Your current version still works." "runtime"
+    }
+
+    # Stop daemon. It must be down before the swap (spec 6.3).
     Write-Host "Stopping daemon..."
     Stop-Daemon
+
+    # Swap the runtime: rename the current one aside, rename runtime.new
+    # into place, delete the old one. A runtime.old that is still there is a
+    # leftover locked by a node.exe that was running from it; with the
+    # daemon stopped it can usually go now. If it cannot, nothing has been
+    # replaced yet, so the update stops with err:runtime rather than mixing
+    # runtimes.
+    if ($stagedRuntime) {
+        Write-Host "Swapping in the new runtime..."
+        Remove-Tree $runtimeOld
+        if (Test-Path -LiteralPath $runtimeOld) {
+            Remove-Tree $runtimeNew
+            Exit-Update "daemon\runtime.old is still in use by a running node.exe; close After Effects and update again. Your current version still works." "runtime"
+        }
+        $hadRuntime = Test-Path -LiteralPath $runtimeDir
+        if ($hadRuntime) {
+            try { [System.IO.Directory]::Move($runtimeDir, $runtimeOld) } catch {
+                $reason = $_.Exception.Message
+                Remove-Tree $runtimeNew
+                Exit-Update "could not move the current runtime aside: $reason. Your current version still works." "runtime"
+            }
+        }
+        Wait-TestGate $env:GAFFER_UPDATE_TEST_SWAP_GATE
+        try { [System.IO.Directory]::Move($runtimeNew, $runtimeDir) } catch {
+            $reason = $_.Exception.Message
+            if ($hadRuntime -and -not (Test-Path -LiteralPath $runtimeDir)) {
+                try { [System.IO.Directory]::Move($runtimeOld, $runtimeDir) } catch {}
+            }
+            Remove-Tree $runtimeNew
+            Exit-Update "could not move the new runtime into place: $reason" "runtime-swap"
+        }
+        Remove-Tree $runtimeOld
+        if (Test-Path -LiteralPath $runtimeOld) { Write-Host "  daemon\runtime.old is still in use, it will be removed by the next update" }
+        Write-Host "  daemon\runtime is now $($fetchLast.Substring('runtime:installed '.Length))"
+    }
 
     # Replace files (preserve user data). version.json is excluded here and
     # written LAST (below): the panel reloads and the daemon self-restarts the
     # moment it changes. The usage-stats buffer and the icon cache are not in the
     # archive; excluding them also protects them from /PURGE.
+    # The runtime folders are not in the archive either: without /XD for
+    # them /PURGE deletes daemon\runtime (proven). /XD matches a folder name
+    # at any depth; nothing else in the package is called runtime*.
+    # node_modules is deliberately NOT excluded any more, so /PURGE removes
+    # the old dependency tree a 0.11.x install left behind.
     Write-Host "Replacing files..."
     # /R:2 /W:2: two retries, two seconds apart, on a file that is briefly
     # locked (an indexer, a daemon not yet gone), instead of robocopy's
     # default of a million retries at 30 seconds each.
     robocopy $extractDir $panelDir /E /PURGE /R:2 /W:2 `
         /XF chat-history.json chat-history-*.json .gaffer-config.json version.json .gaffer-usage-buffer.json `
-        /XD node_modules dist .gaffer-icons | Out-Null
+        /XD runtime runtime.new runtime.old dist .gaffer-icons | Out-Null
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
     if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync" }
 
-    # Restore chat history
-    if ($backup -and (Test-Path $backup)) {
-        Copy-Item $backup "$panelDir\chat-history.json" -Force
+    # Restore chat history and .gaffer-config.json. robocopy excluded them,
+    # so a failure here leaves them as they were; it still ends with
+    # err:sync, the files were replaced and the run is not finished.
+    try {
+        if ($backup -and (Test-Path $backup)) {
+            Copy-Item $backup "$panelDir\chat-history.json" -Force
+        }
+        Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName "$panelDir\" -Force }
+        if ($configBackup -and (Test-Path $configBackup)) {
+            Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
+        }
+    } catch {
+        Exit-Update "could not restore the chat history and settings after replacing the panel files: $($_.Exception.Message)" "sync"
     }
-    Get-ChildItem -Path $historyBackupDir -Filter "chat-history-*.json" -ErrorAction SilentlyContinue |
-        ForEach-Object { Copy-Item $_.FullName "$panelDir\" -Force }
 
-    # Restore .gaffer-config.json
-    if ($configBackup -and (Test-Path $configBackup)) {
-        Copy-Item $configBackup "$panelDir\.gaffer-config.json" -Force
-    }
-
-    # npm install - CEP spawns this script with a STRIPPED PATH, so bare `npm`
-    # doesn't resolve when launched from the panel's Update button (manual
-    # terminal runs never hit this - which is why they always worked).
-    Write-Host "Installing daemon dependencies..."
-    $nodeDirs = @(
-        "$env:ProgramFiles\nodejs",
-        "${env:ProgramFiles(x86)}\nodejs",
-        "$env:APPDATA\npm",
-        "$env:LOCALAPPDATA\Programs\nodejs",
-        "$env:NVM_SYMLINK"
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    foreach ($d in $nodeDirs) { $env:Path = "$d;$env:Path" }
-    $npmCmd = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-    if (-not $npmCmd) { $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue).Source }
-    if (-not $npmCmd) {
-        Exit-Update "npm not found in known Node.js locations or PATH - run this script from a terminal once"
-    }
-    Write-Host "  npm: $npmCmd"
-    Push-Location $daemonDir
-    try { & $npmCmd install --omit=dev } catch {}
-    $npmExit = $LASTEXITCODE
-    Pop-Location
-    if ($npmExit -ne 0) {
-        Exit-Update "npm install failed (exit $npmExit)" "npm"
-    }
+    # No dependency install step: the release ships the daemon as one bundled
+    # file and its runtime is handled above.
 
     # Stop any daemon that respawned mid-update (panel reloads on version.json
     # change and boots a clean one)
@@ -797,15 +1001,21 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # then a move on Windows, not an atomic rename.)
     # Copy-Item keeps the archive's timestamp, so stamp it as written now.
     $versionTmp = "$panelDir\version.json.tmp"
-    Copy-Item "$extractDir\version.json" $versionTmp -Force
-    (Get-Item -LiteralPath $versionTmp).LastWriteTime = Get-Date
-    Move-Item -LiteralPath $versionTmp -Destination "$panelDir\version.json" -Force
+    try {
+        Copy-Item "$extractDir\version.json" $versionTmp -Force
+        (Get-Item -LiteralPath $versionTmp).LastWriteTime = Get-Date
+        Move-Item -LiteralPath $versionTmp -Destination "$panelDir\version.json" -Force
+    } catch {
+        Remove-Item -LiteralPath $versionTmp -Force -ErrorAction SilentlyContinue
+        Exit-Update "could not write version.json after replacing the panel files: $($_.Exception.Message)" "sync"
+    }
 
-    # Cleanup
-    Remove-Item -Recurse -Force $tmpDir
+    # Cleanup. A leftover temp folder (a file still locked) must not turn a
+    # finished update into a failure.
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 
     Write-Host "=== Update complete: $(Get-Date) ==="
-    Write-Output "ok:$latestVersion"
+    Write-Result "ok:$latestVersion"
     Stop-Transcript
 } finally {
     # Runs on every way out of the block above, including the exit calls.
@@ -813,4 +1023,17 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # over must not delete its successor's lock on the way out.
     Exit-TakeoverMutex
     if ($script:haveLock -and ((Read-LockHolder) -eq "$PID")) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }
+}
+} catch { # top level: reached by any terminating error nothing above handled (exit calls never land here)
+    # The lock's finally above has already run. The ERROR line and
+    # err:internal are written only when no result line was written yet,
+    # so nothing ever follows an ok:, err: or busy: line.
+    $failure = $_
+    if (-not $script:resultWritten) {
+        Write-Host "ERROR: the updater stopped unexpectedly: $($failure.Exception.Message)"
+        Write-Result "err:internal"
+    }
+    if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+    try { Stop-Transcript | Out-Null } catch {}
+    exit $script:resultExit
 }
