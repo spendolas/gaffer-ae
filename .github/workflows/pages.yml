@@ -54,6 +54,9 @@ jobs:
       - name: install.md matches the README
         run: node scripts/site/build-install-md.mjs --check
 
+      - name: The no-JS wall matches the clips
+        run: node scripts/site/sync-nojs-wall.mjs --check
+
       - name: Build the sitemap
         run: node scripts/site/build-sitemap.mjs
 
