@@ -367,10 +367,11 @@ body {
   stroke-dashoffset: 0;
 }
 
-/* Secondary: the icon-only Copy button next to the app link. Plain colours from
-   config, a square with equal padding (a circle at the pill radius). */
+/* Secondary: the Copy button next to the app link, icon plus label, so the two halves of the pill balance.
+   Plain colours from config. On a phone both labels would not fit, so there it is icon-only: a square with
+   equal padding (a circle at the pill radius). */
 .dock-button {
-  padding: 0.625rem;
+  padding: 0.625rem 1.125rem;
   background: var(--color-secondary-fill);
   color: var(--color-text);
 }
@@ -385,16 +386,8 @@ body {
   display: none;
 }
 
-#dock[data-app="none"] .dock-button {
-  padding: 0.625rem 1.125rem;
-}
-
 #dock[data-app="none"] .dock-button:hover {
   filter: brightness(0.92);
-}
-
-#dock[data-app="none"] .dock-label-short {
-  display: inline;
 }
 
 @supports (background: color-mix(in srgb, red, blue)) {
@@ -428,8 +421,26 @@ body {
   outline-offset: 1px;
 }
 
-.dock-label-short {
-  display: none;
+@media (max-width: 600px) {
+  /* A phone has one button, so it spans the page width inside the 1rem side margin. */
+  #dock[data-app="none"] {
+    width: calc(100vw - 2rem);
+  }
+
+  #dock[data-app="none"] .dock-pill,
+  #dock[data-app="none"] .dock-ctas,
+  #dock[data-app="none"] .dock-button {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  #dock:not([data-app="none"]) .dock-label-short {
+    display: none;
+  }
+
+  #dock:not([data-app="none"]) .dock-button {
+    padding: 0.625rem;
+  }
 }
 
 .dock-note {

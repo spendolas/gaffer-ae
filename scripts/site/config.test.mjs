@@ -57,8 +57,7 @@ test('applyConfigSetsEveryVar', () => {
 });
 
 test('copyGroupIsNeverACssVar', () => {
-  assert.deepEqual(sortedKeys(defaults.copy), ['button', 'buttonCompact', 'headlineSub', 'headlineTitle', 'linkDesktop', 'note', 'toastError', 'toastOk']);
-  assert.equal(defaults.copy.button, 'Copy prompt');
+  assert.deepEqual(sortedKeys(defaults.copy), ['buttonCompact', 'headlineSub', 'headlineTitle', 'linkDesktop', 'note', 'toastError', 'toastOk']);
   assert.equal(defaults.copy.buttonCompact, 'Copy install prompt');
   assert.equal(defaults.grid.columnsCompact, 2);
   assert.equal('--grid-columns-compact' in configToCssVars(defaults), false, 'JS-only key');
