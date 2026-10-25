@@ -249,9 +249,9 @@ body {
 .dock-pill {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--dock-gap, 1.5rem);
-  /* The prompt text side gets 12px more than the button side. */
-  padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
+  padding: var(--dock-padding, 0.25rem);
   max-width: 100%;
   box-sizing: border-box;
   border-radius: var(--dock-radius, 999px);
@@ -264,6 +264,7 @@ body {
 }
 
 .dock-prompt {
+  display: none; /* the buttons carry the prompt; it shows only after a failed copy (is-revealed) or without JS */
   min-width: 0;
   font-family: var(--type-mono);
   font-size: var(--type-mono-size, 0.875rem);
@@ -455,40 +456,20 @@ body {
   .dock-note-sep { display: none; }
 }
 
-/* Compact: no visible prompt; the buttons still copy it all. The app link stays
-   (it no longer depends on width), so the pill holds both buttons centred. */
-@media (max-width: 600px) {
-  .dock-prompt {
-    display: none;
-  }
+/* After a failed copy the prompt is revealed above the buttons so it can be selected by hand. */
+#dock.is-revealed .dock-pill {
+  flex-wrap: wrap;
+  border-radius: min(var(--dock-radius, 999px), 1.25rem);
+  padding: 0.75rem;
+  justify-content: center;
+}
 
-  /* Just the buttons: even padding all round, none extra from the group. */
-  .dock-ctas {
-    padding: 0;
-  }
-
-  .dock-pill {
-    justify-content: center;
-    padding: var(--dock-padding, 0.25rem);
-  }
-
-  /* After a failed copy the prompt is revealed above the button so it can
-     be selected by hand. */
-  #dock.is-revealed .dock-pill {
-    flex-wrap: wrap;
-    border-radius: min(var(--dock-radius, 999px), 1.25rem);
-    padding: 0.75rem;
-    justify-content: center;
-  }
-
-  #dock.is-revealed .dock-prompt {
-    display: block;
-    order: -1;
-    flex: 1 0 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
+#dock.is-revealed .dock-prompt {
+  display: block;
+  order: -1;
+  flex: 1 0 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* The toast drops in from the top of the screen, clear of the headline and the dock whatever their
