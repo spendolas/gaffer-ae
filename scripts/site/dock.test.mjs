@@ -272,14 +272,22 @@ test('licenceFileForTheLucideIconShipsWithTheSite', () => {
   assert.match(lic, /Lucide Icons and Contributors/);
 });
 
-test('stylesheetCopyIsBorderlessSecondaryFillAndCompactGroupPaddingIsZero', () => {
+test('stylesheetCopyIsBorderlessSecondaryFillAndTheGroupPaddingIsTheConfiguredZero', () => {
   const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
   const cta = css.match(/\.dock-cta \{[^}]*\}/)[0];
   assert.match(cta, /border: 0;/);
   assert.ok(!/calc\(0\.625rem - 1px\)/.test(css), 'no 1px padding hack');
   assert.match(css, /\.dock-button \{[^}]*background: var\(--color-secondary-fill\)/);
   assert.match(css, /\.dock-button:hover \{[^}]*background: var\(--color-secondary-hover\)/);
-  assert.match(css, /@media \(max-width: 600px\) \{[\s\S]*?\.dock-ctas \{\s*padding: 0;/, 'group padding zeroed when compact');
+  assert.match(css, /\.dock-ctas \{[^}]*padding: var\(--dock-cta-padding, 0\);/, 'group padding follows the config (0), at every width');
+});
+
+test('stylesheetHidesThePromptAtEveryWidthAndRevealsItOnlyAfterAFailedCopy', () => {
+  const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
+  assert.match(css, /\.dock-prompt \{\s*display: none;/, 'hidden by default, not only in a phone media query');
+  assert.match(css, /#dock\.is-revealed \.dock-prompt \{\s*display: block;/);
+  assert.doesNotMatch(css, /calc\(var\(--dock-padding, 0\.25rem\) \+ 0\.75rem\)/, 'no extra padding for the prompt side: the pill holds just the buttons');
+  assert.match(css, /\.dock-pill \{[^}]*justify-content: center;/, 'the two buttons are centred');
 });
 
 const nav = (o) => readEnvironment(o);
