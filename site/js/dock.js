@@ -107,8 +107,8 @@ function selectNode(node, doc = document, sel = getSelection()) {
   sel.addRange(range);
 }
 
-// execCommand fallback. Selects the visible prompt; in the compact variant the
-// prompt is not rendered, so a throwaway textarea carries the full text.
+// execCommand fallback. Selects the visible prompt; while the prompt is collapsed (zero size, the normal
+// state) a throwaway textarea carries the full text.
 // On success the selection and focus are put back as they were before the copy;
 // on failure the selection is left alone (the dock keeps the prompt selected so
 // the visitor can copy by hand). `dom` is injectable for tests.
@@ -124,7 +124,7 @@ export function makeExecCopy(root, dom = {}) {
     let ok = false;
     try {
       const prompt = root.querySelector('.dock-prompt');
-      if (prompt && prompt.getClientRects().length > 0) {
+      if (prompt && prompt.offsetWidth > 0 && prompt.offsetHeight > 0) {
         selectNode(prompt, doc, sel);
       } else {
         ta = doc.createElement('textarea');
@@ -185,13 +185,11 @@ export function mountDock(root, { toast, env, getCopy = () => defaults.copy, get
   const appAnchor = group.querySelector('.dock-app');
   const refresh = () => {
     if (appAnchor) appAnchor.textContent = getCopy().linkDesktop;
-    // Icon-only on desktop: the accessible name and tooltip are the wording config.
-    // With no app link the visible label is shown, and the accessible name follows it
-    // (label in name); otherwise the button is icon-only and copy.button names it.
-    const name = root.dataset.app === 'none' ? getCopy().buttonCompact : getCopy().button;
+    // The visible label is the accessible name (label in name); on a phone with an app link the label is
+    // hidden by css and the button is icon-only, still named by it.
+    const name = getCopy().buttonCompact;
     button.setAttribute('aria-label', name);
-    button.title = name;
-    short.textContent = getCopy().buttonCompact;
+    short.textContent = name;
   };
   refresh();
   button.append(icon, short);

@@ -249,9 +249,10 @@ body {
 .dock-pill {
   display: flex;
   align-items: center;
-  gap: var(--dock-gap, 1.5rem);
-  /* The prompt text side gets 12px more than the button side. */
-  padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
+  justify-content: center;
+  gap: 0; /* opens to --dock-gap when the prompt is revealed */
+  padding: var(--dock-padding, 0.25rem);
+  transition: column-gap var(--dock-icon-anim-ms, 280ms) ease, row-gap var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, border-radius var(--dock-icon-anim-ms, 280ms) ease;
   max-width: 100%;
   box-sizing: border-box;
   border-radius: var(--dock-radius, 999px);
@@ -264,6 +265,14 @@ body {
 }
 
 .dock-prompt {
+  /* Collapsed to nothing, not display:none, so revealing it can animate: zero width on a wide screen
+     (the pill grows into it), zero height on a phone (see the media query). visibility keeps it out of
+     the accessibility tree and the tab order until it shows. */
+  visibility: hidden;
+  max-width: 0;
+  max-height: 3rem;
+  opacity: 0;
+  transition: max-width var(--dock-icon-anim-ms, 280ms) ease, max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, visibility 0s linear var(--dock-icon-anim-ms, 280ms);
   min-width: 0;
   font-family: var(--type-mono);
   font-size: var(--type-mono-size, 0.875rem);
@@ -366,10 +375,11 @@ body {
   stroke-dashoffset: 0;
 }
 
-/* Secondary: the icon-only Copy button next to the app link. Plain colours from
-   config, a square with equal padding (a circle at the pill radius). */
+/* Secondary: the Copy button next to the app link, icon plus label, so the two halves of the pill balance.
+   Plain colours from config. On a phone both labels would not fit, so there it is icon-only: a square with
+   equal padding (a circle at the pill radius). */
 .dock-button {
-  padding: 0.625rem;
+  padding: 0.625rem 1.125rem;
   background: var(--color-secondary-fill);
   color: var(--color-text);
 }
@@ -384,16 +394,8 @@ body {
   display: none;
 }
 
-#dock[data-app="none"] .dock-button {
-  padding: 0.625rem 1.125rem;
-}
-
 #dock[data-app="none"] .dock-button:hover {
   filter: brightness(0.92);
-}
-
-#dock[data-app="none"] .dock-label-short {
-  display: inline;
 }
 
 @supports (background: color-mix(in srgb, red, blue)) {
@@ -427,8 +429,26 @@ body {
   outline-offset: 1px;
 }
 
-.dock-label-short {
-  display: none;
+@media (max-width: 600px) {
+  /* A phone has one button, so it spans the page width inside the 1rem side margin. */
+  #dock[data-app="none"] {
+    width: calc(100vw - 2rem);
+  }
+
+  #dock[data-app="none"] .dock-pill,
+  #dock[data-app="none"] .dock-ctas,
+  #dock[data-app="none"] .dock-button {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  #dock:not([data-app="none"]) .dock-label-short {
+    display: none;
+  }
+
+  #dock:not([data-app="none"]) .dock-button {
+    padding: 0.625rem;
+  }
 }
 
 .dock-note {
@@ -455,40 +475,59 @@ body {
   .dock-note-sep { display: none; }
 }
 
-/* Compact: no visible prompt; the buttons still copy it all. The app link stays
-   (it no longer depends on width), so the pill holds both buttons centred. */
+/* After a failed copy the prompt is revealed so it can be selected by hand: on a wide screen as the one-line pill
+   (the prompt on the left, the two buttons on the right), on a phone above the buttons, wrapped. Both
+   animate over --dock-icon-anim-ms, and play backwards when the prompt hides again. 64ch is just over the
+   prompt's own width in the monospace font. */
+#dock.is-revealed .dock-pill {
+  justify-content: flex-start;
+  column-gap: var(--dock-gap, 1.5rem);
+  padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
+}
+
+#dock.is-revealed .dock-prompt {
+  visibility: visible;
+  max-width: 64ch;
+  opacity: 1;
+  transition: max-width var(--dock-icon-anim-ms, 280ms) ease, max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, visibility 0s;
+}
+
 @media (max-width: 600px) {
-  .dock-prompt {
-    display: none;
-  }
-
-  /* Just the buttons: even padding all round, none extra from the group. */
-  .dock-ctas {
-    padding: 0;
-  }
-
+  /* A phone's pill is always the wrapping layout (the collapsed prompt is a zero-height first row), at a
+     radius a little under its half-height, so the reveal changes only numbers and can animate. */
   .dock-pill {
+    flex-wrap: wrap;
     justify-content: center;
-    padding: var(--dock-padding, 0.25rem);
+    border-radius: 1.5rem;
   }
 
-  /* After a failed copy the prompt is revealed above the button so it can
-     be selected by hand. */
+  .dock-prompt {
+    order: -1;
+    flex: 1 0 100%;
+    box-sizing: border-box;
+    max-width: 100%;
+    max-height: 0;
+    padding: 0 0.75rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+    transition: max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, visibility 0s linear var(--dock-icon-anim-ms, 280ms);
+  }
+
+  /* The button keeps its size and place: the pill's own padding does not change, the room comes from the
+     prompt's padding, so only the box above the button grows. */
   #dock.is-revealed .dock-pill {
-    flex-wrap: wrap;
-    border-radius: min(var(--dock-radius, 999px), 1.25rem);
-    padding: 0.75rem;
+    border-radius: 1.25rem;
+    padding: var(--dock-padding, 0.25rem);
     justify-content: center;
   }
 
   #dock.is-revealed .dock-prompt {
-    display: block;
-    order: -1;
-    flex: 1 0 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    max-width: 100%;
+    max-height: 5.5rem;
+    padding: 0.75rem 0.75rem 1rem;
+    transition: max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, visibility 0s;
   }
-
 }
 
 /* The toast drops in from the top of the screen, clear of the headline and the dock whatever their
@@ -526,6 +565,12 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   #toast {
+    transition: none;
+  }
+
+  .dock-pill,
+  .dock-prompt,
+  #dock.is-revealed .dock-prompt {
     transition: none;
   }
 

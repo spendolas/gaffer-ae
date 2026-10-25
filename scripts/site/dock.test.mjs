@@ -128,7 +128,7 @@ function fakeCopyDom({ visiblePrompt, copyOk, selected = [], active = null }) {
   doc.body = Object.assign(doc.body, { tag: 'body' });
   doc.activeElement = active === 'button' ? button : doc.body;
   const root = {
-    querySelector: () => ({ getClientRects: () => (visiblePrompt ? [{}] : []) }),
+    querySelector: () => ({ offsetWidth: visiblePrompt ? 300 : 0, offsetHeight: visiblePrompt ? 20 : 0 }), // collapsed = zero size
   };
   return { doc, sel, root, ranges, button, created };
 }
@@ -222,7 +222,7 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
   const prevDoc = globalThis.document;
   globalThis.document = { createElement: () => mk(''), addEventListener() {}, removeEventListener() {} };
   try {
-    const copy = { button: 'Copy', buttonCompact: 'C', linkDesktop: 'App', toastOk: 'ok', toastError: 'err' };
+    const copy = { buttonCompact: 'C', linkDesktop: 'App', toastOk: 'ok', toastError: 'err' };
     const ui = mountDock(root, { toast: { show() {} }, env: {}, getCopy: () => copy });
     assert.equal(app.textContent, 'App');
     assert.deepEqual(group.kids.map((k) => k.className), ['dock-app', 'dock-cta dock-button'], 'app first, then Copy');
@@ -232,16 +232,14 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
     assert.match(icon.innerHTML, /^<svg [^>]*viewBox="0 0 24 24"[^>]*fill="none"[^>]*stroke="currentColor"[^>]*stroke-width="2"[^>]*stroke-linecap="round"[^>]*stroke-linejoin="round"[^>]*aria-hidden="true"[^>]*focusable="false"/);
     assert.ok(icon.innerHTML.includes('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>'), 'Lucide copy rect');
     assert.ok(icon.innerHTML.includes('d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"'), 'Lucide copy path');
-    assert.equal(btn.attrs['aria-label'], 'Copy');
-    assert.equal(btn.title, 'Copy');
+    assert.equal(btn.attrs['aria-label'], 'C', 'the visible label names the button');
+    assert.equal(btn.title, undefined, 'no tooltip repeating a visible label');
     assert.equal(short.className, 'dock-label-short');
     assert.equal(short.textContent, 'C', 'compact label from config');
-    copy.button = 'Copy it';
     copy.buttonCompact = 'Cp';
     copy.linkDesktop = 'App2';
     ui.refresh();
-    assert.equal(btn.attrs['aria-label'], 'Copy it', 'label updates live');
-    assert.equal(btn.title, 'Copy it');
+    assert.equal(btn.attrs['aria-label'], 'Cp', 'label updates live');
     assert.equal(short.textContent, 'Cp');
     assert.equal(app.textContent, 'App2');
     mountDock(root, { toast: { show() {} }, env: {}, getCopy: () => copy });
@@ -250,13 +248,11 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
     const group2 = { kids: [], append(n) { this.kids.push(n); }, querySelector: () => null };
     const root2 = { ...root, dataset: {}, querySelector: (sel) => ({ '.dock-pill': { querySelector: () => null }, '.dock-prompt': prompt, '.dock-ctas': group2 })[sel] ?? null };
     const phone = { userAgent: 'Mozilla/5.0 (Linux; Android 14) Mobile', platform: 'Linux armv81', maxTouchPoints: 5 };
-    copy.button = 'Copy prompt';
     copy.buttonCompact = 'Copy install prompt';
     const ui2 = mountDock(root2, { toast: { show() {} }, env: {}, getCopy: () => copy, nav: phone });
     assert.equal(root2.dataset.app, 'none');
     const btn2 = group2.kids[0];
     assert.equal(btn2.attrs['aria-label'], 'Copy install prompt');
-    assert.equal(btn2.title, 'Copy install prompt');
     copy.buttonCompact = 'Copy it all';
     ui2.refresh();
     assert.equal(btn2.attrs['aria-label'], 'Copy it all', 'follows the visible label live');
@@ -272,14 +268,45 @@ test('licenceFileForTheLucideIconShipsWithTheSite', () => {
   assert.match(lic, /Lucide Icons and Contributors/);
 });
 
-test('stylesheetCopyIsBorderlessSecondaryFillAndCompactGroupPaddingIsZero', () => {
+test('stylesheetCopyIsBorderlessSecondaryFillAndTheGroupPaddingIsTheConfiguredZero', () => {
   const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
   const cta = css.match(/\.dock-cta \{[^}]*\}/)[0];
   assert.match(cta, /border: 0;/);
   assert.ok(!/calc\(0\.625rem - 1px\)/.test(css), 'no 1px padding hack');
   assert.match(css, /\.dock-button \{[^}]*background: var\(--color-secondary-fill\)/);
   assert.match(css, /\.dock-button:hover \{[^}]*background: var\(--color-secondary-hover\)/);
-  assert.match(css, /@media \(max-width: 600px\) \{[\s\S]*?\.dock-ctas \{\s*padding: 0;/, 'group padding zeroed when compact');
+  assert.match(css, /\.dock-ctas \{[^}]*padding: var\(--dock-cta-padding, 0\);/, 'group padding follows the config (0), at every width');
+});
+
+test('stylesheetCollapsesThePromptAtEveryWidthAndAnimatesItOpenAfterAFailedCopy', () => {
+  const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
+  const prompt = css.match(/\n\.dock-prompt \{[^}]*\}/)[0];
+  assert.match(prompt, /visibility: hidden;/, 'collapsed and out of the accessibility tree, not only in a phone media query');
+  assert.match(prompt, /max-width: 0;/);
+  assert.match(prompt, /opacity: 0;/);
+  assert.doesNotMatch(prompt, /display: none/, 'display:none cannot be animated');
+  assert.match(prompt, /transition: max-width [^;]*max-height [^;]*opacity [^;]*visibility 0s linear/, 'it animates out, hiding at the end');
+  const revealed = css.match(/\n#dock\.is-revealed \.dock-prompt \{[^}]*\}/)[0];
+  assert.match(revealed, /visibility: visible;/);
+  assert.match(revealed, /max-width: 64ch;/);
+  assert.match(revealed, /opacity: 1;/);
+  assert.match(revealed, /visibility 0s;/, 'it shows at once and grows');
+  // The pill's reveal changes only animatable numbers: the gap, the padding and the radius.
+  assert.match(css.match(/\n\.dock-pill \{[^}]*\}/)[0], /transition: column-gap [^;]*row-gap [^;]*padding [^;]*border-radius/);
+  // The revealed state on a wide screen is the designed one-line pill, not a wrapped box: wrapping is phone-only.
+  const at = css.indexOf('#dock.is-revealed .dock-pill');
+  const wide = css.slice(at, css.indexOf('@media (max-width: 600px) {', at));
+  assert.doesNotMatch(wide, /flex-wrap: wrap/);
+  const phone = css.slice(css.indexOf('@media (max-width: 600px) {', at));
+  assert.match(phone, /\.dock-pill \{[^}]*flex-wrap: wrap;/, 'a phone pill always wraps: the collapsed prompt is a zero-height row');
+  assert.match(phone, /\.dock-prompt \{[^}]*max-height: 0;/);
+  assert.match(phone, /#dock\.is-revealed \.dock-prompt \{[^}]*max-height: 5\.5rem;/);
+  // The phone's button keeps its size and place: the pill padding is the same revealed or not.
+  assert.match(phone.match(/#dock\.is-revealed \.dock-pill \{[^}]*\}/)[0], /padding: var\(--dock-padding, 0\.25rem\);/);
+  assert.doesNotMatch(phone.match(/#dock\.is-revealed \.dock-pill \{[^}]*\}/)[0], /row-gap/);
+  assert.doesNotMatch(css.match(/\n\.dock-pill \{[^}]*\}/)[0], /\+ 0\.75rem/, 'no extra padding for the prompt side in the normal pill: it holds just the buttons');
+  assert.match(css, /\.dock-pill \{[^}]*justify-content: center;/, 'the two buttons are centred');
+  assert.match(css, /prefers-reduced-motion: reduce\) \{[\s\S]*\.dock-prompt,[\s\S]*transition: none;/, 'no motion when the visitor asks for none');
 });
 
 const nav = (o) => readEnvironment(o);
@@ -567,7 +594,7 @@ test('successfulCopyShowsTheCheckThenRevertsAfterTheHold', async () => {
     assert.equal(h.classes.has('is-copied'), true);
     assert.deepEqual([...h.pending.values()].map((p) => p.ms), [700], 'hold comes from dock.iconRevertMs');
     assert.equal(h.toasts[0][1], undefined, 'the toast still shows');
-    assert.equal(btn.attrs['aria-label'], 'Copy prompt', 'the accessible name never changes');
+    assert.equal(btn.attrs['aria-label'], 'Copy install prompt', 'the accessible name never changes');
     const [fid, fired] = [...h.pending.entries()][0];
     h.pending.delete(fid);
     fired.f();

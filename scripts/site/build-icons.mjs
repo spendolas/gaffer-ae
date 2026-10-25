@@ -26,7 +26,8 @@ if (!glyphPaths.length || glyphPaths.some((m) => m[2] !== GLYPH_FILL)) throw new
 const glyph = `<path d="${glyphPaths.map((m) => m[1]).join(' ')}" fill="${GLYPH_FILL}"/>`;
 const TILE = rect.match(/fill="([^"]+)"/)[1];
 
-const svgDoc = (inner) => `<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">\n${inner}\n</svg>\n`;
+const iconMeta = JSON.parse(readFileSync(join(root, 'scripts/site/asset-meta.json'), 'utf8')).files['icon.svg'];
+const svgDoc = (inner) => `<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">\n<title>${iconMeta.title}</title>\n<desc>${iconMeta.description}</desc>\n${inner}\n</svg>\n`;
 export const variants = {
   tile: svgDoc(`${rect}\n${glyph}`),
   bleed: svgDoc(`<rect width="512" height="512" fill="${TILE}"/>\n${glyph}`),
