@@ -456,20 +456,31 @@ body {
   .dock-note-sep { display: none; }
 }
 
-/* After a failed copy the prompt is revealed above the buttons so it can be selected by hand. */
+/* After a failed copy the prompt is revealed so it can be selected by hand: on a wide screen as the one-line pill
+   (the prompt on the left, the two buttons on the right), on a phone above the buttons, wrapped. */
 #dock.is-revealed .dock-pill {
-  flex-wrap: wrap;
-  border-radius: min(var(--dock-radius, 999px), 1.25rem);
-  padding: 0.75rem;
-  justify-content: center;
+  justify-content: flex-start;
+  padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
 }
 
 #dock.is-revealed .dock-prompt {
   display: block;
-  order: -1;
-  flex: 1 0 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  #dock.is-revealed .dock-pill {
+    flex-wrap: wrap;
+    border-radius: min(var(--dock-radius, 999px), 1.25rem);
+    padding: 0.75rem;
+    justify-content: center;
+  }
+
+  #dock.is-revealed .dock-prompt {
+    order: -1;
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* The toast drops in from the top of the screen, clear of the headline and the dock whatever their

@@ -137,8 +137,12 @@
     <style>
       #cover { display: none; }
       .dock-app { text-decoration: underline; }
-      .dock-pill { flex-wrap: wrap; border-radius: 1.25rem; padding: 0.75rem 1rem; }
-      .dock-prompt { display: block; flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+      .dock-prompt { display: block; }
+      .dock-pill { justify-content: flex-start; padding-left: calc(var(--dock-padding, 0.25rem) + 0.75rem); }
+      @media (max-width: 600px) {
+        .dock-pill { flex-wrap: wrap; border-radius: 1.25rem; padding: 0.75rem 1rem; }
+        .dock-prompt { flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+      }
     </style>
   </noscript>
 </head>
