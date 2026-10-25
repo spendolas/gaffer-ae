@@ -140,13 +140,115 @@
       .dock-prompt { visibility: visible; max-width: none; max-height: none; opacity: 1; }
       .dock-pill { justify-content: flex-start; column-gap: var(--dock-gap, 1.5rem); padding-left: calc(var(--dock-padding, 0.25rem) + 0.75rem); }
       @media (max-width: 600px) {
-        .dock-pill { border-radius: 1.25rem; padding: 0.75rem 1rem; row-gap: 0.5rem; }
+        .dock-pill { justify-content: center; border-radius: 1.25rem; padding: 0.75rem 1rem; row-gap: 0.5rem; }
         .dock-prompt { max-width: 100%; }
       }
     </style>
   </noscript>
 </head>
 <body>
+  <!-- nojs-wall:begin -->
+  <noscript>
+    <style>
+      .nojs-wall { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; padding-top: var(--grid-gap, 16px); box-sizing: border-box; }
+      .nojs-row { display: flex; flex-wrap: nowrap; justify-content: center; gap: var(--grid-gap, 16px); margin-bottom: var(--grid-gap, 16px); }
+      .nojs-tile { flex: none; height: 26vh; width: auto; border-radius: var(--grid-radius, 32px); object-fit: cover; }
+      .nojs-wall::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, var(--color-stage) 8%, transparent 32%), radial-gradient(ellipse 105% 68% at 50% 100%, var(--color-stage) 35%, transparent 100%); opacity: 0.9; }
+    </style>
+    <div class="nojs-wall" aria-hidden="true">
+      <div class="nojs-row">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <video class="nojs-tile" width="1280" height="800" src="media/clip-08.mp4" poster="media/_generated/clip-08.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <video class="nojs-tile" width="1000" height="500" src="media/clip-01.mp4" poster="media/_generated/clip-01.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+      </div>
+      <div class="nojs-row">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <video class="nojs-tile" width="800" height="800" src="media/clip-03.mp4" poster="media/_generated/clip-03.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <video class="nojs-tile" width="800" height="800" src="media/clip-04.mp4" poster="media/_generated/clip-04.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+      </div>
+      <div class="nojs-row">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <video class="nojs-tile" width="1300" height="542" src="media/clip-06.mp4" poster="media/_generated/clip-06.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <video class="nojs-tile" width="800" height="800" src="media/clip-07.mp4" poster="media/_generated/clip-07.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+      </div>
+      <div class="nojs-row">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <video class="nojs-tile" width="1000" height="500" src="media/clip-01.mp4" poster="media/_generated/clip-01.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <video class="nojs-tile" width="800" height="800" src="media/clip-02.mp4" poster="media/_generated/clip-02.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+      </div>
+      <div class="nojs-row">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-05.jpg" alt="">
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <video class="nojs-tile" width="800" height="800" src="media/clip-04.mp4" poster="media/_generated/clip-04.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <video class="nojs-tile" width="800" height="800" src="media/clip-05.mp4" poster="media/_generated/clip-05.jpg" autoplay muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback tabindex="-1"></video>
+        <img class="nojs-tile" width="1300" height="542" src="media/_generated/clip-06.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-07.jpg" alt="">
+        <img class="nojs-tile" width="1280" height="800" src="media/_generated/clip-08.jpg" alt="">
+        <img class="nojs-tile" width="1000" height="500" src="media/_generated/clip-01.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-02.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-03.jpg" alt="">
+        <img class="nojs-tile" width="800" height="800" src="media/_generated/clip-04.jpg" alt="">
+      </div>
+    </div>
+  </noscript>
+  <!-- nojs-wall:end -->
   <div id="stage" aria-hidden="true"></div>
   <canvas class="fader" aria-hidden="true"></canvas>
   <!-- One bottom-anchored column: the headline sits above the dock, so the two reflow together whatever the
