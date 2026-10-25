@@ -8,10 +8,13 @@
  * name specific Grip tools in either; they can change and the agent discovers them.
  */
 import { translateToJSX } from './figma-translator.js';
+import { closedObject } from '../closed-object.js';
 
 export function register(server, queue, z) {
+  // Closed objects, like the zod 3 tools/list contract (see closed-object.js).
+  var obj = (shape) => closedObject(z, shape);
   var LayerSchema = z.lazy(() =>
-    z.object({
+    obj({
       name: z.string(),
       type: z.enum(['RECTANGLE', 'ELLIPSE', 'PATH', 'TEXT', 'FRAME', 'GROUP']),
       x: z.number(),
@@ -25,48 +28,48 @@ export function register(server, queue, z) {
       cornerRadius: z.union([z.number(), z.array(z.number())]).optional(),
       cornerSmoothing: z.number().optional(),
       frameMode: z.enum(['precomp', 'null']).optional(),
-      path: z.object({
+      path: obj({
         vertices: z.array(z.array(z.number())),
         inTangents: z.array(z.array(z.number())),
         outTangents: z.array(z.array(z.number())),
         closed: z.boolean(),
       }).optional(),
-      fills: z.array(z.object({
+      fills: z.array(obj({
         type: z.enum(['SOLID', 'GRADIENT_LINEAR', 'GRADIENT_RADIAL']),
-        color: z.object({ r: z.number(), g: z.number(), b: z.number() }).optional(),
+        color: obj({ r: z.number(), g: z.number(), b: z.number() }).optional(),
         opacity: z.number().optional(),
-        stops: z.array(z.object({
-          color: z.object({ r: z.number(), g: z.number(), b: z.number() }),
+        stops: z.array(obj({
+          color: obj({ r: z.number(), g: z.number(), b: z.number() }),
           position: z.number(),
           opacity: z.number().optional(),
         })).optional(),
       })).optional(),
-      strokes: z.array(z.object({
-        color: z.object({ r: z.number(), g: z.number(), b: z.number() }),
+      strokes: z.array(obj({
+        color: obj({ r: z.number(), g: z.number(), b: z.number() }),
         width: z.number(),
         opacity: z.number().optional(),
         cap: z.enum(['BUTT', 'ROUND', 'SQUARE']).optional(),
         join: z.enum(['MITER', 'ROUND', 'BEVEL']).optional(),
         dashes: z.array(z.number()).optional(),
       })).optional(),
-      effects: z.array(z.object({
+      effects: z.array(obj({
         type: z.enum(['DROP_SHADOW', 'INNER_SHADOW', 'LAYER_BLUR']),
-        color: z.object({ r: z.number(), g: z.number(), b: z.number(), a: z.number().optional() }).optional(),
-        offset: z.object({ x: z.number(), y: z.number() }).optional(),
+        color: obj({ r: z.number(), g: z.number(), b: z.number(), a: z.number().optional() }).optional(),
+        offset: obj({ x: z.number(), y: z.number() }).optional(),
         radius: z.number(),
         spread: z.number().optional(),
       })).optional(),
-      text: z.object({
+      text: obj({
         content: z.string(),
         fontSize: z.number(),
-        font: z.object({ family: z.string(), style: z.string().optional() }),
-        color: z.object({ r: z.number(), g: z.number(), b: z.number() }).optional(),
+        font: obj({ family: z.string(), style: z.string().optional() }),
+        color: obj({ r: z.number(), g: z.number(), b: z.number() }).optional(),
         justification: z.enum(['LEFT', 'CENTER', 'RIGHT']).optional(),
         lineHeight: z.number().optional(),
         letterSpacing: z.number().optional(),
         boxWidth: z.number().optional(),
       }).optional(),
-      children: z.array(z.lazy(() => LayerSchema)).optional(),
+      children: z.array(LayerSchema).optional(),
     })
   );
 
@@ -77,7 +80,7 @@ export function register(server, queue, z) {
         'Import Figma layers into After Effects. Creates matching AE layers deterministically from structured layer data. Read the design from Grip first (the live, preferred Figma connection), reshape that result into the layers schema below, then pass it here. A REST-based Figma connector can also supply this data, but only for published content and it cannot edit the canvas.',
       inputSchema: {
         layers: z.array(LayerSchema).describe('Array of Figma layer objects to create in AE'),
-        artboard: z.object({
+        artboard: obj({
           width: z.number(),
           height: z.number(),
           name: z.string().optional(),

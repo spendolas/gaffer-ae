@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { decide, compareVersions, extractNotes, GateError, REQUIRED_ASSETS } from './release-gate.mjs';
+import { requiredAssets, decide, compareVersions, extractNotes, GateError, REQUIRED_ASSETS } from './release-gate.mjs';
 
 const CHANGELOG = [
   '# Changelog',
@@ -29,7 +29,7 @@ const CHANGELOG = [
 
 const allAssets = () => REQUIRED_ASSETS.map((name) => ({ name }));
 
-test('published release with all four assets -> skip', () => {
+test('published release with all five assets -> skip', () => {
   const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets: allAssets() }, changelog: '' });
   assert.equal(r.action, 'skip');
 });
@@ -43,6 +43,48 @@ test('published release missing one asset -> recover', () => {
   const assets = allAssets().filter((a) => a.name !== 'gaffer-update-win.zip');
   const r = decide({ version: '0.11.0', tags: ['v0.11.0'], release: { isDraft: false, assets }, changelog: CHANGELOG });
   assert.equal(r.action, 'recover');
+});
+
+test('the required asset list is the four archives plus SHA256SUMS.txt', () => {
+  assert.deepEqual([...REQUIRED_ASSETS].sort(), [
+    'SHA256SUMS.txt',
+    'gaffer-install-mac.tar.gz',
+    'gaffer-install-win.zip',
+    'gaffer-update-mac.tar.gz',
+    'gaffer-update-win.zip',
+  ]);
+});
+
+const four = () => requiredAssets('0.11.3').map((name) => ({ name }));
+
+test('v0.11.3 published with four assets (no SHA256SUMS.txt) -> skip', () => {
+  assert.equal(requiredAssets('0.11.3').length, 4);
+  const r = decide({ version: '0.11.3', tags: ['v0.11.3'], release: { isDraft: false, assets: four() }, changelog: '' });
+  assert.equal(r.action, 'skip');
+});
+
+test('0.12.0 with four assets -> recover', () => {
+  const r = decide({ version: '0.12.0', tags: ['v0.12.0'], release: { isDraft: false, assets: four() }, changelog: CHANGELOG.replace('0.11.0', '0.12.0') });
+  assert.equal(r.action, 'recover');
+});
+
+test('requiredAssets compares the numeric version only: a 0.12.0 prerelease needs SHA256SUMS.txt', () => {
+  assert.equal(requiredAssets('0.12.0-beta.1').length, 5);
+  assert.ok(requiredAssets('0.12.0-beta.1').includes('SHA256SUMS.txt'));
+  assert.equal(requiredAssets('0.11.4-beta.1').length, 4);
+  assert.equal(requiredAssets('0.12.0').length, 5);
+  assert.equal(requiredAssets('0.11.3').length, 4);
+  assert.equal(requiredAssets('1.0.0-rc.1').length, 5);
+});
+
+test('0.12.0-beta.1 published with four assets -> recover (missing SHA256SUMS.txt)', () => {
+  const r = decide({ version: '0.12.0-beta.1', tags: ['v0.12.0-beta.1'], release: { isDraft: false, assets: four() }, changelog: CHANGELOG.replace('0.11.0-beta.1', '0.12.0-beta.1') });
+  assert.equal(r.action, 'recover');
+});
+
+test('0.12.0 with five assets -> skip', () => {
+  const r = decide({ version: '0.12.0', tags: ['v0.12.0'], release: { isDraft: false, assets: allAssets() }, changelog: '' });
+  assert.equal(r.action, 'skip');
 });
 
 test('recover skips the version check even when a higher tag exists', () => {

@@ -18,14 +18,15 @@ Gaffer is an After Effects automation agent: a panel inside After Effects where 
 project by writing ExtendScript through MCP tools. Source and releases: https://github.com/spendolas/gaffer-ae
 
 This page is the install procedure, written for Claude to carry out for a user who asked it to
-"Install Gaffer by following https://gafferae.com/install.md". Nothing here is pinned to a version:
-every download is the latest GitHub release.
+"Install Gaffer by following https://gafferae.com/install.md". The Gaffer package is always the
+latest GitHub release. Gaffer brings its own Node.js runtime: the steps below download the official
+runtime from nodejs.org into Gaffer's own folder and verify its checksum and code signature, so
+nothing has to be installed on the computer first.
 
 ## Requirements
 
 - After Effects 2022 or later (macOS or Windows)
 - Claude: either the [Claude desktop app](https://claude.com/download) (it bundles Claude Code, no separate install needed) or the standalone [Claude Code](https://claude.ai/code) CLI. On Windows use the desktop app or the native installer, not \`npm install -g\` (the daemon can't launch npm's script shims)
-- Node.js 20 or later ([install](https://nodejs.org))
 - No git required
 
 ## First: confirm you are running on the user's own computer

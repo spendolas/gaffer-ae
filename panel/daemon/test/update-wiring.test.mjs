@@ -3,13 +3,16 @@
 // cannot quietly bring back the commit-keyed check against main.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 const html = read('../../index.html');
 const main = read('../../main.js');
-const capture = read('../../../design/scripts/panel-capture.mjs');
+// design/ is not part of the packaged tree; skip the capture assertion there.
+const capturePath = '../../../design/scripts/panel-capture.mjs';
+const hasDesign = existsSync(fileURLToPath(new URL(capturePath, import.meta.url)));
+const capture = hasDesign ? read(capturePath) : '';
 
 test('index.html loads update-state.js before main.js', () => {
   const state = html.indexOf('<script src="update-state.js"></script>');
@@ -31,7 +34,7 @@ test('main.js checks the latest GitHub release through GafferUpdateState', () =>
     "'https://api.github.com/repos/spendolas/gaffer-ae/releases/latest'",
     "'gafferReleaseCache'", "'If-None-Match'", "'application/vnd.github+json'",
     'UpdateState.readReleaseResponse(', 'UpdateState.decideUpdate(',
-    'UpdateState.shouldReloadAfterUpdate(', 'UpdateState.updateVerdict(',
+    'UpdateState.updateWaitStep(', 'UpdateState.updateVerdict(',
     'dismissedUpdateVersion: dismissedUpdateVersion']) {
     assert.ok(main.includes(needed), 'main.js is missing ' + needed);
   }
@@ -109,7 +112,133 @@ test('download timeouts in both updater scripts fit inside the panel give-up', (
   assert.ok(main.includes('waited >= 180000'), 'panel give-up moved; re-check the script timeouts against it');
 });
 
-test('panel-capture forces the update-available state with a version', () => {
+test('panel-capture forces the update-available state with a version', { skip: !hasDesign && 'design/ absent (packaged tree)' }, () => {
   assert.ok(capture.includes("setUpdateAvailable('99.0.0')"));
   assert.ok(!capture.includes("setUpdateAvailable('feedface')"));
+});
+
+// ---- Task 13: repair path and the updater's result line ----
+
+const fnBody = (name) => {
+  const start = main.indexOf('function ' + name + '(');
+  assert.ok(start !== -1, 'no function ' + name);
+  const next = main.indexOf('\n  function ', start + 1);
+  return main.slice(start, next === -1 ? undefined : next);
+};
+
+test('a refused launch remembers its code and refreshes the Settings button; a new launch clears it', () => {
+  const show = fnBody('showLaunchError');
+  assert.ok(show.includes('daemonLaunchCode = code'), 'showLaunchError does not keep the code');
+  assert.ok(show.includes('syncSettingsUpdateButton()'), 'showLaunchError does not refresh the Settings button');
+  assert.ok(fnBody('startDaemon').includes('daemonLaunchCode = null'), 'startDaemon does not clear the code');
+});
+
+test('the Settings button follows settingsUpdateAction and reads Repair for a repair', () => {
+  const sync = fnBody('syncSettingsUpdateButton');
+  assert.ok(sync.includes('UpdateState.settingsUpdateAction('), 'not driven by settingsUpdateAction');
+  assert.ok(sync.includes('UpdateState.isRepairableLaunchError(daemonLaunchCode)'));
+  assert.ok(sync.includes("'Repair'") && sync.includes("'Update'"), 'no Repair / Update label switch');
+});
+
+test('runUpdate passes the repair flag to both updaters on both routes', () => {
+  const run = fnBody('runUpdate');
+  assert.ok(run.includes("'--repair'"), 'Node route: no --repair for update.sh');
+  assert.ok(run.includes("'-Repair'"), 'Node route: no -Repair for update.ps1');
+  assert.ok(run.includes(' --repair'), 'ExtendScript route: no --repair for update.sh');
+  assert.ok(run.includes(' -Repair'), 'ExtendScript route: no -Repair for update.ps1');
+  assert.ok(run.includes('beginUpdateRun('), 'runUpdate does not record the log offset before starting the updater');
+  assert.ok(run.indexOf('beginUpdateRun(') < run.indexOf('cp.spawn('), 'the log offset must be taken before the spawn');
+  assert.ok(/child\.on\('exit', function \(\) \{ run\.exited = true; \}\)/.test(run), 'the Node route does not mark the updater as exited');
+});
+
+test('the wait reads the updater log through updateWaitStep and shows updateFailureText', () => {
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes('UpdateState.updateWaitStep('), 'wait does not use updateWaitStep');
+  assert.ok(wait.includes('readUpdateLogSince('), 'wait does not read the updater log');
+  assert.ok(wait.includes("step.action === 'fail'"), 'wait ignores err: results');
+  assert.ok(fnBody('showUpdateFailure').includes('UpdateState.updateFailureText('));
+  assert.ok(!wait.includes('UpdateState.shouldReloadAfterUpdate('), 'the version check now lives in updateWaitStep');
+});
+
+test('the panel reads the same log file the updaters write', () => {
+  const p = fnBody('updaterLogPath');
+  assert.ok(p.includes("'\\\\gaffer-update.log'") && p.includes('process.env.TEMP'), 'Windows path is not %TEMP%\\gaffer-update.log');
+  assert.ok(p.includes("'/gaffer-update.log'") && p.includes('process.env.TMPDIR'), 'macOS path is not ${TMPDIR:-/tmp}/gaffer-update.log');
+  assert.ok(read('../update.sh').includes('LOG="${TMPDIR:-/tmp}/gaffer-update.log"'));
+  assert.ok(read('../update.ps1').includes('$logPath = Join-Path $env:TEMP "gaffer-update.log"'));
+});
+
+test('readUpdateLogSince delegates to the pure slice, and the wait also checks the ExtendScript output for a result line', () => {
+  assert.ok(fnBody('readUpdateLogSince').includes('UpdateState.readUpdateLogSlice('));
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes('!UpdateState.lastUpdaterResult(logText)') && wait.includes('UpdateState.lastUpdaterResult(run.output)'),
+    'a log with no result line must fall back to the callSystem output');
+});
+
+test('err:runtime-swap leaves the panel offering Repair (Settings button and the next run)', () => {
+  assert.ok(/if \(UpdateState\.failureNeedsRepair\(code\)\) \{\s*updateLeftUnfinished = true;/.test(fnBody('showUpdateFailure')), 'showUpdateFailure does not remember an unfinished install');
+  assert.ok(fnBody('syncSettingsUpdateButton').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
+  assert.ok(fnBody('updateRunPlan').includes('UpdateState.isRepairableLaunchError(daemonLaunchCode) || updateLeftUnfinished'));
+});
+
+// Live AE test 2026-10-24: with the daemon down the welcome screen covers
+// the chat, so a Repair's progress and result (chat notice + banner) were
+// invisible for 7+ minutes. Toasts sit above every screen; the decisions
+// live in GafferUpdateState (updateToast, launchErrorToast), main.js wires.
+test('one keyed toast for the daemon: the launch error, Repair/Update start, the result replace each other', () => {
+  const keyed = fnBody('showKeyedToast');
+  assert.ok(keyed.includes('var prev = keyedToasts[spec.key];') && keyed.includes('prev.dismiss()'), 'a toast with the same key is dismissed first, never stacked');
+  assert.ok(keyed.includes("spec.action === 'settings'") && keyed.includes('openSettings()'), 'the settings action opens Settings');
+  assert.ok(fnBody('showLaunchError').includes('showKeyedToast(UpdateState.launchErrorToast(code, daemonLaunchError))'), 'the launch error goes through the keyed toast');
+  assert.ok(!fnBody('showLaunchError').includes("showToast('error', daemonLaunchError"), 'no unkeyed launch error toast left');
+  const run = fnBody('runUpdate');
+  assert.ok(run.includes("showKeyedToast(UpdateState.updateToast('start', plan.mode))"), 'Update/Repair shows a toast at once (replacing the launch error)');
+  assert.ok(fnBody('forceStopAndRetryUpdate').includes("showKeyedToast(UpdateState.updateToast('start', "), 'waiting on a running updater shows the progress toast too');
+  const fail = fnBody('showUpdateFailure');
+  assert.ok(fail.includes("showKeyedToast(UpdateState.updateToast('fail', run.mode, code, run.logPath))"), 'a failure also shows a persistent error toast');
+  assert.ok(fail.includes('showChatNotice(text.notice)'), 'the chat notice stays for the chat view');
+  const wait = fnBody('waitForUpdatedVersion');
+  assert.ok(wait.includes("showKeyedToast(UpdateState.updateToast('ok', run.mode))"), 'success shows a toast');
+  assert.ok(/setTimeout\(function \(\) \{ location\.reload\(\); \}, UpdateState\.RELOAD_AFTER_OK_MS\)/.test(wait), 'the reload waits for the success toast to be read');
+});
+
+test('Settings stays reachable while the welcome screen covers the footer: the settings modal sits above it, the launch toast opens it', () => {
+  const card = html.indexOf('id="signInCard"');
+  const settings = html.indexOf('id="settingsModal"');
+  assert.ok(card !== -1 && settings !== -1 && card < settings, 'settingsModal comes after signInCard, so at the same z-index it paints above it');
+  assert.match(html, /\.signin-card \{ position: absolute; inset: 0; z-index: 3000;/);
+  assert.match(html, /\.settings-modal \{\s*position: fixed;\s*inset: 0;\s*z-index: 3000;/);
+  assert.match(html, /\.toast-stack \{[^}]*z-index: 4000;/, 'toasts paint above the welcome screen');
+});
+
+// Live AE test 2026-10-24: the long Repair failure toast was one nowrap line
+// wider than the dock and clipped on both sides. Long labels must wrap inside
+// the panel (16px gutter each side); short ones keep hugging their text.
+test('a long toast wraps inside the panel width instead of clipping', () => {
+  const rule = (sel) => {
+    const m = html.match(new RegExp('\\n\\s*' + sel.replace('.', '\\.') + ' \\{([^}]*)\\}'));
+    assert.ok(m, 'no ' + sel + ' rule');
+    return m[1];
+  };
+  const stack = rule('.toast-stack');
+  assert.match(stack, /width: max-content;/, 'the stack hugs its widest toast (not capped at half the panel by left:50%)');
+  assert.match(stack, /max-width: calc\(100vw - 2 \* var\(--space-16\)\);/, 'the stack never gets wider than the panel minus its gutters');
+  const label = rule('.toast-label');
+  assert.ok(!/white-space: nowrap/.test(label), 'the toast label must not be nowrap');
+  assert.match(label, /white-space: normal;/);
+  assert.match(label, /overflow-wrap: anywhere;/, 'a long unbroken path still wraps');
+});
+
+test('main.js: keyedToasts is set up before any code that can show a keyed toast', () => {
+  const decl = main.indexOf('var keyedToasts = {};');
+  assert.ok(decl !== -1, 'no keyedToasts declaration');
+  assert.equal(main.indexOf('var keyedToasts'), main.lastIndexOf('var keyedToasts'), 'declared once');
+  const firstUse = main.indexOf('showKeyedToast(');
+  assert.ok(decl < firstUse, 'keyedToasts must be initialised before the first showKeyedToast call site');
+  assert.ok(decl < main.indexOf('function showLaunchError('), 'before showLaunchError, which runs during startup');
+});
+
+test('main.js passes the give-up to updateWaitStep so err:stopped waits until then', () => {
+  assert.match(main, /giveUp: atLimit && !extend/);
+  assert.match(main, /var extend = atLimit && !extended && !!runningUpdaterPid\(\);/);
 });

@@ -104,8 +104,198 @@
     return isNewerVersion(attempt.target, localVersion) ? 'failed' : 'ok';
   }
 
+  // ---- Repair mode and the updater's result line ----
+  // Launch notices (daemon-launch.js) that send the user to Settings, plus the
+  // Gatekeeper block: a repair (updater --repair / -Repair) re-downloads the
+  // runtime into a fresh folder and re-syncs the release's files, which is
+  // what each of these needs.
+  var REPAIRABLE = ['runtime-damaged', 'runtime-missing', 'runtime-blocked', 'launch-failed'];
+  function isRepairableLaunchError(code) {
+    return typeof code === 'string' && REPAIRABLE.indexOf(code) !== -1;
+  }
+
+  // What the Settings Update button offers. o = { available, repairable,
+  // updating, dev }. 'update' when a newer release is confirmed (a repair
+  // rides along with it), 'repair' when only the launch needs one, null to
+  // hide. A dev install never repairs (runUpdate refuses it anyway).
+  function settingsUpdateAction(o) {
+    o = o || {};
+    if (o.updating) return null;
+    if (o.available) return 'update';
+    if (o.repairable && !o.dev) return 'repair';
+    return null;
+  }
+
+  // The updater's result lines (update.sh / update.ps1 last-line contract):
+  // ok:<version>, err:<code>, busy:already-running. text is what the updater
+  // log gained since this run started. Returns the LAST one as
+  // { kind: 'ok', version } | { kind: 'err', code } | { kind: 'busy' }, or
+  // null. Tolerates a PowerShell transcript: CRLF, a BOM, UTF-16 bytes read
+  // as UTF-8 (NULs) and the footer written after the result line.
+  var RESULT_LINE = /^(?:ok:(\S+)|err:([a-z][a-z0-9-]*)|(busy:already-running))$/;
+  function lastUpdaterResult(text) {
+    if (typeof text !== 'string' || !text) return null;
+    var lines = text.replace(/\u0000/g, '').replace(/﻿/g, '').split(/\r\n|\r|\n/);
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var m = RESULT_LINE.exec(lines[i].replace(/^\s+|\s+$/g, ''));
+      if (!m) continue;
+      if (m[1]) return { kind: 'ok', version: m[1] };
+      if (m[2]) return { kind: 'err', code: m[2] };
+      return { kind: 'busy' };
+    }
+    return null;
+  }
+
+  // What the updater log at path gained since byte offset start, as text.
+  // fs: statSync/openSync/readSync/closeSync like node:fs; alloc(n) returns a
+  // Buffer (CEP may not expose a global Buffer, so main.js passes one).
+  // A log shorter than start was replaced: read from 0. At most the last
+  // 64 KB. '' when nothing new or no log file yet (ENOENT), null when it
+  // cannot be read (no fs, no path, any other error).
+  var LOG_SLICE_MAX = 65536;
+  function readUpdateLogSlice(fs, path, start, alloc) {
+    if (!fs || !path) return null;
+    var size, fd, opened = false;
+    try { size = fs.statSync(path).size; } catch (e) { return e && e.code === 'ENOENT' ? '' : null; }
+    var from = size >= start ? start : 0;
+    if (size - from > LOG_SLICE_MAX) from = size - LOG_SLICE_MAX;
+    if (size <= from) return '';
+    try {
+      fd = fs.openSync(path, 'r');
+      opened = true;
+      var buf = alloc(size - from);
+      var n = fs.readSync(fd, buf, 0, buf.length, from);
+      return buf.toString('utf8', 0, n);
+    } catch (e) {
+      return null;
+    } finally {
+      if (opened) { try { fs.closeSync(fd); } catch (e2) { /* ignore */ } }
+    }
+  }
+
+  // One poll while an update or repair runs. o = { mode: 'update'|'repair',
+  // startVersion, diskJson (version.json as read), logText (log gained since
+  // the start, or null when the panel cannot read it), exited (the updater
+  // the panel started has exited), giveUp (the panel's wait is over: the
+  // give-up time passed and no updater holds the lock any more) }. Returns
+  // { action: 'reload' } | { action: 'fail', code } | { action: 'wait' }.
+  //   err:stopped a signal ended an updater (update.sh), usually a stuck one
+  //               a newer updater took over: that one appends its own result
+  //               later, so wait for it or for version.json, and fail (generic
+  //               text) only at the give-up
+  //   err:<code>  fail at once (never reload on a failure)
+  //   ok:<v>      reload (a repair keeps the version, so this is its signal)
+  //   version.json moved: reload (no readable log, the pre-0.12 signal)
+  //   busy        wait: another updater runs, its result lands in the same log
+  //   exited with a readable log and no result line: fail, no code
+  //   exited, log unreadable: a repair reloads (the fresh panel re-checks the
+  //   runtime), an update keeps waiting for the version or the give-up
+  function updateWaitStep(o) {
+    var r = lastUpdaterResult(o.logText);
+    if (r && r.kind === 'err' && r.code === 'stopped') {
+      if (shouldReloadAfterUpdate(o.startVersion, o.diskJson)) return { action: 'reload' };
+      return o.giveUp ? { action: 'fail', code: 'stopped' } : { action: 'wait' };
+    }
+    if (r && r.kind === 'err') return { action: 'fail', code: r.code };
+    if (r && r.kind === 'ok') return { action: 'reload' };
+    if (shouldReloadAfterUpdate(o.startVersion, o.diskJson)) return { action: 'reload' };
+    if (r && r.kind === 'busy') return { action: 'wait' };
+    if (o.exited) {
+      if (typeof o.logText === 'string') return { action: 'fail', code: null };
+      if (o.mode === 'repair') return { action: 'reload' };
+    }
+    return { action: 'wait' };
+  }
+
+  // err:runtime-swap: the updater failed recovering or swapping the runtime
+  // after the daemon was stopped (or found an earlier run's half-done swap it
+  // could not undo). Unlike err:runtime the install may have changed, so the
+  // panel offers Repair afterwards (main.js showUpdateFailure).
+  function failureNeedsRepair(code) {
+    return code === 'runtime-swap';
+  }
+
+  // Banner and chat-notice text for a failed update or repair. err:runtime
+  // has its own text (spec Failure modes, "Both sources unreachable /
+  // update"), and so does err:runtime-swap (the install may be unfinished),
+  // and err:archive (the download unpacked but is not a Gaffer release, the
+  // install is untouched); every other code (err:internal, the updaters'
+  // catch-all, and err:stopped, included), or none, gets the generic text naming the updater
+  // log (logPath when known, else both platforms' usual place).
+  function updateFailureText(mode, code, logPath) {
+    var repair = mode === 'repair';
+    if (failureNeedsRepair(code)) {
+      var h = repair ? 'Repair did not complete' : 'Update did not complete';
+      return { banner: h, notice: h + '. Your Gaffer folder may be in an unfinished state. Open Settings and click Repair, or reinstall.' };
+    }
+    if (code === 'runtime') {
+      return repair
+        ? { banner: 'Repair failed', notice: "Repair failed: could not download Gaffer's runtime. Check your network and try again." }
+        : { banner: 'Update failed', notice: "Update failed: could not download Gaffer's runtime. Your current version still works." };
+    }
+    if (code === 'archive') {
+      return repair
+        ? { banner: 'Repair failed', notice: 'Repair failed: the downloaded update was not a valid Gaffer release. Open the updater log for details, or reinstall.' }
+        : { banner: 'Update failed', notice: 'Update failed: the downloaded update was not a valid Gaffer release. Your current version still works.' };
+    }
+    var where = logPath ? logPath : '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS)';
+    var head = repair ? 'Repair did not complete' : 'Update did not complete';
+    return { banner: head, notice: head + '. The updater log has details: ' + where + '.' };
+  }
+
+  // ---- Toasts for an update or repair ----
+  // While the daemon is down (the state Repair is for) the welcome screen
+  // covers the chat, so the chat notice and the update banner cannot be
+  // seen; toasts sit above every screen. The launch error and the update or
+  // repair toasts share one key, so each replaces the one before instead of
+  // stacking: Repair starting replaces the launch error, the result replaces
+  // the progress toast. Each spec is { key, type, text, duration (ms, 0 =
+  // until dismissed), action ('settings' = the toast's button opens
+  // Settings, where Repair is; null = a plain dismiss button) }.
+  var DAEMON_TOAST_KEY = 'daemon';
+  // How long the success toast is up before the panel reloads.
+  var RELOAD_AFTER_OK_MS = 1500;
+
+  // phase 'start' | 'ok' | 'fail'; code and logPath only for 'fail'.
+  function updateToast(phase, mode, code, logPath) {
+    var repair = mode === 'repair';
+    if (phase === 'start') {
+      return { key: DAEMON_TOAST_KEY, type: 'neutral', text: repair ? "Repairing Gaffer's runtime..." : 'Updating Gaffer...', duration: 0, action: null };
+    }
+    if (phase === 'ok') {
+      return { key: DAEMON_TOAST_KEY, type: 'success', text: repair ? 'Gaffer is repaired' : 'Gaffer is updated', duration: 4000, action: null };
+    }
+    if (phase === 'fail') {
+      return {
+        key: DAEMON_TOAST_KEY,
+        type: 'error',
+        text: updateFailureText(mode, code, logPath).notice,
+        duration: 0,
+        action: repair || failureNeedsRepair(code) ? 'settings' : null
+      };
+    }
+    return null;
+  }
+
+  // The launch-refused notice (daemon-launch.js text) as a toast. A notice
+  // Repair can fix offers Settings: the welcome screen covers the Settings
+  // button in the footer, so this is the way there while it shows.
+  function launchErrorToast(code, text) {
+    return { key: DAEMON_TOAST_KEY, type: 'error', text: text, duration: 0, action: isRepairableLaunchError(code) ? 'settings' : null };
+  }
+
   root.GafferUpdateState = {
     UPDATE_ASSETS: UPDATE_ASSETS,
+    RELOAD_AFTER_OK_MS: RELOAD_AFTER_OK_MS,
+    updateToast: updateToast,
+    launchErrorToast: launchErrorToast,
+    isRepairableLaunchError: isRepairableLaunchError,
+    settingsUpdateAction: settingsUpdateAction,
+    lastUpdaterResult: lastUpdaterResult,
+    readUpdateLogSlice: readUpdateLogSlice,
+    updateWaitStep: updateWaitStep,
+    updateFailureText: updateFailureText,
+    failureNeedsRepair: failureNeedsRepair,
     isNewerVersion: isNewerVersion,
     parseRelease: parseRelease,
     parseReleaseCache: parseReleaseCache,
