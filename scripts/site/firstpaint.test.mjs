@@ -97,7 +97,9 @@ test('noscript keeps only layout and the cover rule: the boot variables carry th
   assert.doesNotMatch(ns, /#[0-9a-fA-F]{3,8}\b/, 'no literal colours');
   assert.doesNotMatch(ns, /\b(background|border-color|font-family)\s*:/);
   assert.match(ns, /\.dock-app \{ text-decoration: underline; \}/);
-  assert.match(ns, /@media \(max-width: 600px\)[\s\S]*\.dock-prompt \{ display: block;[^}]*white-space: normal;/);
+  // Without JS there is no Copy button, so the prompt is shown (at every width) for copying by hand.
+  assert.match(ns, /\.dock-prompt \{ display: block;[^}]*white-space: normal;/);
+  assert.doesNotMatch(ns, /@media/);
 });
 
 test('var() fallbacks in site.css match the config defaults', () => {
