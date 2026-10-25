@@ -286,7 +286,12 @@ test('stylesheetHidesThePromptAtEveryWidthAndRevealsItOnlyAfterAFailedCopy', () 
   const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
   assert.match(css, /\.dock-prompt \{\s*display: none;/, 'hidden by default, not only in a phone media query');
   assert.match(css, /#dock\.is-revealed \.dock-prompt \{\s*display: block;/);
-  assert.doesNotMatch(css, /calc\(var\(--dock-padding, 0\.25rem\) \+ 0\.75rem\)/, 'no extra padding for the prompt side: the pill holds just the buttons');
+  // The revealed state on a wide screen is the designed one-line pill, not a wrapped box: wrapping is phone-only.
+  const at = css.indexOf('#dock.is-revealed .dock-pill');
+  const wide = css.slice(at, css.indexOf('@media (max-width: 600px) {', at));
+  assert.doesNotMatch(wide, /flex-wrap: wrap/);
+  assert.match(css, /@media \(max-width: 600px\) \{\s*#dock\.is-revealed \.dock-pill \{[^}]*flex-wrap: wrap;/);
+  assert.doesNotMatch(css.match(/\n\.dock-pill \{[^}]*\}/)[0], /\+ 0\.75rem/, 'no extra padding for the prompt side in the normal pill: it holds just the buttons');
   assert.match(css, /\.dock-pill \{[^}]*justify-content: center;/, 'the two buttons are centred');
 });
 
