@@ -224,6 +224,16 @@ describe('fetch-runtime.ps1 static checks', () => {
 // Behaviour on Windows
 // ---------------------------------------------------------------------------
 const onWindows = process.platform === 'win32';
+// GitHub's Windows runners run steps in PowerShell 7, which leaves its own module
+// folders in PSModulePath. A Windows PowerShell 5.1 child then cannot autoload its
+// built-in modules ("The term 'Get-FileHash' is not recognized"). Real machines launch
+// the scripts from After Effects, whose environment is clean, so only the tests need this.
+function envWithoutPsModulePath(env) {
+  const out = { ...env };
+  for (const k of Object.keys(out)) if (k.toUpperCase() === 'PSMODULEPATH') delete out[k];
+  return out;
+}
+
 const skipReason = onWindows ? false : 'Windows only: fetch-runtime.ps1 needs powershell.exe, curl.exe, tar.exe and Authenticode';
 
 describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
@@ -287,7 +297,7 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     const pinsPath = join(dir, 'pins.json');
     writeFileSync(pinsPath, JSON.stringify(pinsObj, null, 2));
     const env = {
-      ...process.env, TEMP: temp, TMP: temp,
+      ...envWithoutPsModulePath(process.env), TEMP: temp, TMP: temp,
       GAFFER_FETCH_TEST: '1', GAFFER_FETCH_PINS: pinsPath, GAFFER_FETCH_SKIP_CODESIGN: '1',
       GAFFER_FETCH_PLATFORM: plat,
       GAFFER_FETCH_BASE_OFFICIAL: serve(official, 'official'),
