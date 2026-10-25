@@ -33,12 +33,17 @@ jobs:
           node-version: 20
 
       # ffmpeg (with ffprobe) makes the poster for any clip that has no hand-made one.
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg and exiftool
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libimage-exiftool-perl
 
       # Before the tests: some of them read the generated site/items.json.
       - name: Build the clip manifest and posters
         run: node scripts/site/build-manifest.mjs
+
+      # The posters are made above; this writes their title, description and copyright (the committed
+      # images were tagged when they were made).
+      - name: Tag the poster images
+        run: node scripts/site/tag-images.mjs
 
       - name: Site tests
         run: node --test scripts/site/
