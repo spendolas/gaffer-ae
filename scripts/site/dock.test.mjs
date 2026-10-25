@@ -128,7 +128,7 @@ function fakeCopyDom({ visiblePrompt, copyOk, selected = [], active = null }) {
   doc.body = Object.assign(doc.body, { tag: 'body' });
   doc.activeElement = active === 'button' ? button : doc.body;
   const root = {
-    querySelector: () => ({ getClientRects: () => (visiblePrompt ? [{}] : []) }),
+    querySelector: () => ({ offsetWidth: visiblePrompt ? 300 : 0, offsetHeight: visiblePrompt ? 20 : 0 }), // collapsed = zero size
   };
   return { doc, sel, root, ranges, button, created };
 }
@@ -278,17 +278,35 @@ test('stylesheetCopyIsBorderlessSecondaryFillAndTheGroupPaddingIsTheConfiguredZe
   assert.match(css, /\.dock-ctas \{[^}]*padding: var\(--dock-cta-padding, 0\);/, 'group padding follows the config (0), at every width');
 });
 
-test('stylesheetHidesThePromptAtEveryWidthAndRevealsItOnlyAfterAFailedCopy', () => {
+test('stylesheetCollapsesThePromptAtEveryWidthAndAnimatesItOpenAfterAFailedCopy', () => {
   const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
-  assert.match(css, /\.dock-prompt \{\s*display: none;/, 'hidden by default, not only in a phone media query');
-  assert.match(css, /#dock\.is-revealed \.dock-prompt \{\s*display: block;/);
+  const prompt = css.match(/\n\.dock-prompt \{[^}]*\}/)[0];
+  assert.match(prompt, /visibility: hidden;/, 'collapsed and out of the accessibility tree, not only in a phone media query');
+  assert.match(prompt, /max-width: 0;/);
+  assert.match(prompt, /opacity: 0;/);
+  assert.doesNotMatch(prompt, /display: none/, 'display:none cannot be animated');
+  assert.match(prompt, /transition: max-width [^;]*max-height [^;]*opacity [^;]*visibility 0s linear/, 'it animates out, hiding at the end');
+  const revealed = css.match(/\n#dock\.is-revealed \.dock-prompt \{[^}]*\}/)[0];
+  assert.match(revealed, /visibility: visible;/);
+  assert.match(revealed, /max-width: 64ch;/);
+  assert.match(revealed, /opacity: 1;/);
+  assert.match(revealed, /visibility 0s;/, 'it shows at once and grows');
+  // The pill's reveal changes only animatable numbers: the gap, the padding and the radius.
+  assert.match(css.match(/\n\.dock-pill \{[^}]*\}/)[0], /transition: column-gap [^;]*row-gap [^;]*padding [^;]*border-radius/);
   // The revealed state on a wide screen is the designed one-line pill, not a wrapped box: wrapping is phone-only.
   const at = css.indexOf('#dock.is-revealed .dock-pill');
   const wide = css.slice(at, css.indexOf('@media (max-width: 600px) {', at));
   assert.doesNotMatch(wide, /flex-wrap: wrap/);
-  assert.match(css, /@media \(max-width: 600px\) \{\s*#dock\.is-revealed \.dock-pill \{[^}]*flex-wrap: wrap;/);
+  const phone = css.slice(css.indexOf('@media (max-width: 600px) {', at));
+  assert.match(phone, /\.dock-pill \{[^}]*flex-wrap: wrap;/, 'a phone pill always wraps: the collapsed prompt is a zero-height row');
+  assert.match(phone, /\.dock-prompt \{[^}]*max-height: 0;/);
+  assert.match(phone, /#dock\.is-revealed \.dock-prompt \{[^}]*max-height: 5\.5rem;/);
+  // The phone's button keeps its size and place: the pill padding is the same revealed or not.
+  assert.match(phone.match(/#dock\.is-revealed \.dock-pill \{[^}]*\}/)[0], /padding: var\(--dock-padding, 0\.25rem\);/);
+  assert.doesNotMatch(phone.match(/#dock\.is-revealed \.dock-pill \{[^}]*\}/)[0], /row-gap/);
   assert.doesNotMatch(css.match(/\n\.dock-pill \{[^}]*\}/)[0], /\+ 0\.75rem/, 'no extra padding for the prompt side in the normal pill: it holds just the buttons');
   assert.match(css, /\.dock-pill \{[^}]*justify-content: center;/, 'the two buttons are centred');
+  assert.match(css, /prefers-reduced-motion: reduce\) \{[\s\S]*\.dock-prompt,[\s\S]*transition: none;/, 'no motion when the visitor asks for none');
 });
 
 const nav = (o) => readEnvironment(o);
