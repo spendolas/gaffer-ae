@@ -185,13 +185,11 @@ export function mountDock(root, { toast, env, getCopy = () => defaults.copy, get
   const appAnchor = group.querySelector('.dock-app');
   const refresh = () => {
     if (appAnchor) appAnchor.textContent = getCopy().linkDesktop;
-    // Icon-only on desktop: the accessible name and tooltip are the wording config.
-    // With no app link the visible label is shown, and the accessible name follows it
-    // (label in name); otherwise the button is icon-only and copy.button names it.
-    const name = root.dataset.app === 'none' ? getCopy().buttonCompact : getCopy().button;
+    // The visible label is the accessible name (label in name); on a phone with an app link the label is
+    // hidden by css and the button is icon-only, still named by it.
+    const name = getCopy().buttonCompact;
     button.setAttribute('aria-label', name);
-    button.title = name;
-    short.textContent = getCopy().buttonCompact;
+    short.textContent = name;
   };
   refresh();
   button.append(icon, short);

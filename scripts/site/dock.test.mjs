@@ -222,7 +222,7 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
   const prevDoc = globalThis.document;
   globalThis.document = { createElement: () => mk(''), addEventListener() {}, removeEventListener() {} };
   try {
-    const copy = { button: 'Copy', buttonCompact: 'C', linkDesktop: 'App', toastOk: 'ok', toastError: 'err' };
+    const copy = { buttonCompact: 'C', linkDesktop: 'App', toastOk: 'ok', toastError: 'err' };
     const ui = mountDock(root, { toast: { show() {} }, env: {}, getCopy: () => copy });
     assert.equal(app.textContent, 'App');
     assert.deepEqual(group.kids.map((k) => k.className), ['dock-app', 'dock-cta dock-button'], 'app first, then Copy');
@@ -232,16 +232,14 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
     assert.match(icon.innerHTML, /^<svg [^>]*viewBox="0 0 24 24"[^>]*fill="none"[^>]*stroke="currentColor"[^>]*stroke-width="2"[^>]*stroke-linecap="round"[^>]*stroke-linejoin="round"[^>]*aria-hidden="true"[^>]*focusable="false"/);
     assert.ok(icon.innerHTML.includes('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>'), 'Lucide copy rect');
     assert.ok(icon.innerHTML.includes('d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"'), 'Lucide copy path');
-    assert.equal(btn.attrs['aria-label'], 'Copy');
-    assert.equal(btn.title, 'Copy');
+    assert.equal(btn.attrs['aria-label'], 'C', 'the visible label names the button');
+    assert.equal(btn.title, undefined, 'no tooltip repeating a visible label');
     assert.equal(short.className, 'dock-label-short');
     assert.equal(short.textContent, 'C', 'compact label from config');
-    copy.button = 'Copy it';
     copy.buttonCompact = 'Cp';
     copy.linkDesktop = 'App2';
     ui.refresh();
-    assert.equal(btn.attrs['aria-label'], 'Copy it', 'label updates live');
-    assert.equal(btn.title, 'Copy it');
+    assert.equal(btn.attrs['aria-label'], 'Cp', 'label updates live');
     assert.equal(short.textContent, 'Cp');
     assert.equal(app.textContent, 'App2');
     mountDock(root, { toast: { show() {} }, env: {}, getCopy: () => copy });
@@ -250,13 +248,11 @@ test('mountDockRefreshesLabelsAndAppendsCopyToTheGroupOnce', async () => {
     const group2 = { kids: [], append(n) { this.kids.push(n); }, querySelector: () => null };
     const root2 = { ...root, dataset: {}, querySelector: (sel) => ({ '.dock-pill': { querySelector: () => null }, '.dock-prompt': prompt, '.dock-ctas': group2 })[sel] ?? null };
     const phone = { userAgent: 'Mozilla/5.0 (Linux; Android 14) Mobile', platform: 'Linux armv81', maxTouchPoints: 5 };
-    copy.button = 'Copy prompt';
     copy.buttonCompact = 'Copy install prompt';
     const ui2 = mountDock(root2, { toast: { show() {} }, env: {}, getCopy: () => copy, nav: phone });
     assert.equal(root2.dataset.app, 'none');
     const btn2 = group2.kids[0];
     assert.equal(btn2.attrs['aria-label'], 'Copy install prompt');
-    assert.equal(btn2.title, 'Copy install prompt');
     copy.buttonCompact = 'Copy it all';
     ui2.refresh();
     assert.equal(btn2.attrs['aria-label'], 'Copy it all', 'follows the visible label live');
@@ -580,7 +576,7 @@ test('successfulCopyShowsTheCheckThenRevertsAfterTheHold', async () => {
     assert.equal(h.classes.has('is-copied'), true);
     assert.deepEqual([...h.pending.values()].map((p) => p.ms), [700], 'hold comes from dock.iconRevertMs');
     assert.equal(h.toasts[0][1], undefined, 'the toast still shows');
-    assert.equal(btn.attrs['aria-label'], 'Copy prompt', 'the accessible name never changes');
+    assert.equal(btn.attrs['aria-label'], 'Copy install prompt', 'the accessible name never changes');
     const [fid, fired] = [...h.pending.entries()][0];
     h.pending.delete(fid);
     fired.f();

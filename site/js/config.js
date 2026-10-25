@@ -79,8 +79,7 @@ export const defaults = {
   // Wording. Read by dock.js at use time and set with textContent only; never a CSS variable.
   copy: {
     linkDesktop: 'Install with Claude', // the primary button, first in the group
-    button: 'Copy prompt',
-    buttonCompact: 'Copy install prompt', // the lone Copy button's label when there is no app link (phones)
+    buttonCompact: 'Copy install prompt', // the Copy button's label (hidden on a phone that also has the app link, where it is icon-only)
     toastOk: 'Copied. Paste it in Claude Code.',
     toastError: 'Copy failed. Select the text and copy it.',
     headlineTitle: 'Gaffer', // the h1's first line; dock.js applyHeadline, textContent only
