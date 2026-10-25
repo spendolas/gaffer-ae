@@ -250,8 +250,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--dock-gap, 1.5rem);
+  gap: 0; /* opens to --dock-gap when the prompt is revealed */
   padding: var(--dock-padding, 0.25rem);
+  transition: column-gap var(--dock-icon-anim-ms, 280ms) ease, row-gap var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, border-radius var(--dock-icon-anim-ms, 280ms) ease;
   max-width: 100%;
   box-sizing: border-box;
   border-radius: var(--dock-radius, 999px);
@@ -264,7 +265,14 @@ body {
 }
 
 .dock-prompt {
-  display: none; /* the buttons carry the prompt; it shows only after a failed copy (is-revealed) or without JS */
+  /* Collapsed to nothing, not display:none, so revealing it can animate: zero width on a wide screen
+     (the pill grows into it), zero height on a phone (see the media query). visibility keeps it out of
+     the accessibility tree and the tab order until it shows. */
+  visibility: hidden;
+  max-width: 0;
+  max-height: 3rem;
+  opacity: 0;
+  transition: max-width var(--dock-icon-anim-ms, 280ms) ease, max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, visibility 0s linear var(--dock-icon-anim-ms, 280ms);
   min-width: 0;
   font-family: var(--type-mono);
   font-size: var(--type-mono-size, 0.875rem);
@@ -468,29 +476,57 @@ body {
 }
 
 /* After a failed copy the prompt is revealed so it can be selected by hand: on a wide screen as the one-line pill
-   (the prompt on the left, the two buttons on the right), on a phone above the buttons, wrapped. */
+   (the prompt on the left, the two buttons on the right), on a phone above the buttons, wrapped. Both
+   animate over --dock-icon-anim-ms, and play backwards when the prompt hides again. 64ch is just over the
+   prompt's own width in the monospace font. */
 #dock.is-revealed .dock-pill {
   justify-content: flex-start;
+  column-gap: var(--dock-gap, 1.5rem);
   padding: var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) var(--dock-padding, 0.25rem) calc(var(--dock-padding, 0.25rem) + 0.75rem);
 }
 
 #dock.is-revealed .dock-prompt {
-  display: block;
+  visibility: visible;
+  max-width: 64ch;
+  opacity: 1;
+  transition: max-width var(--dock-icon-anim-ms, 280ms) ease, max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, visibility 0s;
 }
 
 @media (max-width: 600px) {
-  #dock.is-revealed .dock-pill {
+  /* A phone's pill is always the wrapping layout (the collapsed prompt is a zero-height first row), at a
+     radius a little under its half-height, so the reveal changes only numbers and can animate. */
+  .dock-pill {
     flex-wrap: wrap;
-    border-radius: min(var(--dock-radius, 999px), 1.25rem);
-    padding: 0.75rem;
+    justify-content: center;
+    border-radius: 1.5rem;
+  }
+
+  .dock-prompt {
+    order: -1;
+    flex: 1 0 100%;
+    box-sizing: border-box;
+    max-width: 100%;
+    max-height: 0;
+    padding: 0 0.75rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+    transition: max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, visibility 0s linear var(--dock-icon-anim-ms, 280ms);
+  }
+
+  /* The button keeps its size and place: the pill's own padding does not change, the room comes from the
+     prompt's padding, so only the box above the button grows. */
+  #dock.is-revealed .dock-pill {
+    border-radius: 1.25rem;
+    padding: var(--dock-padding, 0.25rem);
     justify-content: center;
   }
 
   #dock.is-revealed .dock-prompt {
-    order: -1;
-    flex: 1 0 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    max-width: 100%;
+    max-height: 5.5rem;
+    padding: 0.75rem 0.75rem 1rem;
+    transition: max-height var(--dock-icon-anim-ms, 280ms) ease, opacity var(--dock-icon-anim-ms, 280ms) ease, padding var(--dock-icon-anim-ms, 280ms) ease, visibility 0s;
   }
 }
 
@@ -529,6 +565,12 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   #toast {
+    transition: none;
+  }
+
+  .dock-pill,
+  .dock-prompt,
+  #dock.is-revealed .dock-prompt {
     transition: none;
   }
 

@@ -137,11 +137,11 @@
     <style>
       #cover { display: none; }
       .dock-app { text-decoration: underline; }
-      .dock-prompt { display: block; }
-      .dock-pill { justify-content: flex-start; padding-left: calc(var(--dock-padding, 0.25rem) + 0.75rem); }
+      .dock-prompt { visibility: visible; max-width: none; max-height: none; opacity: 1; }
+      .dock-pill { justify-content: flex-start; column-gap: var(--dock-gap, 1.5rem); padding-left: calc(var(--dock-padding, 0.25rem) + 0.75rem); }
       @media (max-width: 600px) {
-        .dock-pill { flex-wrap: wrap; border-radius: 1.25rem; padding: 0.75rem 1rem; }
-        .dock-prompt { flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+        .dock-pill { border-radius: 1.25rem; padding: 0.75rem 1rem; row-gap: 0.5rem; }
+        .dock-prompt { max-width: 100%; }
       }
     </style>
   </noscript>
