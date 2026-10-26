@@ -65,6 +65,7 @@ gaffer/
 │   │   ├── update.sh, update.ps1  # One-click update from the latest GitHub release asset (stages the runtime when pins change, no npm)
 │   │   ├── stop-daemon.ps1        # Stops whatever listens on :9823 (Windows)
 │   │   ├── tools/                 # One file per typed MCP tool (24) + figma-translator.js helper
+│   │   ├── vendor/                # Vendored shared modules (claude-model-catalog: live model discovery); bundled, never shipped as files
 │   │   ├── runtime/               # Pinned Node binary + VERSION/VERIFIED stamps (installed, never checked in)
 │   │   └── daemon.mjs             # esbuild bundle (built by CI or build.sh, never checked in)
 │   └── prompts/gaffer.md      # System prompt for the panel chat agent
@@ -72,6 +73,7 @@ gaffer/
 │   ├── build.sh               # Local dev build: esbuild bundle -> panel/daemon/daemon.mjs
 │   ├── bundle-daemon.sh       # Bundle + third-party notices + hygiene + npm audit (CI)
 │   ├── third-party-notices.mjs
+│   ├── vendor-sources.mjs, sync-vendor.mjs  # Where the shared modules' repos live; `npm run sync-vendor` (panel/daemon) refreshes panel/daemon/vendor
 │   ├── release-gate.mjs       # Release gate for .github/workflows/release.yml (skip/create/recover + notes)
 │   ├── package-release.sh     # Builds the four release archives + SHA256SUMS.txt from panel/
 │   ├── node-runtime-check.mjs # Weekly runtime pin checker (node-runtime-check.yml)
@@ -160,6 +162,8 @@ Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-on
 ## Dependencies
 
 Daemon: `@modelcontextprotocol/sdk`, `ws`, `zod`. Express comes transitively via MCP SDK. Daemon is ESM (`"type": "module"`); the build bundles it into one ESM file, `daemon.mjs` (with a `createRequire` banner for the CommonJS dependencies), which the pinned Node 24 runtime runs. Bundled licenses must stay in the `third-party-notices.mjs` allowlist (MIT, ISC, BSD, Apache-2.0, 0BSD).
+
+**Vendored shared modules** (`panel/daemon/vendor/<name>/`, currently `claude-model-catalog` = live model discovery, repo `spendolas/claude-model-catalog`): each directory is a byte-identical copy that the module's own `scripts/vendor.mjs` wrote, stamped with `VENDORED_FROM.json`. Rule: change the module in its own repo (run its tests, commit), then `npm run sync-vendor` in `panel/daemon` and commit the vendor dir. Never edit the vendored copy: `test/vendored-modules.test.mjs` fails on drift whenever the module repo is on disk (`scripts/vendor-sources.mjs` finds it next to the `AE Tools` folder or via `$CLAUDE_MODEL_CATALOG_DIR`). The bundle includes it; `package-release.sh` never ships the directory.
 
 ## CEP Development Notes
 

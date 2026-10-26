@@ -1,15 +1,17 @@
 import { spawn, execFile } from 'node:child_process';
 import { findClaudeBinary, lastClaudeLookup } from './claude-binary.js';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { mcpUrl } from './ports.js';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
 import { newTurnState, observe, classify, userMessage as turnUserMessage, versionDetail, versionNotice } from './cli-contract.js';
+// Vendored shared module (panel/daemon/vendor, see CLAUDE.md): live model
+// discovery. Change it in its own repo, then `npm run sync-vendor`.
+import { createModelCatalog, EFFORT_LEVELS } from './vendor/claude-model-catalog/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -90,184 +92,87 @@ var MODEL_CAPABILITY_SOURCE = 'claude-code-model-config';
 var ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 var NO_XHIGH_EFFORTS = ['low', 'medium', 'high', 'max'];
 
-var MODEL_DISCOVERY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Live model discovery runs on the vendored claude-model-catalog module
+// (panel/daemon/vendor/claude-model-catalog, synced with `npm run sync-vendor`,
+// never edited here): GET /v1/models with the Claude Code credential, a
+// per-account 24h cache on disk, a stale same-account fallback, fail closed.
+// Gaffer keeps three things on its side: where the cache file lives, the
+// adapter below that turns the module's catalog into the panel's models
+// payload (so panel/main.js is unchanged), and modelCapability(), the
+// hardcoded fallback table used before the first discovery.
 
-// Persisted model-catalog cache TTL. A day is well within a single work
-// session's relevance yet short enough that newly available models surface on
-// the next day's first Settings open even for a user who never chats (chat's
-// background refresh keeps active users current within the day). See
-// ChatHandler.listModelOptions / _loadPersistedCache.
-var MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-
-// Derive a stable per-account identity for keying the persisted cache — from
-// FILES ONLY, never a subprocess, so a cache-hit open stays fast (a spawned
-// `claude auth status` would add ~500ms and defeat the whole point of skipping
-// the network). NEVER a raw token on disk.
-//   - Explicit API-key / bearer installs: a salted-free sha256 *fingerprint* of
-//     the key (stable — API keys don't rotate; the raw key never leaves memory).
-//   - OAuth installs: the account identity Claude Code persists in ~/.claude.json
-//     (accountUuid preferred — stable and PII-free; email/org uuid as fallbacks).
-// null => identity unknown; callers then decline to serve a persisted catalog as
-// "fresh" (they fall back to a live fetch) and never cross-serve accounts.
-function accountIdFromEnvAndConfig(env) {
-  var explicit = env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN;
-  if (explicit) {
-    try { return 'key:' + createHash('sha256').update(String(explicit)).digest('hex').slice(0, 16); }
-    catch (e) { return null; }
-  }
-  var candidates = [];
-  if (env.CLAUDE_CONFIG_DIR) candidates.push(join(env.CLAUDE_CONFIG_DIR, '.claude.json'));
-  candidates.push(join(homedir(), '.claude.json'));
-  for (var i = 0; i < candidates.length; i++) {
-    try {
-      var acc = JSON.parse(readFileSync(candidates[i], 'utf8')).oauthAccount;
-      if (acc) {
-        if (acc.accountUuid) return 'uuid:' + String(acc.accountUuid);
-        if (acc.emailAddress) return 'email:' + String(acc.emailAddress);
-        if (acc.organizationUuid) return 'org:' + String(acc.organizationUuid);
-      }
-    } catch (e) { /* missing/corrupt — try the next candidate */ }
-  }
-  return null;
+// Disposable cache in the panel dir (unlike the per-install config, which
+// lives in the OS app-data folder) so a fresh catalog survives daemon restarts
+// and a Settings open skips the network. Read at call time so a test's
+// GAFFER_MODEL_CACHE_PATH applies.
+export function modelCacheFilePath() {
+  return process.env.GAFFER_MODEL_CACHE_PATH || join(PANEL_DIR, '.gaffer-model-cache.json');
 }
 
-// A persisted cache belongs to the current account only when both identities
-// are known AND equal. Unknown identity (either side null) never matches — a
-// different account must never inherit the previous account's catalog.
-function accountMatches(persisted, currentAccountId) {
-  return !!(persisted && currentAccountId != null
-    && persisted.accountId != null && persisted.accountId === currentAccountId);
+// The catalog Gaffer uses: the module with Gaffer's cache file, Gaffer's
+// sanitised env (so the credential and account resolve the same way the CLI
+// child does) and the daemon log. No userAgent: the module sends none, and the
+// old spoofed "claude-code/2.1.236" header is gone on purpose. `overrides`
+// (fetch, readCredential, readAccountId, now, log, cacheFile) are the test
+// seams; production passes nothing.
+export function createGafferModelCatalog(overrides) {
+  var o = overrides || {};
+  return createModelCatalog(Object.assign({
+    cacheFile: o.cacheFile || modelCacheFilePath(),
+    env: augmentedEnv,
+    // The module calls this on every failed live fetch with the reason and the
+    // HTTP status or exception message, never the token.
+    log: function (level, message) {
+      var line = 'Gaffer: ' + message;
+      if (level === 'warn' || level === 'error') console.warn(line); else console.log(line);
+    },
+  }, o));
 }
 
-// Parse the Claude Code OAuth blob into { token, expiresAt }. expiresAt (ms
-// epoch) lets discovery detect a stale access token BEFORE calling the API, so
-// an expired token falls back to the cached catalog instead of eating a 401.
-function parseOauthBlob(raw) {
-  try {
-    var o = JSON.parse(String(raw || '')).claudeAiOauth;
-    return o && o.accessToken
-      ? { token: String(o.accessToken), expiresAt: typeof o.expiresAt === 'number' ? o.expiresAt : 0 }
-      : null;
-  } catch (e) { return null; }
-}
-
-function readCredentialFileToken(env) {
-  try {
-    var configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-    return parseOauthBlob(readFileSync(join(configDir, '.credentials.json'), 'utf8'));
-  } catch (e) { return null; }
-}
-
-function readMacKeychainToken(env) {
-  return new Promise(function (resolve) {
-    if (process.platform !== 'darwin') return resolve(null);
-    var args = ['find-generic-password'];
-    if (env.USER) args.push('-a', env.USER);
-    args.push('-s', 'Claude Code-credentials', '-w');
-    execFile('/usr/bin/security', args, { env: env, timeout: 10000, windowsHide: true }, function (err, stdout) {
-      resolve(err ? null : parseOauthBlob(stdout));
-    });
-  });
-}
-
-// The daemon does NOT own the OAuth token lifecycle — the Claude Code CLI
-// refreshes the access token when IT makes an API call (e.g. a chat spawn), and
-// exposes no refresh/models command. So the token is only valid in the window
-// after recent CLI use (~8h), and a background daemon can't refresh it without
-// impersonating Claude Code's OAuth client. Discovery therefore reads the token
-// fresh each time WITH its expiry; expiry handling lives in fetchModelCatalog.
-async function readModelDiscoveryCredential(env) {
-  // Explicit credentials win, and are the only supported route for API-key
-  // installs. Treated as non-expiring (no OAuth expiry to track).
-  if (env.ANTHROPIC_API_KEY) return { kind: 'api-key', token: String(env.ANTHROPIC_API_KEY), expiresAt: 0 };
-  if (env.ANTHROPIC_AUTH_TOKEN) return { kind: 'bearer', token: String(env.ANTHROPIC_AUTH_TOKEN), expiresAt: 0 };
-  var blob = await readMacKeychainToken(env);
-  if (!blob) blob = readCredentialFileToken(env);
-  return blob ? { kind: 'bearer', token: blob.token, expiresAt: blob.expiresAt } : null;
-}
-
-export function modelCatalogOptions(payload) {
-  if (!payload || !Array.isArray(payload.data)) return null;
-  var rows = payload.data.filter(function (row) {
-    return row && typeof row.id === 'string' && /^claude-[a-z]+-/.test(row.id);
-  });
-  if (!rows.length) return null;
+// Module catalog { families, versions: { family: [entry newest first] } } with
+// entry { id, family, label, displayName, maxInputTokens, maxOutputTokens,
+// oneM, efforts } to the panel's models payload: the same fields the old
+// modelCatalogOptions produced from the raw /v1/models rows. The family alias
+// (opus, sonnet, ...) maps to its newest version's capability object, the
+// same object, as before. Pure; null for a null or malformed catalog.
+export function catalogToPanel(catalog) {
+  if (!catalog || !Array.isArray(catalog.families) || !catalog.versions || typeof catalog.versions !== 'object') return null;
   var versions = {};
   var capabilitiesByModel = {};
   var effortsByModel = {};
-  var seen = {};
-  var addFamilyVersion = function (id) {
-    var match = /^claude-([a-z]+)-/.exec(id);
-    if (!match) return '';
-    var family = match[1];
-    if (!versions[family]) versions[family] = [];
-    if (!seen[id]) { seen[id] = true; versions[family].push(id); }
-    return family;
-  };
-  rows.forEach(function (row) {
-    var id = row.id;
-    var family = addFamilyVersion(id);
-    var effort = row.capabilities && row.capabilities.effort;
-    var supportedEfforts = [];
-    if (effort && effort.supported === true) {
-      var declaresLevels = MODEL_DISCOVERY_EFFORTS.some(function (level) {
-        return Object.prototype.hasOwnProperty.call(effort, level);
-      });
-      supportedEfforts = MODEL_DISCOVERY_EFFORTS.filter(function (level) {
-        return declaresLevels ? effort[level] && effort[level].supported === true : true;
-      });
-    }
-    var oneM = Number(row.max_input_tokens) >= 1000000;
-    var cap = {
-      oneM: oneM,
-      contextWindows: oneM ? [200000, 1000000] : [200000],
-      efforts: supportedEfforts,
-      source: 'anthropic-v1-models',
-      entitlement: 'account-server',
-      modelId: id,
-      displayName: typeof row.display_name === 'string' ? row.display_name : id,
-      maxInputTokens: Number(row.max_input_tokens) || null,
-      maxOutputTokens: Number(row.max_tokens) || null,
-    };
-    capabilitiesByModel[id] = cap;
-    effortsByModel[id] = supportedEfforts;
-    // The family alias resolves to the first (newest) API row below.
-    if (family && !capabilitiesByModel[family]) {
-      capabilitiesByModel[family] = cap;
-      effortsByModel[family] = supportedEfforts;
-    }
+  var families = catalog.families.slice();
+  Object.keys(catalog.versions).forEach(function (family) {
+    if (families.indexOf(family) === -1) families.push(family);
   });
-  var versionNumber = function (id) {
-    return id.replace(/^claude-[a-z]+-/, '').split('-').map(function (part) {
-      return parseInt(part, 10) || 0;
+  families.forEach(function (family) {
+    var entries = Array.isArray(catalog.versions[family]) ? catalog.versions[family] : [];
+    versions[family] = entries.map(function (entry) { return entry.id; });
+    entries.forEach(function (entry) {
+      var efforts = Array.isArray(entry.efforts) ? entry.efforts.slice() : [];
+      var cap = {
+        oneM: !!entry.oneM,
+        contextWindows: entry.oneM ? [200000, 1000000] : [200000],
+        efforts: efforts,
+        source: 'anthropic-v1-models',
+        entitlement: 'account-server',
+        modelId: entry.id,
+        displayName: entry.displayName || entry.id,
+        maxInputTokens: entry.maxInputTokens || null,
+        maxOutputTokens: entry.maxOutputTokens || null,
+      };
+      capabilitiesByModel[entry.id] = cap;
+      effortsByModel[entry.id] = efforts;
     });
-  };
-  Object.keys(versions).forEach(function (family) {
-    versions[family].sort(function (a, b) {
-      var x = versionNumber(a), y = versionNumber(b);
-      for (var i = 0; i < Math.max(x.length, y.length); i++) {
-        if ((y[i] || 0) !== (x[i] || 0)) return (y[i] || 0) - (x[i] || 0);
-      }
-      return 0;
-    });
-    var newest = versions[family][0];
-    if (newest && capabilitiesByModel[newest]) {
-      capabilitiesByModel[family] = capabilitiesByModel[newest];
-      effortsByModel[family] = effortsByModel[newest];
+    if (entries.length) {
+      capabilitiesByModel[family] = capabilitiesByModel[entries[0].id];
+      effortsByModel[family] = effortsByModel[entries[0].id];
     }
   });
-  var preferredOrder = ['fable', 'opus', 'sonnet', 'haiku', 'mythos'];
-  var models = preferredOrder.filter(function (family) { return versions[family] && versions[family].length; });
-  Object.keys(versions).forEach(function (family) {
-    if (models.indexOf(family) === -1) models.push(family);
+  var efforts = EFFORT_LEVELS.filter(function (level) {
+    return Object.keys(effortsByModel).some(function (key) { return effortsByModel[key].indexOf(level) !== -1; });
   });
-  var efforts = [];
-  Object.keys(effortsByModel).forEach(function (key) {
-    effortsByModel[key].forEach(function (level) { if (efforts.indexOf(level) === -1) efforts.push(level); });
-  });
-  efforts = MODEL_DISCOVERY_EFFORTS.filter(function (level) { return efforts.indexOf(level) !== -1; });
   return {
-    models: models,
+    models: families,
     efforts: efforts,
     effortsByModel: effortsByModel,
     capabilitiesByModel: capabilitiesByModel,
@@ -276,39 +181,6 @@ export function modelCatalogOptions(payload) {
     entitlement: 'account-server',
     live: true,
   };
-}
-
-async function fetchModelCatalog(env) {
-  var credential = await readModelDiscoveryCredential(env);
-  if (!credential) return { catalog: null, reason: 'no-credential' };
-  // Don't spend a request on a token we already know is expired — the CLI
-  // refreshes it on its next API call (e.g. a chat). Report 'token-expired' so
-  // the caller serves the cached catalog and tries live again later. A 30s skew
-  // buffer avoids racing the exact expiry instant.
-  if (credential.expiresAt && credential.expiresAt <= Date.now() + 30000) {
-    return { catalog: null, reason: 'token-expired' };
-  }
-  var base = String(env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
-  var url = base + '/v1/models?limit=1000';
-  var headers = {
-    'User-Agent': 'claude-code/2.1.236',
-    'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'oauth-2025-04-20',
-  };
-  if (credential.kind === 'api-key') headers['x-api-key'] = credential.token;
-  else headers.Authorization = 'Bearer ' + credential.token;
-  try {
-    var response = await fetch(url, { headers: headers, signal: AbortSignal.timeout(12000) });
-    if (!response.ok) {
-      console.warn('Gaffer: live model discovery returned HTTP ' + response.status);
-      return { catalog: null, reason: response.status === 401 || response.status === 403 ? 'unauthorized' : 'network' };
-    }
-    var catalog = modelCatalogOptions(await response.json());
-    return { catalog: catalog, reason: catalog ? 'ready' : 'invalid-response' };
-  } catch (e) {
-    console.warn('Gaffer: live model discovery failed: ' + (e && e.message ? e.message : e));
-    return { catalog: null, reason: 'network' };
-  }
 }
 
 export function modelCapability(model, versions) {
@@ -674,26 +546,19 @@ export class ChatHandler {
     this.compacting = false;
     this.claudeBin = null;
     this.envForSpawn = null;
-    this.liveModelCapabilities = null;
-    // Last catalog that came back live from the account. Served as a fallback
-    // when the OAuth token is momentarily expired (the daemon can't refresh it;
-    // the CLI does on its next API call). It IS real entitlement proof — it was
-    // fetched live from this account — so serving it isn't the "stale CLI alias"
-    // problem the fail-closed rule guards against.
-    this.cachedCatalog = null;
-    // Persisted TTL cache of the model catalog: { catalog, fetchedAt, accountId }
-    // written in the panel dir (a disposable cache, unlike the per-install
-    // config, which lives in the OS app-data folder), so a fresh catalog
-    // survives daemon restarts (frequent since v0.9.5's restart-on-update) and
-    // avoids a network round-trip on Settings open. Path is injectable for
-    // tests (and via env) so tests never touch the real install's cache.
-    this._cacheFilePath = opts.cacheFilePath
-      || process.env.GAFFER_MODEL_CACHE_PATH
-      || join(PANEL_DIR, '.gaffer-model-cache.json');
-    // Injection seams (tests): fetch, account identity, and clock.
-    this._fetchCatalog = opts.fetchCatalog || null; // else module fetchModelCatalog
-    this._accountIdFn = opts.accountIdFn || null;    // else resolve from disk config
-    this._now = opts.now || Date.now;                // clock for TTL/fetchedAt
+    // The model catalog (vendored claude-model-catalog, see
+    // createGafferModelCatalog). Account-level state, so index.js builds ONE
+    // and hands it to every per-panel handler; a handler built without one
+    // (tests, headless use) gets its own on the Gaffer cache file.
+    // cacheFilePath is kept as a seam so a test never touches the real cache.
+    this.modelCatalog = opts.modelCatalog || createGafferModelCatalog({ cacheFile: opts.cacheFilePath });
+    // Set after a discovery that failed closed, so the panel's Retry ("Try
+    // again") forces a live fetch past any cache instead of re-serving it.
+    this._modelsRetryPending = false;
+    // Memo of catalogToPanel() keyed on the catalog object identity, for the
+    // liveModelCapabilities getter (read on every chat turn).
+    this._panelCatalogFor = null;
+    this._panelCatalog = null;
     // Process seams (tests drive a fake child instead of a real `claude`).
     // Production: node's spawn and the real binary lookup, unchanged.
     this._spawn = opts.spawn || spawn;
@@ -721,140 +586,77 @@ export class ChatHandler {
     };
   }
 
-  // Resolve a stable identity for the currently signed-in account from disk
-  // (fast — no subprocess, no network) so keying the cache never slows a
-  // cache-hit open. Never throws — null on any failure, which callers treat as
-  // "can't confirm the account" (go live, don't serve a persisted catalog as
-  // fresh, never cross-serve accounts).
-  async _resolveAccountId() {
-    if (this._accountIdFn) {
-      try { return await this._accountIdFn(); } catch (e) { return null; }
+  // The last discovered catalog as the panel payload (memoised per catalog
+  // object), or null before the first discovery. The module's peek() is the
+  // last catalog this daemon fetched or read from disk: real entitlement proof
+  // from this account, so the effort guard and the compaction summarizer read
+  // it before falling back to modelCapability()'s table.
+  _panelCatalogNow() {
+    var catalog = this.modelCatalog.peek();
+    if (!catalog) return null;
+    if (catalog !== this._panelCatalogFor) {
+      this._panelCatalogFor = catalog;
+      this._panelCatalog = catalogToPanel(catalog);
     }
-    return accountIdFromEnvAndConfig(augmentedEnv());
+    return this._panelCatalog;
   }
 
-  // Read the persisted cache. Tolerant of a missing/corrupt/foreign file:
-  // any problem => null (treated as no cache). Returns
-  // { catalog, fetchedAt, accountId } or null.
-  _loadPersistedCache() {
-    try {
-      var obj = JSON.parse(readFileSync(this._cacheFilePath, 'utf8'));
-      if (!obj || typeof obj !== 'object') return null;
-      if (!obj.catalog || typeof obj.catalog !== 'object') return null;
-      if (typeof obj.fetchedAt !== 'number' || !isFinite(obj.fetchedAt)) return null;
-      return {
-        catalog: obj.catalog,
-        fetchedAt: obj.fetchedAt,
-        accountId: obj.accountId != null ? String(obj.accountId) : null,
-      };
-    } catch (e) { return null; }
+  // Per-model capability map from the live catalog, or null (callers then use
+  // modelCapability()). Read-only: the catalog owns the state.
+  get liveModelCapabilities() {
+    var panel = this._panelCatalogNow();
+    return panel ? panel.capabilitiesByModel : null;
   }
 
-  // Persist a freshly fetched catalog. Best-effort: a read-only/again-Dropbox'd
-  // fs just means the next open refetches. Never throws.
-  _writePersistedCache(catalog, accountId) {
-    try {
-      writeFileSync(this._cacheFilePath, JSON.stringify({
-        catalog: catalog,
-        fetchedAt: this._now(),
-        accountId: accountId != null ? String(accountId) : null,
-      }), 'utf8');
-    } catch (e) { /* best-effort */ }
-  }
-
-  // A persisted cache is fresh when it belongs to the current account and its
-  // fetchedAt is within the TTL. Clock skew defense: a non-finite or future
-  // (negative age) timestamp counts as stale, never as infinitely fresh.
-  _isPersistedCacheFresh(persisted, currentAccountId) {
-    if (!accountMatches(persisted, currentAccountId)) return false;
-    var age = this._now() - persisted.fetchedAt;
-    return age >= 0 && age <= MODEL_CACHE_TTL_MS;
-  }
-
-  // Drop the persisted + in-memory cache. Called on sign-in/sign-out so a
-  // different account never sees the previous account's models.
+  // Sign-in / sign-out: forget everything tied to the old account (memory and
+  // the disk cache) so a different account never sees the previous account's
+  // models. The catalog is shared across panels, so one call covers them all.
   invalidateModelCache() {
-    this.cachedCatalog = null;
-    this.liveModelCapabilities = null;
-    try { unlinkSync(this._cacheFilePath); } catch (e) { /* already gone */ }
+    this.modelCatalog.invalidate();
+    this._modelsRetryPending = false;
   }
 
   // Discover the account's currently callable models from Anthropic's live
-  // catalog. Live when the token is valid; on a momentary expiry it serves the
-  // last live catalog (refreshed automatically the next time the token is
-  // valid, e.g. right after a chat — see refreshCatalogInBackground).
-  async listModelOptions() {
-    var currentAccountId = await this._resolveAccountId();
-    var persisted = this._loadPersistedCache();
-
-    // 1) Fresh persisted cache for THIS account → resolve straight from disk,
-    //    no network. `fromCache:true` lets the panel skip the spinner (a
-    //    disk+WS round-trip is single-digit ms). Presents as a normal live
-    //    catalog (modelAccess 'ready') so the picker is identical to a fetch.
-    if (this._isPersistedCacheFresh(persisted, currentAccountId)) {
-      this.cachedCatalog = persisted.catalog;
-      this.liveModelCapabilities = persisted.catalog.capabilitiesByModel;
-      return Object.assign({}, persisted.catalog, {
-        live: true, modelAccess: 'ready', fromCache: true,
-      });
+  // catalog (module cache ladder: fresh same-account disk cache, else live
+  // fetch, else a stale same-account cache, else fail closed) and map the
+  // result to the panel's models payload:
+  //   ready   -> live catalog, modelAccess 'ready', fromCache when served
+  //              from disk (the panel skips the spinner)
+  //   cached  -> the stale same-account fallback after a failed fetch,
+  //              modelAccess 'cached', cached: true; still usable
+  //   other   -> the empty payload with modelAccess = the failure reason
+  //              (no-credential, token-expired, unauthorized, network,
+  //              invalid-response); the panel shows "Try again"
+  // `force` (or a pending Retry after a failure) bypasses a fresh cache.
+  async listModelOptions(opts) {
+    var force = !!((opts && opts.force) || this._modelsRetryPending);
+    var r = await this.modelCatalog.get({ force: force });
+    var usable = r.status === 'ready' || r.status === 'cached';
+    this._modelsRetryPending = !usable;
+    if (r.status === 'ready') {
+      var ready = Object.assign(catalogToPanel(r.catalog), { modelAccess: 'ready' });
+      if (r.fromCache) ready.fromCache = true;
+      return ready;
     }
-
-    // 2) Stale/missing/foreign-account cache → live fetch. `_fetchCatalog` is an
-    //    injection seam for tests; defaults to the live fetch.
-    var result = await (this._fetchCatalog || fetchModelCatalog)(augmentedEnv());
-    if (result && result.catalog) {
-      this.liveModelCapabilities = result.catalog.capabilitiesByModel;
-      this.cachedCatalog = result.catalog;
-      this._writePersistedCache(result.catalog, currentAccountId);
-      return result.catalog;
+    if (r.status === 'cached') {
+      return Object.assign(catalogToPanel(r.catalog), { modelAccess: 'cached', cached: true });
     }
-
-    // 3) Live fetch failed (token expired / unauthorized / network). Serve a
-    //    usable cache if we have one — the in-memory catalog, or the persisted
-    //    one for THIS account even if slightly past TTL — flagged cached rather
-    //    than failing closed. (The persisted match keeps working across a daemon
-    //    restart that emptied the in-memory catalog.)
-    var fallback = this.cachedCatalog
-      || (accountMatches(persisted, currentAccountId) ? persisted.catalog : null);
-    if (fallback) {
-      this.cachedCatalog = fallback;
-      this.liveModelCapabilities = fallback.capabilitiesByModel;
-      return Object.assign({}, fallback, {
-        live: true, modelAccess: 'cached', cached: true,
-      });
-    }
-    // 4) No live catalog ever, and none cached. Fail closed: don't surface CLI
-    //    aliases the account may not be entitled to. Settings shows retry; the
-    //    next chat refreshes the token and discovery goes live.
-    this.liveModelCapabilities = null;
+    // Fail closed: don't surface CLI aliases the account may not be entitled
+    // to. Settings shows Retry; the next chat refreshes the token and the
+    // background refresh goes live.
     return {
       models: [], efforts: [], effortsByModel: {}, capabilitiesByModel: {},
       versions: {}, capabilitySource: 'unavailable', entitlement: 'unknown',
-      live: false, modelAccess: result && result.reason ? result.reason : 'unavailable',
+      live: false, modelAccess: r.status || 'unavailable',
     };
   }
 
   // After the CLI makes an API call the OAuth token is fresh again; opportunist-
   // ically refresh the cached catalog so a later Settings open (with a possibly
-  // expired token) still shows current models. Fire-and-forget, throttled.
+  // expired token) still shows current models. Fire-and-forget; the module
+  // throttles it to once per 60s and never rejects.
   refreshCatalogInBackground() {
-    var now = Date.now();
-    if (this._catalogRefreshInFlight) return;
-    if (this._lastCatalogRefresh && now - this._lastCatalogRefresh < 60000) return;
-    this._catalogRefreshInFlight = true;
-    this._lastCatalogRefresh = now;
-    // Resolve the account first so the write-through keys the persisted cache
-    // to the current identity — keeping active users current on disk without
-    // ever blocking a Settings open on a fetch.
-    Promise.resolve(this._resolveAccountId()).then((accountId) => {
-      return fetchModelCatalog(augmentedEnv()).then((result) => {
-        if (result && result.catalog) {
-          this.cachedCatalog = result.catalog;
-          this.liveModelCapabilities = result.catalog.capabilitiesByModel;
-          this._writePersistedCache(result.catalog, accountId);
-        }
-      });
-    }).catch(() => {}).finally(() => { this._catalogRefreshInFlight = false; });
+    this.modelCatalog.refreshInBackground();
   }
 
   async handleChat(msg, socket) {
