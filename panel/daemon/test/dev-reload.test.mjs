@@ -27,6 +27,18 @@ test('maxSourceMtime: ignores node_modules/test/dist and dotfiles and non-js', (
   assert.equal(maxSourceMtime(dir), 1000 * 1000); // only real.js counts
 });
 
+test('maxSourceMtime: counts .mjs and .cjs sources (vendor, launch.cjs) but never the local daemon.mjs bundle', () => {
+  var dir = mkdtempSync(join(tmpdir(), 'devreload-'));
+  writeFileSync(join(dir, 'a.js'), '1'); utimesSync(join(dir, 'a.js'), seconds(1000), seconds(1000));
+  mkdirSync(join(dir, 'vendor'));
+  var v = join(dir, 'vendor', 'catalog.cjs'); writeFileSync(v, '2'); utimesSync(v, seconds(5000), seconds(5000));
+  var l = join(dir, 'launch.cjs'); writeFileSync(l, '3'); utimesSync(l, seconds(4000), seconds(4000));
+  var m = join(dir, 'x.mjs'); writeFileSync(m, '4'); utimesSync(m, seconds(6000), seconds(6000));
+  assert.equal(maxSourceMtime(dir), 6000 * 1000);
+  var b = join(dir, 'daemon.mjs'); writeFileSync(b, '5'); utimesSync(b, seconds(9000), seconds(9000));
+  assert.equal(maxSourceMtime(dir), 6000 * 1000, 'a rebuilt bundle does not restart a dev daemon running index.js');
+});
+
 test('isDevInstall: true when a .git sits at panelDir/.. or panelDir', () => {
   var repo = mkdtempSync(join(tmpdir(), 'devreload-repo-'));
   mkdirSync(join(repo, '.git'));

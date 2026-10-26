@@ -156,11 +156,52 @@ test('catalogToPanel skips entries that are not objects with a string id (hand-e
     opus: [null, 7, 'claude-opus-4-8', { id: 42 }, { id: 'claude-opus-4-8', oneM: true }],
     haiku: [undefined],
   } });
-  assert.deepEqual(p.models, ['opus', 'haiku']);
-  assert.deepEqual(p.versions, { opus: ['claude-opus-4-8'], haiku: [] });
+  // A family with no valid entry is dropped, as v0.12.0 listed only families
+  // with at least one version (the panel would otherwise offer a bare alias).
+  assert.deepEqual(p.models, ['opus']);
+  assert.deepEqual(p.versions, { opus: ['claude-opus-4-8'] });
   assert.equal(p.capabilitiesByModel.opus.modelId, 'claude-opus-4-8');
   assert.equal(p.capabilitiesByModel.haiku, undefined);
   assert.deepEqual(p.efforts, []);
+});
+
+test('catalogToPanel lists only families with a valid version and skips non-string family names', () => {
+  const p = catalogToPanel({ families: ['opus', 42, null, 'ghost', ''], versions: {
+    opus: [{ id: 'claude-opus-4-8' }],
+    ghost: [],
+    extra: [{ id: 'claude-extra-1' }],
+    bad: 'not a list',
+  } });
+  assert.deepEqual(p.models, ['opus', 'extra']);
+  assert.deepEqual(Object.keys(p.versions), ['opus', 'extra']);
+  assert.deepEqual(Object.keys(p.effortsByModel).sort(), ['claude-extra-1', 'claude-opus-4-8', 'extra', 'opus']);
+});
+
+test('scrubLogMessage turns a quoted invalid header value (token with a newline) into a generic line', () => {
+  const token = 'sk-ant-oat01-first\nsecond-line';
+  const undici = 'model catalog: live fetch failed (network): request failed: Headers.append: "Bearer ' + token + '" is an invalid header value.';
+  assert.equal(scrubLogMessage(undici), 'model catalog: live fetch failed (network): invalid credential');
+  const bare = 'request failed: TypeError: Invalid value "' + token + '" for header "Authorization"';
+  const out = scrubLogMessage(bare);
+  assert.equal(out, 'model catalog: live fetch failed: invalid credential');
+  for (const m of [undici, bare]) assert.ok(!scrubLogMessage(m).includes('first'), scrubLogMessage(m));
+  assert.equal(scrubLogMessage('x-api-key rejected: abc'), 'model catalog: live fetch failed: invalid credential');
+  assert.equal(scrubLogMessage('model catalog: live fetch failed (unauthorized): HTTP 401'),
+    'model catalog: live fetch failed (unauthorized): HTTP 401', 'ordinary lines pass through');
+});
+
+test('a fetch that throws an invalid-header error logs the generic line, never the token', async () => {
+  const c = tmpCache();
+  const warned = [];
+  const orig = console.warn;
+  console.warn = (m) => warned.push(String(m));
+  const token = 'oat-with\nnewline';
+  try {
+    await gafferCatalog({ cacheFile: c.file, readCredential: async () => ({ kind: 'bearer', token, expiresAt: NOW + 3600_000 }),
+      fetch: async (url, opts) => { throw new TypeError('Headers.append: "' + opts.headers.Authorization + '" is an invalid header value.'); } }).get();
+  } finally { console.warn = orig; c.cleanup(); }
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0], 'Gaffer: model catalog: live fetch failed (network): invalid credential');
 });
 
 test('catalogToPanel is null for a null or malformed catalog, never throws', () => {
@@ -600,8 +641,10 @@ test('a shape-valid cache file with a null entry: list is sane, the getter does 
     const out = await h.listModelOptions();
     assert.equal(out.modelAccess, 'ready');
     assert.equal(out.fromCache, true, 'the module accepted the file; Gaffer must cope with its entries');
-    assert.deepEqual(out.models, ['opus']);
-    assert.deepEqual(out.versions, { opus: [] });
+    // The one family has no valid entry, so the payload lists no model at
+    // all (the panel then shows Try again rather than a bare alias).
+    assert.deepEqual(out.models, []);
+    assert.deepEqual(out.versions, {});
     assert.deepEqual(out.capabilitiesByModel, {});
     assert.doesNotThrow(() => h.liveModelCapabilities);
     assert.deepEqual(h.liveModelCapabilities, {});

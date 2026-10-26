@@ -2,11 +2,11 @@
 
 ## v0.12.1 - 2026-10-26
 
-**A smoother Windows install, a model list that refreshes when you ask it to, and readable log lines on Windows.**
+**A smoother Windows install, a safer model list, and readable log lines on Windows.**
 
 - The Windows install steps no longer put a delete command and a checksum comparison in one block. Claude Code's own safety check rejected that combination, so an agent had to rework the steps by hand. Each delete is now its own small block with an explicit path.
-- The install steps now say up front that registering Gaffer's tools with Claude Code (the last step) can be blocked by Claude Code's automatic permission mode. If it is, the agent shows you the exact command and carries on. The panel's own chat works without it.
-- "Couldn't check models" now really tries again when you click Try again, instead of showing a recent answer. If you switch accounts in the terminal, Gaffer no longer shows the models of the previous account.
+- The install steps now say up front that registering Gaffer's tools with Claude Code (step 11) can be blocked by Claude Code's automatic permission mode. If it is, the agent shows you the exact command and carries on. The panel's own chat works without it.
+- Clicking Try again under "Couldn't check models" always asks Anthropic directly, even right after a recent answer. If you switch accounts in the terminal, Gaffer no longer shows the models of the previous account.
 - Gaffer no longer pretends to be Claude Code when it asks Anthropic which models you can use.
 - When two versions of the same Claude model are listed, Gaffer now picks the newer one. Before, the shortcut for "opus" or "sonnet" could point at an older model.
 - If Gaffer cannot tell which account you are signed in as and your sign-in has expired, it asks you to try again instead of showing a possibly outdated model list.
