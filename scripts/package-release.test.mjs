@@ -123,8 +123,38 @@ test('runtime-pins.json inside the archive is the committed one', () => {
   assert.equal(pins.node.version, 'v24.22.1');
 });
 
+// The vendored shared modules (panel/daemon/vendor/<name>, tracked in git so
+// `git archive HEAD:panel` includes them) are bundled into daemon.mjs: the
+// directory and its .cjs sources never ship, in any archive.
+const isVendorPath = (p) => /^(\.\/)?daemon\/vendor(\/|$)/.test(p);
+const isStrayCjs = (p) => /\.cjs$/.test(p) && !/^(\.\/)?daemon\/launch\.cjs$/.test(p);
+test('the committed tree really has the vendor dir (else the exclusion tests prove nothing)', () => {
+  const tracked = execFileSync('git', ['ls-files', 'panel/daemon/vendor'], { cwd: repoRoot, encoding: 'utf8' }).split('\n').filter(Boolean);
+  assert.ok(tracked.includes('panel/daemon/vendor/claude-model-catalog/VENDORED_FROM.json'), tracked.join(','));
+  assert.ok(tracked.includes('panel/daemon/vendor/claude-model-catalog/catalog.cjs'));
+});
+for (const name of ['gaffer-install-mac.tar.gz', 'gaffer-update-mac.tar.gz']) {
+  test(name + ' ships no daemon/vendor directory and no .cjs beside launch.cjs', () => {
+    const list = execFileSync('tar', ['-tzf', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isVendorPath), []);
+    assert.deepEqual(list.filter(isStrayCjs), []);
+    assert.ok(list.includes('./daemon/launch.cjs'));
+  });
+}
+for (const name of ['gaffer-install-win.zip', 'gaffer-update-win.zip']) {
+  test(name + ' ships no daemon/vendor directory and no .cjs beside launch.cjs', () => {
+    const list = execFileSync('unzip', ['-Z1', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isVendorPath), []);
+    assert.deepEqual(list.filter(isStrayCjs), []);
+    assert.ok(list.includes('daemon/launch.cjs'));
+  });
+}
+
 // A bundle step that leaves a forbidden file behind must fail the build.
-for (const extra of ['daemon/daemon.mjs.map', 'daemon/node_modules/x/index.js', 'daemon/package-lock.json', 'daemon/extra-module.js']) {
+// daemon/vendor/... and a stray .cjs are planted AFTER the staging cleanup,
+// so they prove the assertions, not the rm.
+for (const extra of ['daemon/daemon.mjs.map', 'daemon/node_modules/x/index.js', 'daemon/package-lock.json', 'daemon/extra-module.js',
+  'daemon/vendor/claude-model-catalog/LICENSE', 'daemon/tools/helper.cjs']) {
   test('assertion fires when the bundle step leaves ' + extra, () => {
     const bad = mkdtempSync(join(tmpdir(), 'gaffer-pkg-bad-'));
     assert.throws(() => build(bad, { STUB_EXTRA: extra }));
