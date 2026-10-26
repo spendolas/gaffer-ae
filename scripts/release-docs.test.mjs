@@ -366,7 +366,7 @@ test('CHANGELOG v0.11.2 carries the plain-language security notice and no stale 
 test('CHANGELOG top section is plain bullets (Unreleased, or the dated release entry with a bold summary)', () => {
   const top = /^## Unreleased$/m.test(changelog)
     ? section(changelog, /^## Unreleased$/m, /^## v/m)
-    : section(changelog, /^## v0\.12\.0 - \d{4}-\d{2}-\d{2}$/m, /^## v0\.11\.3/m);
+    : section(changelog, /^## v\d+\.\d+\.\d+ - \d{4}-\d{2}-\d{2}$/m, /^## v\d+\.\d+\.\d+ - /m);
   assert.ok(/^- /m.test(top));
   assert.ok(!DASHES.test(top));
   if (!/^## Unreleased$/m.test(changelog)) assert.ok(/^\*\*[^*]+\*\*$/m.test(top), 'the release entry has a bold one-line summary');
