@@ -41,6 +41,7 @@ Before you begin, read these rules. They apply to every step below.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
 - If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror).
 - Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <file>`. Bash expands `$` inside double quotes, so the .ps1 file is the safer choice.
+- Each code block is its own command: run it on its own, and do not merge blocks or add commands to them. Blocks that delete a folder are kept separate on purpose, because Claude Code's own command check can block a delete that shares a command with other path-like text.
 - After the install completes, run the verification step. Do not skip it.
 
 ## What to do
@@ -81,7 +82,7 @@ Before you begin, read these rules. They apply to every step below.
 
    On macOS the command prints the platform name used in steps 5 to 8 (`darwin-arm64` for Apple Silicon, `darwin-x64` for Intel). On an Intel Mac, `sysctl -n hw.optional.arm64` run on its own prints `sysctl: unknown oid 'hw.optional.arm64'`: that is expected and means Intel (the command above hides it and prints `darwin-x64`). Do not ask the user to confirm the platform. Do not use `uname -m` instead: it reports `x86_64` in a terminal running under Rosetta on Apple Silicon. On Windows, `AMD64` or `ARM64` means the platform is `win-x64` (Windows on ARM runs it under its x64 emulation). Anything else (`x86`): stop and tell the user that Gaffer needs 64-bit Windows.
 
-4. **Download the Gaffer package, verify it, and extract it** into the CEP extensions directory. The package and its checksum file come from the same GitHub release. Each block downloads into a new private folder and prints its path, and creates the install folder only after the checksum passed.
+4. **Download the Gaffer package, verify it, and extract it** into the CEP extensions directory. The package and its checksum file come from the same GitHub release. Each download block downloads into a new private folder and prints its path, and creates the install folder only after the checksum passed.
 
    ```bash
    # macOS
@@ -105,16 +106,24 @@ Before you begin, read these rules. They apply to every step below.
    if ($LASTEXITCODE -ne 0) { throw "Download of gaffer-install-win.zip failed (curl exit $LASTEXITCODE)" }
    curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\SHA256SUMS.txt" https://github.com/spendolas/gaffer-ae/releases/latest/download/SHA256SUMS.txt
    if ($LASTEXITCODE -ne 0) { throw "Download of SHA256SUMS.txt failed (curl exit $LASTEXITCODE)" }
-   $want = ((Get-Content "$dl\SHA256SUMS.txt" | Where-Object { $_ -match ' gaffer-install-win\.zip$' }) -split '\s+')[0]
+   $line = Get-Content "$dl\SHA256SUMS.txt" | Where-Object { $_.EndsWith(' gaffer-install-win.zip') } | Select-Object -First 1
+   $want = if ($line) { $line.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[0] } else { $null }
    $got = (Get-FileHash "$dl\gaffer-install-win.zip" -Algorithm SHA256).Hash.ToLower()
    if (-not $want -or $got -ne $want) { throw "gaffer-install-win.zip does not match SHA256SUMS.txt" }
    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
    tar.exe -xf "$dl\gaffer-install-win.zip" -C $installDir
    if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }
-   Remove-Item -Recurse -Force $dl
    ```
 
-   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If the checksum does not match, or a download fails in any way other than the `SHA256SUMS.txt` 404 described in the next paragraph, stop and report it; do not extract the package. If the extract fails, remove the install folder (path in step 2) before you stop: a partial folder is not an install. After any failure, also delete the download folder the block printed.
+   On Windows, then delete the download folder as its own command. Replace `<download folder step 4 printed>` with the folder the block above printed:
+
+   ```powershell
+   # Windows (PowerShell)
+   $dl = "<download folder step 4 printed>"
+   Remove-Item -LiteralPath $dl -Recurse -Force
+   ```
+
+   On macOS the checksum line must print `gaffer-install-mac.tar.gz: OK`. If the checksum does not match, or a download fails in any way other than the `SHA256SUMS.txt` 404 described in the next paragraph, stop and report it; do not extract the package. If the extract fails, remove the install folder (path in step 2) before you stop: a partial folder is not an install. After any failure, also delete the download folder the block printed (on Windows with the delete block above).
 
    If only the `SHA256SUMS.txt` download fails with HTTP 404 (curl prints `The requested URL returned error: 404`; its exit code can be 22 or 56), a new Gaffer release is still being published. This is the one failure in this step where you do not stop at once. Delete the download folder, wait 2 minutes (`sleep 120` on macOS, `Start-Sleep -Seconds 120` on Windows), then run this step again unchanged. Retry up to 5 times. Do not work around it: do not skip the checksum and do not take the package from another release. If it still fails after the 5th retry, stop and tell the user.
 
@@ -214,7 +223,18 @@ Before you begin, read these rules. They apply to every step below.
    tar.exe -xf "$dl\node-v24.22.1-win-x64.zip" -C $rt node-v24.22.1-win-x64/node.exe
    if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }
    Move-Item -Force "$rt\node-v24.22.1-win-x64\node.exe" "$rt\node.exe"
-   Remove-Item -Recurse -Force "$rt\node-v24.22.1-win-x64", $dl
+   ```
+
+   Then delete the folder the extract left behind and the download folder, each as its own command:
+
+   ```powershell
+   $leftover = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel\daemon\runtime\node-v24.22.1-win-x64"
+   Remove-Item -LiteralPath $leftover -Recurse -Force
+   ```
+
+   ```powershell
+   $dl = "<download folder step 5 printed>"
+   Remove-Item -LiteralPath $dl -Recurse -Force
    ```
 
    The result is one file: `daemon/runtime/node` (Windows: `daemon\runtime\node.exe`) inside the install folder. Delete the archive and any download folder you created, including empty ones and those of failed attempts.
@@ -331,7 +351,7 @@ Before you begin, read these rules. They apply to every step below.
 
     Note the paths step 10 printed: later steps need them.
 
-11. **Register Gaffer's tools with Claude Code.** This lets a `claude` session in a terminal use Gaffer's tools while After Effects is open. The panel's own chat does not need it: it passes its MCP config to Claude inline. Before you run it, tell the user in one sentence: this adds one entry named `gaffer` to their Claude Code user settings (`~/.claude.json` on macOS, `%USERPROFILE%\.claude.json` on Windows), and `claude mcp remove gaffer -s user` removes it again. Use the standalone `claude` if step 10 found one; otherwise run the desktop app's copy with the same arguments. Both read the same user config, so registering once is enough. The snippet below re-derives the binary (or paste the literal path step 10 printed):
+11. **Register Gaffer's tools with Claude Code.** This lets a `claude` session in a terminal use Gaffer's tools while After Effects is open. The panel's own chat does not need it: it passes its MCP config to Claude inline. Before you run it, tell the user in one sentence: this adds one entry named `gaffer` to their Claude Code user settings (`~/.claude.json` on macOS, `%USERPROFILE%\.claude.json` on Windows), and `claude mcp remove gaffer -s user` removes it again. Claude Code's permission check (for example in auto mode) may block this command, because it writes a lasting entry into the user's settings. If it is blocked, do not try to get around it: show the user the exact command with the binary path filled in, so they can run it themselves, tell them it is optional because the panel's own chat works without it and only a `claude` session in a terminal needs it, and continue with step 12. Use the standalone `claude` if step 10 found one; otherwise run the desktop app's copy with the same arguments. Both read the same user config, so registering once is enough. The snippet below re-derives the binary (or paste the literal path step 10 printed):
     ```bash
     # macOS
     APP_CLAUDE="$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)"
@@ -355,7 +375,7 @@ Before you begin, read these rules. They apply to every step below.
 
     After the user has restarted After Effects and confirmed the panel is visible under Window > Extensions > Gaffer, run these checks:
 
-    a. Only if step 11 registered the server: run `mcp list` with the same binary as step 11. Re-derive it (macOS: `"$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)" mcp list` for the desktop app's copy, or `claude mcp list` for a standalone CLI; Windows: the `Get-ChildItem` line from step 11, then `& $claudeBin mcp list`) or use the literal path step 10 printed. Confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open. If step 11 was skipped, skip this check too.
+    a. Only if step 11 registered the server: run `mcp list` with the same binary as step 11. Re-derive it (macOS: `"$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)" mcp list` for the desktop app's copy, or `claude mcp list` for a standalone CLI; Windows: the `Get-ChildItem` line from step 11, then `& $claudeBin mcp list`) or use the literal path step 10 printed. Confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open. If step 11 was skipped, or was blocked and the user has not run the command, skip this check too.
 
     b. Ask Claude to call `getProjectSummary` via the Gaffer MCP. If it returns a valid JSON response describing the project, the install is working end-to-end. If it errors, check the troubleshooting section.
 

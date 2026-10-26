@@ -144,7 +144,21 @@ export function renderRuntimeSteps(pins) {
         'tar.exe -xf "$dl\\' + a + '" -C $rt ' + p.pin.member,
         'if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }',
         'Move-Item -Force "$rt\\' + top + '\\' + leaf + '" "$rt\\' + leaf + '"',
-        'Remove-Item -Recurse -Force "$rt\\' + top + '", $dl',
+      ].join('\n')));
+      // Each Remove-Item is its own block with a plain path variable: Claude
+      // Code's command guard can block a delete that shares a command with
+      // other path-like text (a regex, a tar member).
+      out.push('');
+      out.push(ind('Then delete the folder the extract left behind and the download folder, each as its own command:'));
+      out.push('');
+      out.push(fence('powershell', [
+        '$leftover = ' + WIN_INSTALL.slice(0, -1) + '\\daemon\\runtime\\' + top + '"',
+        'Remove-Item -LiteralPath $leftover -Recurse -Force',
+      ].join('\n')));
+      out.push('');
+      out.push(fence('powershell', [
+        '$dl = "' + DL_PLACEHOLDER + '"',
+        'Remove-Item -LiteralPath $dl -Recurse -Force',
       ].join('\n')));
     }
     out.push('');
