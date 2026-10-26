@@ -588,7 +588,7 @@ function resolveIcons(servers, onIcons) {
     for (var r of results) {
       if (r.status === 'fulfilled' && r.value) { icons[r.value.id] = r.value.icon; found++; }
     }
-    console.log('Gaffer: icon fetch — ' + found + '/' + misses.length + ' resolved');
+    console.log('Gaffer: icon fetch: ' + found + '/' + misses.length + ' resolved');
     if (found) onIcons(icons);
   });
 }
@@ -1071,7 +1071,7 @@ export class ChatHandler {
       // from an error result, so the dead id cannot be persisted. Retry once
       // fresh (history text is preserved panel-side).
       if (verdict.kind === 'stale_session' && sessionId && !msg.__retriedFreshSession) {
-        console.log('Gaffer: stale session ' + sessionId + ' — retrying fresh');
+        console.log('Gaffer: stale session ' + sessionId + ': retrying fresh');
         self.sessionId = null;
         if (socket.readyState === 1) {
           socket.send(JSON.stringify({ type: 'chat_event', message: 'Previous session expired, starting a fresh one.' }));
@@ -1266,7 +1266,7 @@ export class ChatHandler {
       // The conversation outgrew what its own model can re-read in one call.
       // Skipping beats both a doomed full-context call and a silent model swap;
       // the session continues until the context-overflow path resets it.
-      console.log('Gaffer compact: skipped — ' + (this._lastModel || 'unknown model')
+      console.log('Gaffer compact: skipped: ' + (this._lastModel || 'unknown model')
         + ' cannot re-read ' + this.lastContextTokens + ' tokens, and we never summarize on another model');
       return;
     }
@@ -1415,7 +1415,7 @@ export class ChatHandler {
       execFile(claudeBin, ['mcp', 'login', id], { timeout: 300000, env: env, windowsHide: true }, function (err, stdout, stderr) {
         if (err) {
           var reason = err.killed
-            ? 'login timed out (5 min) — browser flow not completed'
+            ? 'login timed out (5 min): browser flow not completed'
             : ((stderr || '').trim() || err.message);
           console.error('Gaffer: mcp login failed for "' + id + '": ' + reason);
           resolve({ ok: false, error: reason });
