@@ -312,6 +312,28 @@ test('README step 11 says the registration may be blocked and what to do then', 
   assert.ok(step(12).includes('or was blocked and the user has not run the command, skip this check too'));
 });
 
+// Owner's fresh install through the Claude desktop app: the agent said a
+// command had to be run but not which one (step 9), and step 11 was offered
+// without saying what it is for.
+test('README tells the agent to show the command at once when step 9 or 11 is blocked', () => {
+  const rules = section(install, /^### Rules for Claude/m, /^### /m);
+  assert.ok(rules.includes('put the full command in a code block in that same message'));
+  assert.ok(rules.includes('Never say only that "a command" has to be run'));
+  const s9 = step(9);
+  assert.ok(s9.includes('If Claude Code\'s permission check blocks it'));
+  assert.ok(s9.includes('in the same message show the exact block below'));
+  assert.ok(s9.includes('defaults read com.adobe.CSXS.13 PlayerDebugMode'));
+  assert.ok(s9.includes('does not show the Gaffer panel at all'));
+});
+
+test('README step 11 explains what registration gives the user and recommends it', () => {
+  const s = step(11);
+  assert.ok(s.startsWith('11. **Register Gaffer\'s tools with Claude Code (recommended).**'));
+  assert.ok(s.includes('can read and edit their After Effects project through Gaffer'));
+  assert.ok(s.includes('Without it only the panel\'s own chat can'));
+  assert.ok(s.includes('unless the user says no, run it for them'));
+});
+
 test('README step 11 registers the MCP server by default, with disclosure and a removal command (decision D1)', () => {
   const s = step(11);
   assert.ok(s.includes('mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp'));
