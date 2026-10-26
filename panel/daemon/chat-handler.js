@@ -114,19 +114,30 @@ export function modelCacheFilePath() {
 // child does) and the daemon log. No userAgent: the module sends none, and the
 // old spoofed "claude-code/2.1.236" header is gone on purpose. `overrides`
 // (fetch, readCredential, readAccountId, now, log, cacheFile) are the test
-// seams; production passes nothing.
+// seams; production passes nothing. A key set to undefined is dropped, so
+// `{ cacheFile: undefined }` keeps the default cache file.
 export function createGafferModelCatalog(overrides) {
-  var o = overrides || {};
+  var o = {};
+  Object.keys(overrides || {}).forEach(function (k) {
+    if (overrides[k] !== undefined) o[k] = overrides[k];
+  });
   return createModelCatalog(Object.assign({
-    cacheFile: o.cacheFile || modelCacheFilePath(),
+    cacheFile: modelCacheFilePath(),
     env: augmentedEnv,
     // The module calls this on every failed live fetch with the reason and the
-    // HTTP status or exception message, never the token.
+    // HTTP status or exception message, never the token. The message can echo
+    // ANTHROPIC_BASE_URL through a fetch error, so URL userinfo is scrubbed.
     log: function (level, message) {
-      var line = 'Gaffer: ' + message;
+      var line = 'Gaffer: ' + scrubLogMessage(message);
       if (level === 'warn' || level === 'error') console.warn(line); else console.log(line);
     },
   }, o));
+}
+
+// Strips `user:pass@` from any URL-looking text (scheme://userinfo@host) so a
+// base URL that carries credentials never reaches the daemon log.
+export function scrubLogMessage(message) {
+  return String(message).replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
 }
 
 // Module catalog { families, versions: { family: [entry newest first] } } with
@@ -145,7 +156,11 @@ export function catalogToPanel(catalog) {
     if (families.indexOf(family) === -1) families.push(family);
   });
   families.forEach(function (family) {
-    var entries = Array.isArray(catalog.versions[family]) ? catalog.versions[family] : [];
+    // The cache file is on disk and may be hand edited or truncated: an entry
+    // that is not an object with a string id is skipped, never thrown on.
+    var entries = (Array.isArray(catalog.versions[family]) ? catalog.versions[family] : []).filter(function (entry) {
+      return !!entry && typeof entry === 'object' && typeof entry.id === 'string';
+    });
     versions[family] = entries.map(function (entry) { return entry.id; });
     entries.forEach(function (entry) {
       var efforts = Array.isArray(entry.efforts) ? entry.efforts.slice() : [];
@@ -549,9 +564,11 @@ export class ChatHandler {
     // The model catalog (vendored claude-model-catalog, see
     // createGafferModelCatalog). Account-level state, so index.js builds ONE
     // and hands it to every per-panel handler; a handler built without one
-    // (tests, headless use) gets its own on the Gaffer cache file.
-    // cacheFilePath is kept as a seam so a test never touches the real cache.
-    this.modelCatalog = opts.modelCatalog || createGafferModelCatalog({ cacheFile: opts.cacheFilePath });
+    // (tests, headless use) gets its own on the Gaffer cache file
+    // (GAFFER_MODEL_CACHE_PATH, else the panel dir). cacheFilePath is a seam
+    // so a test never touches the real cache; left out, the default applies.
+    this.modelCatalog = opts.modelCatalog || createGafferModelCatalog(
+      opts.cacheFilePath ? { cacheFile: opts.cacheFilePath } : {});
     // Set after a discovery that failed closed, so the panel's Retry ("Try
     // again") forces a live fetch past any cache instead of re-serving it.
     this._modelsRetryPending = false;
@@ -591,21 +608,31 @@ export class ChatHandler {
   // last catalog this daemon fetched or read from disk: real entitlement proof
   // from this account, so the effort guard and the compaction summarizer read
   // it before falling back to modelCapability()'s table.
+  // Never throws: this is read on the chat path outside any try, and a bad
+  // catalog must degrade to the fallback table, not kill the daemon.
   _panelCatalogNow() {
-    var catalog = this.modelCatalog.peek();
-    if (!catalog) return null;
-    if (catalog !== this._panelCatalogFor) {
-      this._panelCatalogFor = catalog;
-      this._panelCatalog = catalogToPanel(catalog);
+    try {
+      var catalog = this.modelCatalog.peek();
+      if (!catalog) return null;
+      if (catalog !== this._panelCatalogFor) {
+        this._panelCatalogFor = catalog;
+        this._panelCatalog = catalogToPanel(catalog);
+      }
+      return this._panelCatalog;
+    } catch (e) {
+      return null;
     }
-    return this._panelCatalog;
   }
 
   // Per-model capability map from the live catalog, or null (callers then use
-  // modelCapability()). Read-only: the catalog owns the state.
+  // modelCapability()). Read-only: the catalog owns the state. Never throws.
   get liveModelCapabilities() {
-    var panel = this._panelCatalogNow();
-    return panel ? panel.capabilitiesByModel : null;
+    try {
+      var panel = this._panelCatalogNow();
+      return panel && panel.capabilitiesByModel ? panel.capabilitiesByModel : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   // Sign-in / sign-out: forget everything tied to the old account (memory and
@@ -656,7 +683,14 @@ export class ChatHandler {
   // expired token) still shows current models. Fire-and-forget; the module
   // throttles it to once per 60s and never rejects.
   refreshCatalogInBackground() {
-    this.modelCatalog.refreshInBackground();
+    var self = this;
+    var p;
+    try { p = this.modelCatalog.refreshInBackground(); } catch (e) { return; }
+    // A refresh that produced a catalog resolves the panel's pending Retry:
+    // the next list_models may serve the cache again.
+    Promise.resolve(p).then(function () {
+      try { if (self.modelCatalog.peek()) self._modelsRetryPending = false; } catch (e) { /* keep the flag */ }
+    }).catch(function () {});
   }
 
   async handleChat(msg, socket) {

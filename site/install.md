@@ -39,7 +39,7 @@ Before you begin, read these rules. They apply to every step below.
 - Do not change proxy, certificate or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
 - Do not add shell aliases, modify the user's PATH, or change any config outside the paths explicitly named in these steps.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
-- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror).
+- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror, step 11 says what to do when its command is blocked: hand it to the user and continue).
 - Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <file>`. Bash expands `$` inside double quotes, so the .ps1 file is the safer choice.
 - Each code block is its own command: run it on its own, and do not merge blocks or add commands to them. Blocks that delete a folder are kept separate on purpose, because Claude Code's own command check can block a delete that shares a command with other path-like text.
 - After the install completes, run the verification step. Do not skip it.

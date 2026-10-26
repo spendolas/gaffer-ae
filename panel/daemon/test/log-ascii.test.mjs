@@ -1,8 +1,16 @@
 // Daemon log lines must not carry em or en dashes: the Windows log
 // (%TEMP%\gaffer-daemon.log) is read in a console that renders them as
 // garbage. Scans every daemon source file (not vendor/, test/, node_modules/)
-// for string literals inside console.log/warn/error arguments.
+// for string literals inside console.log/warn/error/info/debug arguments.
 // No dependencies: a small lexer that knows strings, templates and comments.
+//
+// Known limits of the scanner (good enough for a lint, not a parser):
+// - a regex literal containing a quote inside a console call argument is
+//   read as the start of a string and can swallow or split what follows;
+// - a string built elsewhere (stored in a variable, returned by a helper,
+//   read from a file) and then logged is not seen; only literals written
+//   directly in the console call's argument list are checked;
+// - the daemon's own log helpers (if any wrap console) are not followed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -26,7 +34,7 @@ function sources(dir) {
 // inside the argument list of each console.log/warn/error call in src.
 export function consoleLiterals(src) {
   const found = [];
-  const re = /\bconsole\.(log|warn|error)\s*\(/g;
+  const re = /\bconsole\.(log|warn|error|info|debug)\s*\(/g;
   let m;
   while ((m = re.exec(src))) {
     let i = m.index + m[0].length;
@@ -58,12 +66,13 @@ test('the lexer finds literals in console calls and ignores comments', () => {
     "console.warn(`t ${y}`, /* – */ \"c\");",
     "var z = 'not logged —';",
     "console.error('ok', fn('nested –'));",
+    "console.info('i'); console.debug(\"d\");",
   ].join('\n');
   const lits = consoleLiterals(src).map((l) => l.text);
-  assert.deepEqual(lits, ["'a — b'", '`t ${y}`', '"c"', "'ok'", "'nested –'"]);
+  assert.deepEqual(lits, ["'a — b'", '`t ${y}`', '"c"', "'ok'", "'nested –'", "'i'", '"d"']);
 });
 
-test('no daemon console.log/warn/error string carries an em or en dash', () => {
+test('no daemon console.log/warn/error/info/debug string carries an em or en dash', () => {
   const files = sources(DAEMON);
   assert.ok(files.some((f) => f.endsWith('chat-handler.js')), 'scanned the daemon sources');
   const bad = [];
