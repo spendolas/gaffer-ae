@@ -143,7 +143,7 @@ export function createGafferModelCatalog(overrides) {
 // stripped from any URL-looking text.
 export function scrubLogMessage(message) {
   var s = String(message);
-  if (/invalid header|Bearer\s|x-api-key|authorization|sk-ant-/i.test(s)) {
+  if (/invalid header|Bearer\s|x-api-key|authorization|sk[-]ant[-]/i.test(s)) {
     // Keep the module's prefix up to the reason, e.g.
     // "model catalog: live fetch failed (network)", drop the quoted detail.
     var m = /^(.*?\([a-z-]+\))/.exec(s);
