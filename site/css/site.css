@@ -389,8 +389,23 @@ body {
   background: var(--color-secondary-hover);
 }
 
+/* Secondary like Copy, between the primary and Copy: terminal icon plus label. */
+.dock-cta-secondary {
+  background: var(--color-secondary-fill);
+  color: var(--color-text);
+}
+
+.dock-cta-secondary:hover {
+  background: var(--color-secondary-hover);
+}
+
 /* No app link: the single filled Copy with icon plus short label. */
 #dock[data-app="none"] .dock-app {
+  display: none;
+}
+
+/* No terminal link either off desktop: a phone has no CLI. */
+#dock[data-app="none"] .dock-cli {
   display: none;
 }
 
@@ -442,11 +457,13 @@ body {
     flex: 1 1 auto;
   }
 
-  #dock:not([data-app="none"]) .dock-label-short {
+  #dock:not([data-app="none"]) .dock-label-short,
+  #dock:not([data-app="none"]) .dock-cli-label {
     display: none;
   }
 
-  #dock:not([data-app="none"]) .dock-button {
+  #dock:not([data-app="none"]) .dock-button,
+  #dock:not([data-app="none"]) .dock-cli {
     padding: 0.625rem;
   }
 }
