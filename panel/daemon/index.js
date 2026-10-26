@@ -1,7 +1,7 @@
 import { PanelBridge } from './panel-bridge.js';
 import { Queue } from './queue.js';
 import { startMcpServer } from './mcp-server.js';
-import { ChatHandler, augmentedEnv } from './chat-handler.js';
+import { ChatHandler, augmentedEnv, createGafferModelCatalog } from './chat-handler.js';
 import { createChatRegistry } from './chat-registry.js';
 import { authStatus, authIdentityFromDisk, signIn, signOut } from './auth.js';
 import { findClaudeBinary } from './claude-binary.js';
@@ -37,7 +37,13 @@ bridge.start().catch((err) => {
 // on-connect path uses: a token the CLI considers dead can still sit on disk
 // and would read as "signed in". Falls back to the disk-based push if the CLI
 // call cannot run.
+//
+// One model catalog (vendored claude-model-catalog, Gaffer's cache file) for
+// the whole daemon: the model list is account-level state, so every panel's
+// handler shares it, and a sign-in or sign-out below invalidates it once.
+var modelCatalog = createGafferModelCatalog();
 var chatRegistry = createChatRegistry(() => new ChatHandler({
+  modelCatalog: modelCatalog,
   onAuthError: async (socket) => {
     try {
       const bin = await findClaudeBinary();
@@ -149,6 +155,9 @@ bridge.onSignIn = async (msg, socket) => {
   signInInFlight = false;
   // A sign-in may have switched accounts — drop the model cache so the next
   // Settings open discovers the new account's catalog, never the old one's.
+  // The catalog itself first (no handler may exist yet), then each handler
+  // resets its own Retry state.
+  modelCatalog.invalidate();
   chatRegistry.each((h) => h.invalidateModelCache());
   if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'sign_in_done', ok: r.ok, error: r.error }));
@@ -163,6 +172,7 @@ bridge.onSignOut = async (socket) => {
   const env = augmentedEnv();
   const r = await signOut(bin, { env: env });
   // Signed out — clear the cached catalog so it can't leak to a later account.
+  modelCatalog.invalidate();
   chatRegistry.each((h) => h.invalidateModelCache());
   if (r.ok) sendAuthStatus(socket, { loggedIn: false });
   else sendAuthStatus(socket, await authStatus(bin, { env: env })); // logout failed → report real state

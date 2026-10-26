@@ -1,4 +1,5 @@
 import './isolate-env.mjs';
+import { noopModelCatalog } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -79,7 +80,7 @@ test('the chat turn spawns claude with NODE_EXTRA_CA_CERTS restored and no stash
   delete process.env.NODE_EXTRA_CA_CERTS;
   var spawns = [];
   var handler = new ChatHandler({
-    cacheFilePath: '/nonexistent/gaffer-test-model-cache.json',
+    modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
     lastClaudeLookup: function () { return null; },
     spawn: function (bin, args, opts) {

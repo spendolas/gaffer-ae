@@ -272,6 +272,46 @@ test('README step 10 pins Claude with the downloaded runtime, not a system node'
   assert.ok(s.includes('"claudeBin"'));
 });
 
+// Windows fresh-install trial: Claude Code's command guard blocked step 4
+// ("Remove-Item on system path '\s+' is blocked") because the block mixed a
+// Remove-Item with a -split '\s+' regex. Every delete is its own small block.
+const psBlocks = (text) => [...text.matchAll(/```powershell\n([\s\S]*?)```/g)].map((m) => m[1]);
+
+test('README Windows blocks keep every Remove-Item in its own block, away from regexes and other commands', () => {
+  const blocks = psBlocks(install);
+  assert.ok(blocks.length > 8, 'found the Windows blocks');
+  assert.ok(!install.includes("'\\s+'"), 'no \\s+ regex left in the install section');
+  const deletes = blocks.filter((b) => b.includes('Remove-Item'));
+  assert.ok(deletes.length >= 3, 'step 4 and step 7 delete in their own blocks');
+  for (const b of deletes) {
+    const lines = b.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    assert.equal(lines.filter((l) => l.includes('Remove-Item')).length, 1, 'one Remove-Item per block:\n' + b);
+    for (const l of lines) {
+      assert.ok(/^\$\w+ = "[^"]*"$/.test(l) || /^Remove-Item -LiteralPath \$\w+ -Recurse -Force$/.test(l), 'a delete block holds only a path variable and the delete:\n' + b);
+    }
+  }
+  // Step 4 compares the checksum without a regex split.
+  const s4 = step(4);
+  assert.ok(s4.includes(".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)[0]"));
+  assert.ok(!s4.includes('-split'), 'step 4 has no regex split');
+  assert.ok(s4.includes('$dl = "<download folder step 4 printed>"'));
+  assert.ok(step(7).includes('$dl = "<download folder step 5 printed>"\n   Remove-Item -LiteralPath $dl -Recurse -Force'));
+});
+
+test('README rules say each block is its own command', () => {
+  const rules = section(install, /^### Rules for Claude/m, /^### /m);
+  assert.ok(rules.includes('Each code block is its own command: run it on its own, and do not merge blocks or add commands to them.'));
+});
+
+test('README step 11 says the registration may be blocked and what to do then', () => {
+  const s = step(11);
+  assert.ok(s.includes('may block this command, because it writes a lasting entry into the user\'s settings'));
+  assert.ok(s.includes('show the user the exact command'));
+  assert.ok(s.includes('it is optional because the panel\'s own chat works without it'));
+  assert.ok(s.includes('continue with step 12'));
+  assert.ok(step(12).includes('or was blocked and the user has not run the command, skip this check too'));
+});
+
 test('README step 11 registers the MCP server by default, with disclosure and a removal command (decision D1)', () => {
   const s = step(11);
   assert.ok(s.includes('mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp'));
@@ -326,7 +366,7 @@ test('CHANGELOG v0.11.2 carries the plain-language security notice and no stale 
 test('CHANGELOG top section is plain bullets (Unreleased, or the dated release entry with a bold summary)', () => {
   const top = /^## Unreleased$/m.test(changelog)
     ? section(changelog, /^## Unreleased$/m, /^## v/m)
-    : section(changelog, /^## v0\.12\.0 - \d{4}-\d{2}-\d{2}$/m, /^## v0\.11\.3/m);
+    : section(changelog, /^## v\d+\.\d+\.\d+ - \d{4}-\d{2}-\d{2}$/m, /^## v\d+\.\d+\.\d+ - /m);
   assert.ok(/^- /m.test(top));
   assert.ok(!DASHES.test(top));
   if (!/^## Unreleased$/m.test(changelog)) assert.ok(/^\*\*[^*]+\*\*$/m.test(top), 'the release entry has a bold one-line summary');
