@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { MODULES, vendorDir, findSource } from '../../../scripts/vendor-sources.mjs';
 
 const EXPECT = {
@@ -44,7 +45,9 @@ for (const mod of MODULES) {
   });
 
   test(mod.name + ': the ESM entry exposes the expected exports', async () => {
-    const m = await import(path.join(dir, 'index.mjs'));
+    // A file URL, not a path: on Windows `import('C:\\...')` fails (ESM only
+    // takes URLs or relative specifiers).
+    const m = await import(pathToFileURL(path.join(dir, 'index.mjs')).href);
     for (const n of EXPECT[mod.name].has) assert.equal(typeof m[n], 'function', n);
     for (const n of EXPECT[mod.name].lacks) assert.equal(m[n], undefined, n);
   });
@@ -59,7 +62,7 @@ for (const mod of MODULES) {
     let ok = true;
     try {
       out = execFileSync(process.execPath, [path.join(src, 'scripts', 'check-vendored.mjs'), dir],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       ok = false;
       out = String(e.stdout || '') + String(e.stderr || '');

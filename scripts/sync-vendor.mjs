@@ -28,6 +28,6 @@ for (const mod of mods) {
   }
   const dest = vendorDir(mod.name);
   fs.rmSync(dest, { recursive: true, force: true });
-  execFileSync(process.execPath, [path.join(src, 'scripts', 'vendor.mjs'), dest], { stdio: 'inherit' });
+  execFileSync(process.execPath, [path.join(src, 'scripts', 'vendor.mjs'), dest], { stdio: 'inherit', windowsHide: true });
 }
 process.exit(missing ? 1 : 0);

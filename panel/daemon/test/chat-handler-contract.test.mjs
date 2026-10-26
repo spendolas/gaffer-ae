@@ -1,4 +1,5 @@
 import './isolate-env.mjs';
+import { noopModelCatalog } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -45,7 +46,7 @@ function fakeSocket() {
 function harness(authHook) {
   var spawns = [];
   var handler = new ChatHandler({
-    cacheFilePath: '/nonexistent/gaffer-test-model-cache.json',
+    modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
     spawn: function (bin, args) {
       var child = fakeChild();

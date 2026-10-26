@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 var SKIP_DIRS = { 'node_modules': 1, 'test': 1, 'test-fixtures': 1, 'dist': 1, 'coverage': 1 };
 
-// Max mtime (ms) of any *.js under `dir`, skipping build/test/dep noise and
+// Max mtime (ms) of any *.js, *.mjs or *.cjs source under `dir`, skipping build/test/dep noise and
 // dotfiles/dotdirs (e.g. .gaffer-icons). fs fns injectable for tests.
 export function maxSourceMtime(dir, opts) {
   opts = opts || {};
@@ -32,7 +32,10 @@ export function maxSourceMtime(dir, opts) {
       if (name.charAt(0) === '.') continue;
       var full = join(d, name);
       if (ent.isDirectory()) { if (!SKIP_DIRS[name]) walk(full); continue; }
-      if (!/\.js$/.test(name)) continue;
+      // .js, .mjs and .cjs sources (vendor/*.cjs, launch.cjs). Not the local
+      // esbuild output daemon.mjs: a dev daemon runs index.js, so a rebuild
+      // changes nothing it executes and must not restart it.
+      if (!/\.(js|mjs|cjs)$/.test(name) || name === 'daemon.mjs') continue;
       try { var m = statFn(full).mtimeMs; if (m > max) max = m; } catch (e) { /* skip */ }
     }
   }

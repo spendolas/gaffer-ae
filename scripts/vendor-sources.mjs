@@ -28,7 +28,7 @@ export function findSource(mod) {
   if (process.env[mod.env]) candidates.push(process.env[mod.env]);
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-      { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
     // <main checkout>/.git -> <main checkout>/../../<module>
     candidates.push(path.join(path.dirname(common), '..', '..', mod.name));
   } catch (e) { /* not a git checkout */ }

@@ -134,10 +134,22 @@ export function createGafferModelCatalog(overrides) {
   }, o));
 }
 
-// Strips `user:pass@` from any URL-looking text (scheme://userinfo@host) so a
-// base URL that carries credentials never reaches the daemon log.
+// Keeps credentials out of the daemon log. The module never passes the token
+// on purpose, but a fetch error message can echo it: an "invalid header
+// value" error quotes the header (a token with a newline in it, for example),
+// and ANTHROPIC_BASE_URL can carry user:pass@. So: a message that quotes a
+// header value, names the Authorization or x-api-key header, or contains a
+// key-shaped string becomes a generic 'invalid credential'; `user:pass@` is
+// stripped from any URL-looking text.
 export function scrubLogMessage(message) {
-  return String(message).replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
+  var s = String(message);
+  if (/invalid header|Bearer\s|x-api-key|authorization|sk-ant-/i.test(s)) {
+    // Keep the module's prefix up to the reason, e.g.
+    // "model catalog: live fetch failed (network)", drop the quoted detail.
+    var m = /^(.*?\([a-z-]+\))/.exec(s);
+    return (m ? m[1] : 'model catalog: live fetch failed') + ': invalid credential';
+  }
+  return s.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
 }
 
 // Module catalog { families, versions: { family: [entry newest first] } } with
@@ -151,16 +163,22 @@ export function catalogToPanel(catalog) {
   var versions = {};
   var capabilitiesByModel = {};
   var effortsByModel = {};
-  var families = catalog.families.slice();
-  Object.keys(catalog.versions).forEach(function (family) {
-    if (families.indexOf(family) === -1) families.push(family);
+  var families = [];
+  catalog.families.concat(Object.keys(catalog.versions)).forEach(function (family) {
+    if (typeof family === 'string' && family && families.indexOf(family) === -1) families.push(family);
   });
-  families.forEach(function (family) {
-    // The cache file is on disk and may be hand edited or truncated: an entry
-    // that is not an object with a string id is skipped, never thrown on.
-    var entries = (Array.isArray(catalog.versions[family]) ? catalog.versions[family] : []).filter(function (entry) {
+  // The cache file is on disk and may be hand edited or truncated: an entry
+  // that is not an object with a string id is skipped, never thrown on, and a
+  // family left with no valid entry is dropped (v0.12.0 listed only families
+  // with at least one version).
+  var validEntries = function (family) {
+    return (Array.isArray(catalog.versions[family]) ? catalog.versions[family] : []).filter(function (entry) {
       return !!entry && typeof entry === 'object' && typeof entry.id === 'string';
     });
+  };
+  families = families.filter(function (family) { return validEntries(family).length > 0; });
+  families.forEach(function (family) {
+    var entries = validEntries(family);
     versions[family] = entries.map(function (entry) { return entry.id; });
     entries.forEach(function (entry) {
       var efforts = Array.isArray(entry.efforts) ? entry.efforts.slice() : [];
