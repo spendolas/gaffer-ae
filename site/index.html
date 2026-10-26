@@ -137,6 +137,7 @@
     <style>
       #cover { display: none; }
       .dock-app { text-decoration: underline; }
+      .dock-cli { text-decoration: underline; }
       .dock-prompt { visibility: visible; max-width: none; max-height: none; opacity: 1; }
       .dock-pill { justify-content: flex-start; column-gap: var(--dock-gap, 1.5rem); padding-left: calc(var(--dock-padding, 0.25rem) + 0.75rem); }
       @media (max-width: 600px) {
@@ -260,9 +261,11 @@
         <code class="dock-prompt">Install Gaffer by following https://gafferae.com/install.md</code>
         <div class="dock-ctas">
           <a class="dock-cta dock-cta-primary dock-app" href="claude://code/new?q=Install%20Gaffer%20by%20following%20https%3A%2F%2Fgafferae.com%2Finstall.md" title="Opens the Claude desktop app (Code tab) with the install prompt filled in. You press Enter to send it." aria-describedby="dock-hint-app">Install with Claude</a>
+          <a class="dock-cta dock-cta-secondary dock-cli" href="claude-cli://open?q=Install%20Gaffer%20by%20following%20https%3A%2F%2Fgafferae.com%2Finstall.md" title="Opens a terminal with Claude Code and the install prompt filled in. You press Enter to send it. It works once you have used Claude Code on this computer." aria-describedby="dock-hint-cli"><span class="dock-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></svg></span><span class="dock-cli-label">Install with CLI</span></a>
         </div>
       </div>
       <span class="visually-hidden" id="dock-hint-app" hidden>Opens the Claude desktop app (Code tab) with the install prompt filled in. You press Enter to send it.</span>
+      <span class="visually-hidden" id="dock-hint-cli" hidden>Opens a terminal with Claude Code and the install prompt filled in. You press Enter to send it. It works once you have used Claude Code on this computer.</span>
       <p class="dock-note">A panel extension for AE 2022+•Rides your Claude Code subscription</p>
       <noscript><p class="dock-note">Turn on JavaScript to see the gallery.</p></noscript>
     </div>
