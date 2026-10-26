@@ -9,7 +9,9 @@
   "scripts": {
     "start": "node index.js",
     "//test": "Auto-discovery (no path arg). Do NOT pass 'test/': Node 22+ treats a bare directory arg to --test as a module entry and fails with MODULE_NOT_FOUND on Windows; a glob would break Node 20. No path works on both.",
-    "test": "node --test"
+    "test": "node --test",
+    "//sync-vendor": "Refresh vendor/<module> from each shared module's canonical repo (scripts/vendor-sources.mjs finds it). Change the module in its own repo first, then sync; never edit the vendored copy.",
+    "sync-vendor": "node ../../scripts/sync-vendor.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
