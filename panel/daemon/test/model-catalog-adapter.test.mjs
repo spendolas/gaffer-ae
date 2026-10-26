@@ -20,7 +20,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { catalogToPanel, createGafferModelCatalog, ChatHandler, modelCapability } from '../chat-handler.js';
+import { catalogToPanel, createGafferModelCatalog, scrubLogMessage, ChatHandler, modelCapability } from '../chat-handler.js';
 import { catalogFromModels } from '../vendor/claude-model-catalog/index.mjs';
 
 // Trimmed real /v1/models rows (2026-09-24 probe), deliberately out of order,
@@ -111,6 +111,18 @@ test('accepted module differences: date stamps ignored in the sort, duplicates d
   // Old modelCatalogOptions parsed the 8-digit date stamp as a fourth version
   // part, so claude-opus-4-5-20251101 sorted above claude-opus-4-5. The module
   // ignores the stamp: equal versions keep the API's order (first row wins).
+  //
+  // CHANGELOG note (version sort fix): the old sort compared the date stamp
+  // as a version number, so claude-opus-4-20250514 ([4, 20250514]) ranked
+  // ABOVE claude-opus-4-1-20250805 ([4, 1, 20250805]) and the opus alias
+  // (newest version first) could point at the older model. The module sorts
+  // on [4] vs [4, 1] only, so 4.1 wins; the same holds for sonnet.
+  //
+  // CHANGELOG note (unknown account): when the account id cannot be resolved
+  // (no ~/.claude.json identity, no env key) a catalog held in memory from an
+  // earlier fetch is no longer served as "cached" when the token has expired;
+  // the panel shows Try again instead. Deliberate: the module never serves a
+  // cache to an unknown account, which is what prevents cross-account serving.
   // Old code also kept a duplicate id once per family list but re-counted it
   // in capabilities; the module keeps the first occurrence only. Mythos now
   // sits after haiku in the picker order instead of among "other" families.
@@ -125,6 +137,30 @@ test('accepted module differences: date stamps ignored in the sort, duplicates d
   assert.deepEqual(p.versions.opus, ['claude-opus-4-5', 'claude-opus-4-5-20251101']);
   assert.equal(p.capabilitiesByModel['claude-opus-4-5'].displayName, 'Undated first');
   assert.deepEqual(p.models, ['opus', 'haiku', 'mythos', 'zeta']);
+});
+
+test('the version sort no longer ranks a dated major above a later minor (opus 4 vs 4.1)', () => {
+  const p = catalogToPanel(catalogFromModels({ data: [
+    { id: 'claude-opus-4-20250514' },
+    { id: 'claude-opus-4-1-20250805' },
+    { id: 'claude-sonnet-4-20250514' },
+    { id: 'claude-sonnet-4-5-20250929' },
+  ] }));
+  assert.deepEqual(p.versions.opus, ['claude-opus-4-1-20250805', 'claude-opus-4-20250514']);
+  assert.equal(p.capabilitiesByModel.opus.modelId, 'claude-opus-4-1-20250805');
+  assert.equal(p.capabilitiesByModel.sonnet.modelId, 'claude-sonnet-4-5-20250929');
+});
+
+test('catalogToPanel skips entries that are not objects with a string id (hand-edited cache)', () => {
+  const p = catalogToPanel({ families: ['opus', 'haiku'], versions: {
+    opus: [null, 7, 'claude-opus-4-8', { id: 42 }, { id: 'claude-opus-4-8', oneM: true }],
+    haiku: [undefined],
+  } });
+  assert.deepEqual(p.models, ['opus', 'haiku']);
+  assert.deepEqual(p.versions, { opus: ['claude-opus-4-8'], haiku: [] });
+  assert.equal(p.capabilitiesByModel.opus.modelId, 'claude-opus-4-8');
+  assert.equal(p.capabilitiesByModel.haiku, undefined);
+  assert.deepEqual(p.efforts, []);
 });
 
 test('catalogToPanel is null for a null or malformed catalog, never throws', () => {
@@ -232,6 +268,30 @@ test('the daemon log line on a failed fetch names the reason and never the token
   } finally { c.cleanup(); }
 });
 
+test('scrubLogMessage strips userinfo from URL-looking text and leaves the rest alone', () => {
+  assert.equal(scrubLogMessage('request failed: fetch https://me:s3cret@proxy.corp/v1/models?limit=1000'),
+    'request failed: fetch https://proxy.corp/v1/models?limit=1000');
+  assert.equal(scrubLogMessage('http://tok@127.0.0.1:9/x and HTTP://a:b@h'), 'http://127.0.0.1:9/x and HTTP://h');
+  assert.equal(scrubLogMessage('HTTP 500'), 'HTTP 500');
+  assert.equal(scrubLogMessage('mail me@example.com'), 'mail me@example.com');
+  assert.equal(scrubLogMessage(undefined), 'undefined');
+});
+
+test('a failed fetch never logs credentials embedded in ANTHROPIC_BASE_URL', async () => {
+  const c = tmpCache();
+  const warned = [];
+  const orig = console.warn;
+  console.warn = (m) => warned.push(String(m));
+  try {
+    await gafferCatalog({ cacheFile: c.file, baseUrl: 'https://me:s3cret@proxy.corp',
+      fetch: async (url) => { throw new Error('connect failed for ' + url); } }).get();
+  } finally { console.warn = orig; c.cleanup(); }
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /proxy\.corp\/v1\/models/);
+  assert.ok(!warned[0].includes('s3cret'), warned[0]);
+  assert.ok(!warned[0].includes('me:'), warned[0]);
+});
+
 test('the default logger writes one Gaffer-prefixed console.warn line per failed fetch, without the token', async () => {
   const c = tmpCache();
   const warned = [];
@@ -294,6 +354,44 @@ test('an old-format (pre module) cache file is ignored and overwritten', async (
     const disk = JSON.parse(readFileSync(c.file, 'utf8'));
     assert.deepEqual(disk.catalog.families, ['fable', 'opus', 'sonnet', 'haiku'], 'overwritten in the module format');
   } finally { c.cleanup(); }
+});
+
+test('a cacheFile override of undefined keeps the default cache file', async () => {
+  try { rmSync(process.env.GAFFER_MODEL_CACHE_PATH, { force: true }); } catch (e) { /* absent */ }
+  await createGafferModelCatalog({ cacheFile: undefined, readCredential: async () => BEARER,
+    readAccountId: () => 'uuid:x', fetch: okFetch(), now: () => NOW }).get();
+  assert.ok(existsSync(process.env.GAFFER_MODEL_CACHE_PATH), 'written to the default path');
+  rmSync(process.env.GAFFER_MODEL_CACHE_PATH, { force: true });
+});
+
+test('a bare new ChatHandler({}) reads and writes the disk cache at GAFFER_MODEL_CACHE_PATH', async () => {
+  // No injected edges here, so the real account-id read runs: point it at a
+  // throwaway CLAUDE_CONFIG_DIR whose .claude.json names a test account, and
+  // seed a fresh module-format cache for that account. A fresh same-account
+  // cache is served BEFORE any credential read or fetch, so the test never
+  // touches the Keychain or the network.
+  const dir = mkdtempSync(join(tmpdir(), 'gaffer-bare-handler-'));
+  const prevCfg = process.env.CLAUDE_CONFIG_DIR;
+  const file = process.env.GAFFER_MODEL_CACHE_PATH;
+  try {
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'bare-test-acct' } }));
+    writeFileSync(file, JSON.stringify({ catalog: catalogFromModels(MODELS), fetchedAt: Date.now(), accountId: 'uuid:bare-test-acct' }));
+    const h = new ChatHandler({});
+    const out = await h.listModelOptions();
+    assert.equal(out.modelAccess, 'ready');
+    assert.equal(out.fromCache, true, 'served from the default cache file, no fetch');
+    assert.deepEqual(out.models, ['fable', 'opus', 'sonnet', 'haiku']);
+    // The same handler's invalidate removes that file: the write side goes
+    // through the same path (the "cacheFile undefined" test above covers the
+    // write with injected edges).
+    h.invalidateModelCache();
+    assert.equal(existsSync(file), false);
+  } finally {
+    if (prevCfg === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prevCfg;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(file, { force: true });
+  }
 });
 
 test('the cache file defaults to GAFFER_MODEL_CACHE_PATH, which the test isolation sets', async () => {
@@ -471,6 +569,90 @@ test('a completed CLI turn triggers refreshInBackground on the catalog', async (
     // The module throttles a second refresh inside 60s.
     h.refreshCatalogInBackground();
     assert.equal(f.calls.length, 1);
+  } finally { c.cleanup(); }
+});
+
+function fakeSpawnHandler(catalog, spawns) {
+  return new ChatHandler({
+    modelCatalog: catalog,
+    findClaudeBinary: async () => '/fake/claude',
+    lastClaudeLookup: () => null,
+    spawn: () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { write() {}, end() {} };
+      child.kill = () => {};
+      spawns.push(child);
+      return child;
+    },
+  });
+}
+
+test('a shape-valid cache file with a null entry: list is sane, the getter does not throw, a chat turn runs', async () => {
+  const c = tmpCache();
+  try {
+    writeFileSync(c.file, JSON.stringify({
+      catalog: { families: ['opus'], versions: { opus: [null] } }, fetchedAt: NOW, accountId: 'uuid:acct-1',
+    }));
+    const spawns = [];
+    const h = fakeSpawnHandler(gafferCatalog({ cacheFile: c.file }), spawns);
+    const out = await h.listModelOptions();
+    assert.equal(out.modelAccess, 'ready');
+    assert.equal(out.fromCache, true, 'the module accepted the file; Gaffer must cope with its entries');
+    assert.deepEqual(out.models, ['opus']);
+    assert.deepEqual(out.versions, { opus: [] });
+    assert.deepEqual(out.capabilitiesByModel, {});
+    assert.doesNotThrow(() => h.liveModelCapabilities);
+    assert.deepEqual(h.liveModelCapabilities, {});
+    const sock = { readyState: 1, sent: [], _gafferKey: 'test', send(m) { sock.sent.push(JSON.parse(m)); } };
+    const origLog = console.log;
+    console.log = () => {};
+    try {
+      await h.handleChat({ message: 'hi', model: 'opus', effort: 'high' }, sock);
+    } finally { console.log = origLog; }
+    assert.equal(spawns.length, 1, 'the turn reached the spawn (fallback table used)');
+    assert.equal(sock.sent.filter((m) => m.type === 'chat_error').length, 0);
+  } finally { c.cleanup(); }
+});
+
+test('a catalog whose peek() throws leaves liveModelCapabilities null and the turn alive', async () => {
+  const spawns = [];
+  const h = fakeSpawnHandler({
+    get: async () => ({ status: 'network', catalog: null }),
+    peek: () => { throw new Error('boom'); },
+    invalidate() {}, refreshInBackground: () => Promise.resolve(),
+  }, spawns);
+  assert.equal(h.liveModelCapabilities, null);
+  const sock = { readyState: 1, sent: [], _gafferKey: 'test', send() {} };
+  const origLog = console.log;
+  console.log = () => {};
+  try { await h.handleChat({ message: 'hi', model: 'haiku' }, sock); } finally { console.log = origLog; }
+  assert.equal(spawns.length, 1);
+});
+
+test('a successful background refresh clears the pending Retry so the next open may use the cache', async () => {
+  const c = tmpCache();
+  try {
+    let fetchImpl = statusFetch(500);
+    const f = (u, o) => fetchImpl(u, o);
+    let t = NOW;
+    const h = handlerWith(gafferCatalog({ cacheFile: c.file, fetch: f, now: () => t }));
+    assert.equal((await h.listModelOptions()).modelAccess, 'network');
+    assert.equal(h._modelsRetryPending, true);
+    // The CLI turn completes, the token is fresh, the background refresh succeeds.
+    fetchImpl = okFetch();
+    h.refreshCatalogInBackground();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h._modelsRetryPending, false);
+    // Now a plain open serves the fresh cache without another fetch.
+    const calls = [];
+    fetchImpl = (u, o) => { calls.push(u); return okFetch()(u, o); };
+    const out = await h.listModelOptions();
+    assert.equal(out.modelAccess, 'ready');
+    assert.equal(out.fromCache, true);
+    assert.equal(calls.length, 0);
   } finally { c.cleanup(); }
 });
 
