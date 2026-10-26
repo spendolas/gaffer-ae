@@ -37,6 +37,11 @@ git archive HEAD:panel | tar -x -C "$STAGE"
 # loses its old copies on the next update.
 rm -rf "$STAGE/daemon/test" "$STAGE/daemon/test-fixtures" "$STAGE/daemon/node_modules" \
        "$STAGE/daemon/package-lock.json" "$STAGE/.remember" "$STAGE/daemon/.remember"
+# Vendored shared modules (daemon/vendor/<name>: code, LICENSE, package.json,
+# VENDORED_FROM.json) are the owner's own code, bundled into daemon.mjs like
+# every other daemon source module (not a node_modules package, so not a
+# third-party notice). The directory itself never ships.
+rm -rf "$STAGE/daemon/vendor"
 # Every daemon source module is inside the bundle; only index.js (replaced by
 # the shim below) and launch.cjs stay as files.
 find "$STAGE/daemon" -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) \
@@ -65,6 +70,8 @@ fail() { echo "ERROR: stage assertion failed: $1" >&2; exit 1; }
 [ -z "$(find "$STAGE" -name '*.map' -print -quit)" ] || fail ".map file present"
 [ -z "$(find "$STAGE" -name package-lock.json -print -quit)" ] || fail "package-lock.json present"
 [ -z "$(find "$STAGE" \( -name .remember -o -name test -o -name test-fixtures \) -print -quit)" ] || fail "test or .remember dir present"
+[ ! -e "$STAGE/daemon/vendor" ] || fail "daemon/vendor present (vendored modules ship inside daemon.mjs only)"
+[ -z "$(find "$STAGE" -name '*.cjs' ! -path "$STAGE/daemon/launch.cjs" -print -quit)" ] || fail ".cjs file beside daemon/launch.cjs"
 EXTRA="$(find "$STAGE/daemon" -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) ! -name daemon.mjs ! -name index.js ! -name launch.cjs)"
 [ -z "$EXTRA" ] || fail "code modules beside daemon.mjs: $EXTRA"
 [ "$(cat "$STAGE/daemon/index.js")" = "import './daemon.mjs';" ] || fail "index.js is not the shim"
