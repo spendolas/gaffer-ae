@@ -33,7 +33,7 @@ function localRefs(text, attrRe) {
   const out = [];
   for (const m of text.matchAll(attrRe)) {
     const ref = m[1];
-    if (/^(https?:|data:|mailto:|claude:|#|\/\/)/.test(ref)) continue;
+    if (/^(https?:|data:|mailto:|claude:|claude-cli:|#|\/\/)/.test(ref)) continue;
     out.push(ref.split(/[?#]/)[0]);
   }
   return out;

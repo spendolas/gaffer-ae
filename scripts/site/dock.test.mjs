@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CHECK_PATH, INSTALL_PROMPT, DEEP_LINK_MAX_PROMPT, desktopLink, copyText, createToast, applyHeadline, applyNote, splitNote, isDesktopPlatform, readEnvironment } from '../../site/js/dock.js';
+import { CHECK_PATH, INSTALL_PROMPT, DEEP_LINK_MAX_PROMPT, desktopLink, cliLink, copyText, createToast, applyHeadline, applyNote, splitNote, isDesktopPlatform, readEnvironment } from '../../site/js/dock.js';
 
 import { defaults } from '../../site/js/config.js';
 
@@ -180,18 +180,43 @@ test('deepLinkCarriesOnlyQAndStaysWithinTheDocumentedLimit', () => {
   assert.ok(INSTALL_PROMPT.length <= DEEP_LINK_MAX_PROMPT);
 });
 
-test('staticDockHasOnlyTheAppLinkInsideTheCtaGroupAfterThePrompt', () => {
+test('staticDockHasTheAppLinkThenTheCliLinkInsideTheCtaGroupAfterThePrompt', () => {
   const hrefs = [...html.matchAll(/<a class="dock-cta[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(hrefs, [desktopLink(INSTALL_PROMPT)], 'one deep link, equal to the builder output');
-  assert.ok(!/claude-cli|terminal/i.test(html.replace(/<noscript>[\s\S]*?<\/noscript>/g, '')), 'no terminal link');
+  assert.deepEqual(hrefs, [desktopLink(INSTALL_PROMPT), cliLink(INSTALL_PROMPT)], 'two deep links, equal to the builder outputs, app first');
   assert.ok(html.includes('title="Opens the Claude desktop app (Code tab) with the install prompt filled in. You press Enter to send it."'));
-  assert.ok(!/dock-app[^>]*(onclick|target=)/.test(html), 'plain anchor, no handler');
+  assert.ok(!/dock-(app|cli)[^>]*(onclick|target=)/.test(html), 'plain anchors, no handler');
   const group = html.indexOf('<div class="dock-ctas">');
   assert.ok(html.indexOf('<code class="dock-prompt"') < group);
-  const anchor = html.indexOf('class="dock-cta dock-cta-primary dock-app"');
-  assert.ok(group < anchor);
-  assert.ok(anchor < html.indexOf('</div>', group), 'the app link is inside the group');
+  const app = html.indexOf('class="dock-cta dock-cta-primary dock-app"');
+  const cli = html.indexOf('class="dock-cta dock-cta-secondary dock-cli"');
+  assert.ok(group < app && app < cli, 'app link, then the CLI link, both after the group opens');
+  assert.ok(cli < html.indexOf('</div>', group), 'both links are inside the group');
   assert.ok(/<a class="dock-cta dock-cta-primary dock-app"/.test(html), 'app link is the primary button');
+  assert.ok(/<a class="dock-cta dock-cta-secondary dock-cli"/.test(html), 'CLI link is a secondary button');
+});
+
+test('cliLinkEncodesThePromptAndCarriesOnlyQ', () => {
+  const q = 'Install%20Gaffer%20by%20following%20https%3A%2F%2Fgafferae.com%2Finstall.md';
+  assert.equal(cliLink(INSTALL_PROMPT), `claude-cli://open?q=${q}`);
+  assert.deepEqual([...new URL(cliLink(INSTALL_PROMPT)).searchParams.keys()], ['q'], 'no cwd or repo');
+});
+
+test('cliButtonCarriesTheLucideTerminalIconAndItsOwnHint', () => {
+  const text = 'Opens a terminal with Claude Code and the install prompt filled in. You press Enter to send it. It works once you have used Claude Code on this computer.';
+  const a = html.match(/<a class="dock-cta dock-cta-secondary dock-cli"[\s\S]*?<\/a>/)[0];
+  assert.ok(a.includes('<path d="M12 19h8"/><path d="m4 17 6-6-6-6"/>'), 'Lucide terminal');
+  assert.ok(a.includes('<span class="dock-cli-label">Install with CLI</span>'), 'label equals the default copy');
+  assert.ok(a.includes(`title="${text}"`));
+  assert.ok(a.includes('aria-describedby="dock-hint-cli"'));
+  assert.ok(html.includes(`<span class="visually-hidden" id="dock-hint-cli" hidden>${text}</span>`));
+  assert.ok(html.indexOf('id="dock-hint-cli"') > html.indexOf('id="dock-hint-app"'), 'hints sit together, outside the pill');
+});
+
+test('stylesheetCliButtonHidesOffDesktopAndGoesIconOnlyWhenCompact', () => {
+  const css = readFileSync(new URL('../../site/css/site.css', import.meta.url), 'utf8');
+  assert.match(css, /#dock\[data-app="none"\] \.dock-cli \{\s*display: none;/);
+  assert.match(css, /#dock:not\(\[data-app="none"\]\) \.dock-cli-label \{\s*display: none;/, 'icon-only in the compact variant');
+  assert.match(css, /\.dock-cta-secondary \{\s*background: var\(--color-secondary-fill\);/);
 });
 
 test('staticDockExposesTheCaveatAsAnAccessibleDescription', () => {
@@ -200,7 +225,6 @@ test('staticDockExposesTheCaveatAsAnAccessibleDescription', () => {
   assert.ok(html.includes(`title="${text}"`), 'title and hint share one wording');
   assert.match(html, /class="dock-cta dock-cta-primary dock-app"[^>]*aria-describedby="dock-hint-app"/);
   assert.ok(!/<a class="dock-cta[^>]*aria-label/.test(html), 'visible text stays the name');
-  assert.ok(!/dock-hint-cli/.test(html));
   const pillEnd = html.indexOf('</div>', html.indexOf('</div>', html.indexOf('<div class="dock-ctas">')) + 1);
   assert.ok(html.indexOf('id="dock-hint-app"') > pillEnd, 'the hint sits outside the pill');
   assert.ok(html.indexOf('id="dock-hint-app"') < html.indexOf('</div>', pillEnd + 1), 'the hint stays inside #dock');

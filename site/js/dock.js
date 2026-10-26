@@ -15,6 +15,11 @@ export const INSTALL_PROMPT = 'Install Gaffer by following https://gafferae.com/
 export const DEEP_LINK_MAX_PROMPT = 5000;
 export const desktopLink = (prompt) => `claude://code/new?q=${encodeURIComponent(prompt)}`;
 
+// Deep link that opens a terminal with Claude Code and the prompt prefilled (code.claude.com/docs/en/deep-links).
+// The CLI registers its handler itself, after the first prompt of an interactive session on that machine, so
+// like the desktop link this is a best effort: Copy stays the dependable path.
+export const cliLink = (prompt) => `claude-cli://open?q=${encodeURIComponent(prompt)}`;
+
 // Whether the visitor is on a desktop platform (macOS, Windows, Linux), where the
 // Claude desktop app and its claude:// handler are documented to exist. This is a
 // platform guess, not a check that the app is installed. Pure; inputs come from
@@ -183,8 +188,15 @@ export function mountDock(root, { toast, env, getCopy = () => defaults.copy, get
   icon.innerHTML = COPY_ICON + CHECK_ICON; // copy first; both stacked by CSS
   const short = h('span', 'dock-label-short'); // shown only in the compact variant
   const appAnchor = group.querySelector('.dock-app');
+  const cliAnchor = group.querySelector('.dock-cli');
+  const cliLabel = cliAnchor?.querySelector?.('.dock-cli-label');
   const refresh = () => {
     if (appAnchor) appAnchor.textContent = getCopy().linkDesktop;
+    // The CLI button's label is hidden by css in the compact variant, so it is named through aria-label.
+    if (cliAnchor && cliLabel) {
+      cliLabel.textContent = getCopy().linkCli;
+      cliAnchor.setAttribute('aria-label', getCopy().linkCli);
+    }
     // The visible label is the accessible name (label in name); on a phone with an app link the label is
     // hidden by css and the button is icon-only, still named by it.
     const name = getCopy().buttonCompact;

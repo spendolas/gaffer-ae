@@ -79,6 +79,7 @@ export const defaults = {
   // Wording. Read by dock.js at use time and set with textContent only; never a CSS variable.
   copy: {
     linkDesktop: 'Install with Claude', // the primary button, first in the group
+    linkCli: 'Install with CLI', // the secondary terminal button, between the primary and Copy
     buttonCompact: 'Copy install prompt', // the Copy button's label (hidden on a phone that also has the app link, where it is icon-only)
     toastOk: 'Copied. Paste it in Claude Code.',
     toastError: 'Copy failed. Select the text and copy it.',
