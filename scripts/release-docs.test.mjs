@@ -353,6 +353,8 @@ test('README step 11 asks the user about usage stats, short, with a show-me choi
   assert.ok(s.includes('`AskUserQuestion`'), 'buttons through the question tool');
   assert.ok(s.includes('do not persuade and do not ask again'));
   assert.ok(s.includes('Gaffer keeps this tally on the user\'s computer either way'));
+  assert.ok(s.includes('a random code Gaffer made up for this installation; it is not derived from your name, account or computer'), 'says the install ID is random and not derived from the user or machine');
+  assert.ok(!/untraceable|not traceable/i.test(s), 'no overclaim about traceability');
   const rules = section(install, /^### Rules for Claude/m, /^### /m);
   assert.ok(rules.includes('Never decide for the user whether Gaffer shares usage stats'));
 });
