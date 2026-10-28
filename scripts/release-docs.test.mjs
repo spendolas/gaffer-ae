@@ -140,9 +140,9 @@ test('every pinned platform has its official URL, mirror URL, SHA-256 and extrac
 
 test('README install steps follow the spec 9 order', () => {
   const titles = [...install.matchAll(/^(\d+)\. \*\*([^*]+)\*\*/gm)].map((m) => [Number(m[1]), m[2]]);
-  assert.deepEqual(titles.map((t) => t[0]), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(titles.map((t) => t[0]), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   const want = [/prerequisites/i, /existing install/i, /platform/i, /Gaffer package/i, /Download the Node\.js runtime/i,
-    /SHA-256/i, /Extract only/i, /signature/i, /unsigned CEP extensions/i, /Find Claude/i, /Register/i, /Restart After Effects and verify/i];
+    /SHA-256/i, /Extract only/i, /signature/i, /unsigned CEP extensions/i, /Find Claude/i, /usage stats/i, /Register/i, /Restart After Effects and verify/i];
   titles.forEach(([n, title], i) => assert.match(title, want[i], 'step ' + n + ' title: ' + title));
 });
 
@@ -303,17 +303,17 @@ test('README rules say each block is its own command', () => {
   assert.ok(rules.includes('Each code block is its own command: run it on its own, and do not merge blocks or add commands to them.'));
 });
 
-test('README step 11 says the registration may be blocked and what to do then', () => {
-  const s = step(11);
+test('README step 12 says the registration may be blocked and what to do then', () => {
+  const s = step(12);
   assert.ok(s.includes('may block this command, because it writes a lasting entry into the user\'s settings'));
   assert.ok(s.includes('show the user the exact command'));
   assert.ok(s.includes('it is optional because the panel\'s own chat works without it'));
-  assert.ok(s.includes('continue with step 12'));
-  assert.ok(step(12).includes('or was blocked and the user has not run the command, skip this check too'));
+  assert.ok(s.includes('continue with step 13'));
+  assert.ok(step(13).includes('or was blocked and the user has not run the command, skip this check too'));
 });
 
 // Owner's fresh install through the Claude desktop app: the agent said a
-// command had to be run but not which one (step 9), and step 11 was offered
+// command had to be run but not which one (step 9), and the MCP registration step was offered
 // without saying what it is for.
 test('README tells the agent to show the command at once when step 9 or 11 is blocked', () => {
   const rules = section(install, /^### Rules for Claude/m, /^### /m);
@@ -326,20 +326,65 @@ test('README tells the agent to show the command at once when step 9 or 11 is bl
   assert.ok(s9.includes('does not show the Gaffer panel at all'));
 });
 
-test('README step 11 explains what registration gives the user and recommends it', () => {
-  const s = step(11);
-  assert.ok(s.startsWith('11. **Register Gaffer\'s tools with Claude Code (recommended).**'));
+test('README step 12 explains what registration gives the user and recommends it', () => {
+  const s = step(12);
+  assert.ok(s.startsWith('12. **Register Gaffer\'s tools with Claude Code (recommended).**'));
   assert.ok(s.includes('can read and edit their After Effects project through Gaffer'));
   assert.ok(s.includes('Without it only the panel\'s own chat can'));
   assert.ok(s.includes('unless the user says no, run it for them'));
 });
 
-test('README step 11 registers the MCP server by default, with disclosure and a removal command (decision D1)', () => {
-  const s = step(11);
+test('README step 12 registers the MCP server by default, with disclosure and a removal command (decision D1)', () => {
+  const s = step(12);
   assert.ok(s.includes('mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp'));
   assert.ok(!/\(optional\)/i.test(s.split('\n')[0]), 'registration is on by default');
   assert.ok(s.includes('~/.claude.json'), 'names the file it writes');
   assert.ok(s.includes('claude mcp remove gaffer -s user'), 'one-line removal command');
+});
+
+// Usage-stats consent at install (the owner's call: ask once, short question,
+// buttons, "Show me what is shared"). The default in telemetry.js stays on.
+test('README step 11 asks the user about usage stats, short, with a show-me choice', () => {
+  const s = step(11);
+  assert.ok(s.startsWith('11. **Ask about usage stats.**'));
+  assert.ok(s.includes('Share anonymous usage stats to help improve Gaffer? Nothing from your projects or chats is shared.'));
+  assert.ok(s.includes('**Yes, share**') && s.includes('**No, don\'t share**') && s.includes('**Show me what is shared**'));
+  assert.ok(s.includes('never decide for them or skip the question'));
+  assert.ok(s.includes('`AskUserQuestion`'), 'buttons through the question tool');
+  assert.ok(s.includes('do not persuade and do not ask again'));
+  assert.ok(s.includes('Gaffer keeps this tally on the user\'s computer either way'));
+  assert.ok(s.includes('a random code Gaffer made up for this installation; it is not derived from your name, account or computer'), 'says the install ID is random and not derived from the user or machine');
+  assert.ok(!/untraceable|not traceable/i.test(s), 'no overclaim about traceability');
+  const rules = section(install, /^### Rules for Claude/m, /^### /m);
+  assert.ok(rules.includes('Never decide for the user whether Gaffer shares usage stats'));
+});
+
+test('README step 11 merges shareUsageStats into the config (never overwrites it) on both platforms', () => {
+  const s = step(11);
+  assert.ok(s.includes('c.shareUsageStats=process.argv[2]==="true"'));
+  assert.ok(s.includes('$cfg.shareUsageStats = $value'));
+  assert.ok(s.includes('JSON.parse(fs.readFileSync(p,"utf8"))'), 'macOS reads the existing config first');
+  assert.ok(s.includes('Get-Content $configPath -Raw | ConvertFrom-Json'), 'Windows reads the existing config first');
+  assert.ok(s.includes('"$INSTALL_DIR/daemon/runtime/node"'), 'uses the bundled runtime, no system Node');
+  assert.ok(!DASHES.test(s));
+});
+
+test('README step 11 example payload has exactly the fields telemetry.js sends', () => {
+  const s = step(11);
+  const m = /```json\n([\s\S]*?)```/.exec(s);
+  assert.ok(m, 'example payload block');
+  const example = JSON.parse(m[1]);
+  const src = read('../panel/daemon/telemetry.js');
+  const block = /var payload = JSON\.stringify\(\{([\s\S]*?)\}\);/.exec(src);
+  assert.ok(block, 'payload object in telemetry.js');
+  const sent = [...block[1].matchAll(/^\s*(\w+):/gm)].map((x) => x[1]).sort();
+  assert.deepEqual(Object.keys(example).sort(), sent, 'example top-level fields equal the payload fields');
+  const bucket = Object.values(example.byModel)[0];
+  for (const k of Object.keys(bucket)) assert.ok(src.includes(k), 'telemetry.js knows the bucket field ' + k);
+  for (const k of ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd']) {
+    assert.ok(k in bucket, 'example shows ' + k);
+  }
+  for (const k of Object.keys(example.errorKinds)) assert.ok(src.includes("'" + k + "'"), 'known error kind ' + k);
 });
 
 test('README troubleshooting covers Windows revocation-lookup failures without weakening checks', () => {

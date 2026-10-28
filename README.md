@@ -36,9 +36,10 @@ Before you begin, read these rules. They apply to every step below.
 - Do not change proxy, certificate or network settings, do not turn off certificate checks, and do not ask the user to approve that either. If both downloads fail, stop and tell the user.
 - Do not add shell aliases, modify the user's PATH, or change any config outside the paths explicitly named in these steps.
 - Shell variables do not carry over between your separate command runs, so every block below sets the paths it needs.
-- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror, step 11 says what to do when its command is blocked: hand it to the user and continue).
+- If any step fails, stop. Report the exact error. Do not retry with modifications unless the user asks you to, or unless the step itself names a fallback (step 4 names a wait and retry for a missing `SHA256SUMS.txt`, step 5 names Gaffer's mirror, step 12 says what to do when its command is blocked: hand it to the user and continue).
 - Run each Windows block in PowerShell. If your shell is bash, run it as `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ...` or save it to a .ps1 file and run that with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <file>`. Bash expands `$` inside double quotes, so the .ps1 file is the safer choice.
-- When a step needs the user to run something themselves (because Claude Code's permission check blocked it, or the step says so), put the full command in a code block in that same message, say in one sentence what it does, and ask them to reply when it is done. Never say only that "a command" has to be run, and never make the user ask which one. This applies to step 9 and step 11 when either is blocked.
+- When a step needs the user to run something themselves (because Claude Code's permission check blocked it, or the step says so), put the full command in a code block in that same message, say in one sentence what it does, and ask them to reply when it is done. Never say only that "a command" has to be run, and never make the user ask which one. This applies to step 9 and step 12 when either is blocked.
+- Never decide for the user whether Gaffer shares usage stats, and never describe the sharing as more or less than step 11 says.
 - Each code block is its own command: run it on its own, and do not merge blocks or add commands to them. Blocks that delete a folder are kept separate on purpose, because Claude Code's own command check can block a delete that shares a command with other path-like text.
 - After the install completes, run the verification step. Do not skip it.
 
@@ -349,7 +350,60 @@ Before you begin, read these rules. They apply to every step below.
 
     Note the paths step 10 printed: later steps need them.
 
-11. **Register Gaffer's tools with Claude Code (recommended).** Tell the user in plain words what this gives them: with it, Claude Code sessions outside the panel, such as `claude` in a terminal, can read and edit their After Effects project through Gaffer, with the same tools the panel's chat uses, as long as After Effects is open with the panel loaded. Without it only the panel's own chat can; the panel itself does not need this step, because it passes its MCP config to Claude inline. Recommend it, and unless the user says no, run it for them. Before you run it, tell the user in one sentence: this adds one entry named `gaffer` to their Claude Code user settings (`~/.claude.json` on macOS, `%USERPROFILE%\.claude.json` on Windows), and `claude mcp remove gaffer -s user` removes it again. Claude Code's permission check (for example in auto mode) may block this command, because it writes a lasting entry into the user's settings. If it is blocked, do not try to get around it: show the user the exact command with the binary path filled in, so they can run it themselves, tell them it is optional because the panel's own chat works without it and only a `claude` session in a terminal needs it, and continue with step 12. Use the standalone `claude` if step 10 found one; otherwise run the desktop app's copy with the same arguments. Both read the same user config, so registering once is enough. The snippet below re-derives the binary (or paste the literal path step 10 printed):
+11. **Ask about usage stats.** Gaffer can share anonymous usage numbers with its developer. This is the user's choice: ask once, wait for the answer, and never decide for them or skip the question. If you have a multiple-choice question tool (for example `AskUserQuestion`), use it so the user gets buttons; you can put this question and step 12's in one call. Otherwise ask in text with the same numbered choices.
+
+    Ask: "Share anonymous usage stats to help improve Gaffer? Nothing from your projects or chats is shared."
+
+    Choices: 1. **Yes, share**  2. **No, don't share**  3. **Show me what is shared**
+
+    - **Yes:** write `"shareUsageStats": true` into Gaffer's per-user config file, so their choice is recorded explicitly.
+    - **No:** write `"shareUsageStats": false`. Accept it: do not persuade and do not ask again.
+    - **Show me what is shared:** print the example below in a code block and say that the numbers are made up and real data has the same shape. Explain it in plain words: an install ID (a random code Gaffer made up for this installation; it is not derived from your name, account or computer, and it only lets the developer see that two daily reports come from the same install), the date, the Gaffer version, the operating system, and per model the number of chat turns, token counts, an estimated cost, the After Effects and Claude Code versions and where Claude Code was found; failed turns are counted by kind. Add that Gaffer keeps this tally on the user's computer either way, and saying no only stops it being sent. Then ask again with only choices 1 and 2.
+    - **No clear answer:** ask once more. If they still do not answer, write `false`.
+
+    ```json
+    {
+      "date": "2026-10-29",
+      "sentAt": "2026-10-29T18:04:11.000Z",
+      "installId": "3f6c0c1e-5b7d-4a52-9c1a-2d6f8e1b7a90",
+      "gafferVersion": "0.12.1",
+      "os": "darwin 25.6.0",
+      "byModel": {
+        "claude-opus-5-5::opus": {
+          "turns": 12, "inputTokens": 48210, "outputTokens": 9120,
+          "cacheReadTokens": 310400, "cacheCreationTokens": 22500, "costUsd": 1.84,
+          "aeVersion": "26.0", "cliVersion": "2.1.308", "cliSource": "desktop-app"
+        }
+      },
+      "errorKinds": { "too_long": 1 }
+    }
+    ```
+
+    Merge the answer into the config file (it also holds the install's `installId` and other settings, so never overwrite it). Replace `VALUE` with `true` or `false`:
+    ```bash
+    # macOS
+    VALUE="false"
+    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
+    CONFIG_DIR="$HOME/Library/Application Support/Gaffer"
+    mkdir -p "$CONFIG_DIR"
+    "$INSTALL_DIR/daemon/runtime/node" -e 'const fs=require("fs");const p=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch(e){};c.shareUsageStats=process.argv[2]==="true";fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n")' "$CONFIG_DIR/config.json" "$VALUE"
+    ```
+
+    ```powershell
+    # Windows (PowerShell): $true or $false
+    $value = $false
+    $configDir = "$env:APPDATA\Gaffer"
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    $configPath = "$configDir\config.json"
+    $cfg = @{}
+    if (Test-Path $configPath) {
+      (Get-Content $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
+    }
+    $cfg.shareUsageStats = $value
+    $cfg | ConvertTo-Json -Compress | Set-Content $configPath
+    ```
+
+12. **Register Gaffer's tools with Claude Code (recommended).** Tell the user in plain words what this gives them: with it, Claude Code sessions outside the panel, such as `claude` in a terminal, can read and edit their After Effects project through Gaffer, with the same tools the panel's chat uses, as long as After Effects is open with the panel loaded. Without it only the panel's own chat can; the panel itself does not need this step, because it passes its MCP config to Claude inline. Recommend it, and unless the user says no, run it for them. Before you run it, tell the user in one sentence: this adds one entry named `gaffer` to their Claude Code user settings (`~/.claude.json` on macOS, `%USERPROFILE%\.claude.json` on Windows), and `claude mcp remove gaffer -s user` removes it again. Claude Code's permission check (for example in auto mode) may block this command, because it writes a lasting entry into the user's settings. If it is blocked, do not try to get around it: show the user the exact command with the binary path filled in, so they can run it themselves, tell them it is optional because the panel's own chat works without it and only a `claude` session in a terminal needs it, and continue with step 13. Use the standalone `claude` if step 10 found one; otherwise run the desktop app's copy with the same arguments. Both read the same user config, so registering once is enough. The snippet below re-derives the binary (or paste the literal path step 10 printed):
     ```bash
     # macOS
     APP_CLAUDE="$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)"
@@ -365,15 +419,15 @@ Before you begin, read these rules. They apply to every step below.
     $claudeBin = if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') { $cmd.Source } elseif ($appClaude) { $appClaude } else { $null }
     if ($claudeBin) { & $claudeBin mcp add --transport http -s user gaffer http://127.0.0.1:9824/mcp }
     ```
-    If the user says they do not want the entry, skip this step and step 12a. If neither a CLI nor a runnable desktop app copy is available here, note that to the user ("Gaffer's tools will not be registered for Claude Code in a terminal; the panel chat still works") and CONTINUE with step 12. Do not stop.
+    If the user says they do not want the entry, skip this step and step 13a. If neither a CLI nor a runnable desktop app copy is available here, note that to the user ("Gaffer's tools will not be registered for Claude Code in a terminal; the panel chat still works") and CONTINUE with step 13. Do not stop.
 
-12. **Restart After Effects and verify.** Tell the user: "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
+13. **Restart After Effects and verify.** Tell the user: "Restart After Effects. Open Window > Extensions > Gaffer. The daemon starts automatically when the panel loads."
 
     Note: Gaffer's MCP tools are only available while the panel is open in After Effects. If you run `claude` in a terminal without AE open, the tools will appear disconnected. Open AE first.
 
     After the user has restarted After Effects and confirmed the panel is visible under Window > Extensions > Gaffer, run these checks:
 
-    a. Only if step 11 registered the server: run `mcp list` with the same binary as step 11. Re-derive it (macOS: `"$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)" mcp list` for the desktop app's copy, or `claude mcp list` for a standalone CLI; Windows: the `Get-ChildItem` line from step 11, then `& $claudeBin mcp list`) or use the literal path step 10 printed. Confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open. If step 11 was skipped, or was blocked and the user has not run the command, skip this check too.
+    a. Only if step 12 registered the server: run `mcp list` with the same binary as step 12. Re-derive it (macOS: `"$(ls -t "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | head -n 1)" mcp list` for the desktop app's copy, or `claude mcp list` for a standalone CLI; Windows: the `Get-ChildItem` line from step 12, then `& $claudeBin mcp list`) or use the literal path step 10 printed. Confirm `gaffer` appears and shows as connected. If not connected, the panel is probably not open in AE yet. Ask the user to confirm the panel is open. If step 12 was skipped, or was blocked and the user has not run the command, skip this check too.
 
     b. Ask Claude to call `getProjectSummary` via the Gaffer MCP. If it returns a valid JSON response describing the project, the install is working end-to-end. If it errors, check the troubleshooting section.
 
@@ -389,7 +443,7 @@ Before you begin, read these rules. They apply to every step below.
 - **macOS: an outbound firewall (LuLu, Little Snitch) asks about `node`:** that is Gaffer's own runtime in its install folder (`daemon/runtime/node`), for example downloading the icons of your MCP servers, and sending usage statistics if you share them. It asks once. Choose Allow.
 - **Windows: downloads fail with curl exit 35 or `CRYPT_E_REVOCATION_OFFLINE`:** the network blocks the certificate revocation lookups Windows makes for HTTPS downloads. This needs the network administrator to allow those lookups (or the download hosts). Do not work around it by turning off revocation or certificate checks.
 - **Windows with a roaming profile:** the runtime (about 94 MB) lives in the extension folder under `%APPDATA%`, which roams. If roaming sync is slow, ask your administrator to exclude `%APPDATA%\Adobe\CEP\extensions\com.gaffer.panel\daemon\runtime`.
-- **MCP tools not available in a terminal Claude Code session:** Run the step 11 registration again (`<claude binary> mcp add ...`, where the binary is the standalone `claude` if you have one, otherwise the desktop app's copy from step 10; `claude` alone may not be on PATH). Verify with `<claude binary> mcp list`. The panel chat does not need this registration.
+- **MCP tools not available in a terminal Claude Code session:** Run the step 12 registration again (`<claude binary> mcp add ...`, where the binary is the standalone `claude` if you have one, otherwise the desktop app's copy from step 10; `claude` alone may not be on PATH). Verify with `<claude binary> mcp list`. The panel chat does not need this registration.
 - **MCP tools show as disconnected in `mcp list`:** Most common cause: the Gaffer panel is not open in After Effects. Open AE, then open Window > Extensions > Gaffer, then re-run `mcp list` with the same binary. If the panel is open and it still shows disconnected, check the panel's connection indicator. If the panel also shows disconnected, the daemon failed to start, see "Panel shows Disconnected" above.
 - **Install stops at prerequisites check but I have everything:** The check runs commands directly. If `claude` isn't on your shell's PATH, the check fails even if it is installed. Open a fresh terminal, run `which claude` (macOS) or `where.exe claude` (Windows) to confirm. The desktop app's copy is found by step 10 without PATH.
 - **`claude` errors or asks me to log in:** Gaffer doesn't install authentication, but it does not need you to be signed in at install time either. Finish the install, open the panel and use its Sign in button. If you prefer, run `claude` once manually and complete the login flow instead.
