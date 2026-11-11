@@ -181,7 +181,7 @@ test('fail closed: a capability check that could not run also refuses', async ()
 test('pasted images: sent as image blocks on stdin, no file-reading tool involved', async () => {
   var img = join(tmpdir(), 'gaffer-paste-' + Date.now() + '-7.png');
   var px = new Uint8Array(16 * 16 * 4).fill(255);
-  writeFileSync(img, encodePng(px, 16, 16));
+  writeFileSync(img, await encodePng(px, 16, 16));
   var h = harness();
   await quiet(function () { return h.handler.handleChat({ message: '[image: ' + img + ']\nwhat is this', model: 'haiku' }, fakeSocket()); });
   var s = h.spawns[0];

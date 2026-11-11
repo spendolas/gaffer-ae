@@ -860,7 +860,7 @@ export class ChatHandler {
     var images = [];
     var pasted = extractPastedImages(msg.message);
     if (pasted.paths.length || pasted.rejected) {
-      images = pasted.paths.map(loadImageForModel).filter(Boolean);
+      images = (await Promise.all(pasted.paths.map(loadImageForModel))).filter(function (img) { return !img.error; });
       var dropped = pasted.paths.length + pasted.rejected - images.length;
       userMessage = (dropped > 0
         ? '[' + dropped + (dropped === 1 ? ' pasted image' : ' pasted images') + ' could not be attached]\n'

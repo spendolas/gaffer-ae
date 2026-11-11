@@ -75,7 +75,7 @@ export function register(server, queue, z) {
         var parsed = JSON.parse(raw);
         var inner = parsed.ok && parsed.result ? JSON.parse(parsed.result) : parsed;
         if (inner.error) return { content: [{ type: 'text', text: JSON.stringify(inner) }], isError: true };
-        return { content: captureContent(inner) };
+        return { content: await captureContent(inner, outputPath) };
       } catch (e) {
         return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }], isError: true };
       }
