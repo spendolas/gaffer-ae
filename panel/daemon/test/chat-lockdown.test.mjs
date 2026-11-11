@@ -84,7 +84,7 @@ test('buildCompactArgs: no tools, no MCP, no settings, resumes the session', () 
 // ---- MCP config ---------------------------------------------------------
 
 test('buildMcpConfig: gaffer alone by default', () => {
-  var r = buildMcpConfig([], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { grip: { type: 'http', url: 'http://127.0.0.1:7778/mcp' } } });
+  var r = buildMcpConfig([], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { grip: { type: 'http', url: 'http://127.0.0.1:7778/mcp' } }, knownIds: new Set(['grip']) });
   assert.deepEqual(Object.keys(r.config.mcpServers), ['gaffer']);
   assert.deepEqual(r.config.mcpServers.gaffer, { type: 'http', url: 'http://127.0.0.1:9824/mcp' });
 });
@@ -95,7 +95,7 @@ test('buildMcpConfig: only enabled user-scope servers are added, definitions pas
     notion: { type: 'http', url: 'https://mcp.notion.com/mcp' },
     files: { type: 'stdio', command: 'node', args: ['s.js'], env: { TOKEN: 'abc' } },
   };
-  var r = buildMcpConfig(['grip', 'files'], { gafferUrl: 'u', userServers: userServers });
+  var r = buildMcpConfig(['grip', 'files'], { gafferUrl: 'u', userServers: userServers, knownIds: new Set(['grip', 'files', 'notion']) });
   assert.deepEqual(Object.keys(r.config.mcpServers).sort(), ['files', 'gaffer', 'grip']);
   assert.equal(r.config.mcpServers.files.env.TOKEN, 'abc');
   assert.equal(r.config.mcpServers.notion, undefined, 'not enabled, not passed');
@@ -120,14 +120,70 @@ test('buildMcpConfig: an id the daemon never saw in `mcp list` is dropped when t
   assert.equal(r.skipped[0].id, 'ghost');
 });
 
+test('buildMcpConfig: with no `claude mcp list` result, no connector is passed (fail closed)', () => {
+  var r = buildMcpConfig(['grip'], { gafferUrl: 'u', userServers: { grip: { type: 'http', url: 'h' } } });
+  assert.deepEqual(Object.keys(r.config.mcpServers), ['gaffer']);
+  assert.equal(r.skipped[0].id, 'grip');
+});
+
+// Hostile ids: each is in the daemon's own list AND in the user-level servers,
+// so only the id-shape rule can stop it. None may reach argv or --mcp-config.
+var HOSTILE_IDS = [
+  'x__*,Bash,Write,y',
+  'a(b)',
+  'Bash(rm -rf *)',
+  'x)',
+  'mcp__*',
+  '*',
+  '-p',
+  '--dangerously-skip-permissions',
+  'a,b',
+  'a'.repeat(65),
+  'x\nY',
+  'plugin:foo:bar',
+  '',
+];
+
+test('buildMcpConfig: hostile ids never reach the config, even when listed and defined', () => {
+  var userServers = {}, known = new Set();
+  HOSTILE_IDS.forEach(function (id) { userServers[id] = { type: 'http', url: 'http://h/' + encodeURIComponent(id) }; known.add(id); });
+  var r = buildMcpConfig(HOSTILE_IDS, { gafferUrl: 'u', userServers: userServers, knownIds: known });
+  assert.deepEqual(Object.keys(r.config.mcpServers), ['gaffer']);
+  assert.deepEqual(r.included, []);
+  HOSTILE_IDS.filter(Boolean).forEach(function (id) {
+    assert.ok(r.skipped.some(function (s) { return s.id === id; }), 'skipped: ' + id.slice(0, 20));
+  });
+  var args = buildChatArgs({ message: 'x' }, Object.assign({}, base, { mcpConfigPath: '/x/mcp.json' }));
+  var text = args.join('\u0000') + JSON.stringify(r.config);
+  ['Bash', 'Write', 'x__*', 'dangerously-skip-permissions\u0000', 'rm -rf'].forEach(function (needle, i) {
+    if (needle === 'dangerously-skip-permissions\u0000') return; // the one flag we pass on purpose
+    assert.equal(text.indexOf(needle), -1, needle);
+  });
+});
+
+test('buildMcpConfig: an id must be exactly an entry of the list and match the safe shape', () => {
+  var userServers = { 'claude.ai Gmail': { type: 'http', url: 'h' }, 'my-server_2.0': { type: 'http', url: 'h' }, grip: { type: 'http', url: 'g' } };
+  var known = new Set(['my-server_2.0', 'grip']);
+  var r = buildMcpConfig(['my-server_2.0', 'grip', 'Grip', 'grip ', 'claude.ai Gmail'], { gafferUrl: 'u', userServers: userServers, knownIds: known });
+  assert.deepEqual(r.included, ['my-server_2.0', 'grip']);
+  assert.deepEqual(r.skipped.map(function (s) { return s.id; }).sort(), ['Grip', 'claude.ai Gmail', 'grip ']);
+});
+
+test('buildMcpConfig: the longest allowed id (64) works, 65 does not', () => {
+  var ok = 'a'.repeat(64), bad = 'a'.repeat(65);
+  var userServers = {}; userServers[ok] = { type: 'http', url: 'h' }; userServers[bad] = { type: 'http', url: 'h' };
+  var r = buildMcpConfig([ok, bad], { gafferUrl: 'u', userServers: userServers, knownIds: new Set([ok, bad]) });
+  assert.deepEqual(r.included, [ok]);
+});
+
 test('buildMcpConfig: the id gaffer cannot be redefined by a user server', () => {
-  var r = buildMcpConfig(['gaffer'], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { gaffer: { type: 'http', url: 'http://evil.invalid/' } } });
+  var r = buildMcpConfig(['gaffer'], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { gaffer: { type: 'http', url: 'http://evil.invalid/' } }, knownIds: new Set(['gaffer']) });
   assert.equal(r.config.mcpServers.gaffer.url, 'http://127.0.0.1:9824/mcp');
 });
 
 test('buildMcpConfig: __proto__ and other odd keys are not special', () => {
   var userServers = JSON.parse('{"__proto__":{"type":"http","url":"x"}}');
-  var r = buildMcpConfig(['__proto__', 'constructor'], { gafferUrl: 'u', userServers: userServers });
+  var r = buildMcpConfig(['__proto__', 'constructor'], { gafferUrl: 'u', userServers: userServers, knownIds: new Set(['__proto__', 'constructor']) });
   assert.deepEqual(Object.keys(r.config.mcpServers), ['gaffer']);
 });
 

@@ -78,12 +78,20 @@ export function buildCompactArgs(ctx) {
 
 function ownKey(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
 
+// A connector id is only ever used as a key in the MCP config file, never on
+// the command line, but it must still be exactly an id the daemon saw in
+// `claude mcp list` and have a plain shape.
+// 1 to 64 characters of letters, digits, underscore, dash, dot and space, and
+// never a leading dash.
+var SAFE_MCP_ID = /^[A-Za-z0-9_.][A-Za-z0-9_\-. ]{0,63}$/;
+
 // The MCP servers a chat turn may use: gaffer, plus each connector the user
-// enabled that is a user-scope server in the Claude config (re-passed by its
-// own definition). Connectors that live in the user's claude.ai account,
-// plugins, and anything not in `userServers` cannot be passed this way and are
-// reported in `skipped`. When `knownIds` (the ids the daemon got from
-// `claude mcp list`) is given, an id outside it is dropped too. Pure.
+// enabled that (1) is exactly an id from the daemon's own `claude mcp list`
+// result (`knownIds`, required: without it nothing is passed), (2) matches the
+// safe id shape, and (3) is a user-level server in the Claude config
+// (`userServers`), whose definition is re-passed as is. Everything else is
+// reported in `skipped`: claude.ai connectors, plugin servers, unknown or
+// oddly shaped ids. Pure.
 export function buildMcpConfig(enabledIds, opts) {
   var userServers = (opts && opts.userServers) || {};
   var knownIds = opts && opts.knownIds;
@@ -91,8 +99,9 @@ export function buildMcpConfig(enabledIds, opts) {
   servers.gaffer = { type: 'http', url: opts.gafferUrl };
   var included = [], skipped = [];
   (Array.isArray(enabledIds) ? enabledIds : []).forEach(function (id) {
-    if (typeof id !== 'string' || !id || id === 'gaffer' || id === '__proto__') return;
-    if (knownIds && !knownIds.has(id)) { skipped.push({ id: id, reason: 'not in the Claude MCP list' }); return; }
+    if (typeof id !== 'string' || !id || id === 'gaffer') return;
+    if (!SAFE_MCP_ID.test(id) || id === '__proto__') { skipped.push({ id: id, reason: 'not a valid connector id' }); return; }
+    if (!knownIds || !knownIds.has(id)) { skipped.push({ id: id, reason: 'not in the Claude MCP list' }); return; }
     var def = ownKey(userServers, id) ? userServers[id] : null;
     if (!def || typeof def !== 'object' || Array.isArray(def)) {
       skipped.push({ id: id, reason: 'not a user-level server, so it cannot be used in Gaffer chat' });
