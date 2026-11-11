@@ -25,8 +25,10 @@ const TAG = /^<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*(?:="[^"<>
 const ATTR = /\s+([a-zA-Z][a-zA-Z0-9-]*)(?:="([^"<>]*)")?/g;
 
 function badUrl(name, v, tag) {
+  // The browser decodes the attribute once: every & must be a plain &amp;, so
+  // no entity can turn into a different character inside the URL.
+  if (/&(?!amp;)/.test(v)) return 'entity in url: ' + v;
   const u = v.replace(/&amp;/g, '&');
-  if (/&#?\w+;/.test(u)) return 'entity in url: ' + v;
   if (/[\u0000- \u007f-\u009f"<>`]/.test(u)) return 'control or quote in url: ' + v;
   if (tag === 'img' && /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(u)) return null;
   if (/^https?:\/\/[^/?#]/i.test(u)) return null;
@@ -52,7 +54,7 @@ function check(html) {
         if (name.startsWith('on')) problems.push('event handler: ' + name);
         else if (!ALLOWED[tag].includes(name)) problems.push('attribute not allowed: ' + tag + '@' + name);
         else if (name === 'href' || name === 'src') { const b = badUrl(name, val, tag); if (b) problems.push(b); }
-        else if (name === 'class' && !/^(task-item|language-[A-Za-z0-9_+-]+)$/.test(val)) problems.push('class not allowed: ' + val);
+        else if (name === 'class' && !/^(task-item|language-[A-Za-z0-9_+#.-]+)$/.test(val)) problems.push('class not allowed: ' + val);
         else if (name === 'type' && !(tag === 'input' && val === 'checkbox')) problems.push('type not allowed: ' + val);
         else if (name === 'align' && !/^(left|right|center)$/.test(val)) problems.push('align not allowed: ' + val);
       }
@@ -344,4 +346,19 @@ test('delegated click handler: opens http(s) in the system browser and always bl
   assert.equal(calls.length, 1); assert.equal(e3.prevented, true);
   const e4 = { target: { closest: () => null }, preventDefault() { throw new Error('must not touch non-link clicks'); } };
   listeners.click(e4);
+});
+
+// ---- generated input (fixed seed, so a failure reproduces) ----
+test('fuzz: random mixes of markup and markdown fragments never yield disallowed output', () => {
+  const frags = ['<', '>', '"', "'", '=', '/', ' ', '\n', '\t', '&#106;', '&#x6A;', '&colon;', '&amp;', '[', ']', '(', ')', '![', '](', '`', '```', '**', '~~', '- ', '1. ', '| a |\n|---|\n',
+    'javascript:', 'JaVa\tScRiPt:', 'data:text/html,', 'https://ok.example/', 'mailto:a@b.c', 'img', 'svg', 'script', 'iframe', 'style', 'a href=', 'onerror=', 'onload=', 'src=x', 'srcdoc=', '<!--', '-->', '<![CDATA[', '<?x', 'alert(1)', 'x'];
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let t = 0; t < 3000; t++) {
+    let s = '';
+    const len = 1 + rnd(14);
+    for (let k = 0; k < len; k++) s += frags[rnd(frags.length)];
+    assert.deepEqual(check(SafeMarkdown.render(s)), [], JSON.stringify(s));
+    assert.deepEqual(check(SafeMarkdown.sanitizeHtml(s)), [], 'html ' + JSON.stringify(s));
+  }
 });
