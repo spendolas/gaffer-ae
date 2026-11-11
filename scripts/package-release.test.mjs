@@ -161,3 +161,33 @@ for (const extra of ['daemon/daemon.mjs.map', 'daemon/node_modules/x/index.js', 
     assert.ok(!readdirSync(bad).some((n) => n.startsWith('gaffer-install')), 'no archives written on failure');
   });
 }
+
+// ---- no developer debug file in release archives ----
+// panel/.debug (a CEP developer setting) is a local development aid. It is not
+// tracked, not packaged, and the stage assertion fails the build if it appears.
+const isDebugPath = (p) => /(^|\/)\.debug$/.test(p);
+for (const name of ['gaffer-install-mac.tar.gz', 'gaffer-update-mac.tar.gz']) {
+  test(name + ' contains no .debug file', () => {
+    const list = execFileSync('tar', ['-tzf', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isDebugPath), []);
+    assert.ok(list.includes('./CSXS/manifest.xml'));
+  });
+}
+for (const name of ['gaffer-install-win.zip', 'gaffer-update-win.zip']) {
+  test(name + ' contains no .debug file', () => {
+    const list = execFileSync('unzip', ['-Z1', join(out, name)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(list.filter(isDebugPath), []);
+    assert.ok(list.includes('CSXS/manifest.xml'));
+  });
+}
+test('panel/.debug is ignored by git and not tracked', () => {
+  const tracked = execFileSync('git', ['ls-files', 'panel/.debug'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+  assert.equal(tracked, '');
+  const ignored = execFileSync('git', ['check-ignore', 'panel/.debug'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+  assert.equal(ignored, 'panel/.debug');
+});
+test('package-release.sh removes .debug from the stage and asserts it is gone', () => {
+  const script = readFileSync(join(repoRoot, 'scripts/package-release.sh'), 'utf8');
+  assert.match(script, /rm -f "\$STAGE\/\.debug"/);
+  assert.match(script, /find "\$STAGE" -name \.debug -print -quit\)" \] \|\| fail/);
+});

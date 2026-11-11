@@ -971,6 +971,12 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     # robocopy exit codes 0-7 are success variants; 8 and up mean a copy failed.
     if ($LASTEXITCODE -ge 8) { Exit-Update "robocopy failed (exit $LASTEXITCODE)" "sync" }
 
+    # A developer-only .debug file (CEP debug port) from an earlier release must
+    # not survive an update or a Repair. /PURGE already deletes it because the
+    # archive has none; this keeps that true if an old archive or a future
+    # exclude ever lets it through. Only reached after the git-checkout refusal.
+    Remove-Item -LiteralPath "$panelDir\.debug" -Force -ErrorAction SilentlyContinue
+
     # Restore chat history and .gaffer-config.json. robocopy excluded them,
     # so a failure here leaves them as they were; it still ends with
     # err:sync, the files were replaced and the run is not finished.

@@ -38,6 +38,8 @@ assets/
 panel/daemon/runtime*/
 panel/daemon/daemon.mjs
 panel/daemon/daemon.mjs.map
+# Local CEP developer setting: created by the dev installers, never committed or packaged
+panel/.debug
 .npmrc-dev
 # Landing page (generated, never committed)
 site/media/_generated/
