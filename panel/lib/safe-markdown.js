@@ -37,6 +37,14 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
   }
+  // Angle-bracket autolinks arrive with marked's own five escapes in the URL
+  // (&amp; &lt; &gt; &quot; &#39;). Undo exactly those, once; cleanUrl then
+  // encodes the result, so no other entity is ever interpreted.
+  function unescapeMarked(u) {
+    return String(u).replace(/&(?:amp|lt|gt|quot|#39);/g, function (m) {
+      return { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }[m];
+    });
+  }
   // marked has already escaped alt/title text; only make sure nothing can end
   // the attribute or open a tag.
   function attrText(s) {
@@ -48,25 +56,24 @@
   var SVG_ICON_RE = /^data:image\/svg\+xml;base64,[A-Za-z0-9+\/=]+$/;
   var SVG_ICON_MAX = 64 * 1024;
   var HTTP_RE = /^https?:\/\/[^\/?#\s%]/i;
-  var MAILTO_RE = /^mailto:[^\s]+$/i;
   var MAX_URL = 8192;
 
   // Returns the URL to put in an attribute (not yet entity-escaped), or null
-  // when the destination is not allowed. Anything that is not literally
-  // http(s), mailto (links only) or a base64 raster image (images only) is
-  // refused: javascript:, vbscript:, file:, protocol-relative, relative paths,
-  // entity- or control-character-obfuscated schemes (those never match the
-  // literal prefix after encoding).
+  // when the destination is not allowed. Links accept literal http(s) only;
+  // images (isImage) accept base64 raster data URLs only. Everything else is
+  // refused: javascript:, vbscript:, file:, mailto:, protocol-relative, relative
+  // paths, entity- or control-character-obfuscated schemes (those never match
+  // the literal prefix after encoding). The result contains no quote, space or
+  // angle bracket, and no apostrophe (encoded as %27), so the only entity that
+  // can appear once it is escaped for an attribute is &amp;.
   function cleanUrl(raw, isImage) {
     if (typeof raw !== 'string') return null;
     var u = raw.trim();
     if (!u) return null;
-    if (isImage && DATA_IMAGE_RE.test(u)) return u;
+    if (isImage) return DATA_IMAGE_RE.test(u) ? u : null;
     if (u.length > MAX_URL) return null;
-    try { u = encodeURI(u).replace(/%25/g, '%'); } catch (e) { return null; }
-    if (HTTP_RE.test(u)) return u;
-    if (!isImage && MAILTO_RE.test(u)) return u;
-    return null;
+    try { u = encodeURI(u).replace(/%25/g, '%').replace(/'/g, '%27'); } catch (e) { return null; }
+    return HTTP_RE.test(u) ? u : null;
   }
 
   function isSafeImageDataUrl(s) {
@@ -98,11 +105,13 @@
       renderer: {
         // Raw HTML from the model is shown as text, never parsed.
         html: function (html, block) {
+          // The one tag kept: a bare line break (models use it inside table cells).
+          if (/^<br\s?\/?>$/i.test(String(html).trim())) return '<br>' + (block ? '\n' : '');
           var t = esc(html);
           return block ? '<p>' + t.replace(/\s+$/, '') + '</p>\n' : t;
         },
         link: function (href, title, text) {
-          var u = cleanUrl(href, false);
+          var u = cleanUrl(unescapeMarked(href), false);
           if (u === null) return text;
           var out = '<a href="' + esc(u) + '"';
           if (title) out += ' title="' + attrText(title) + '"';
@@ -110,7 +119,12 @@
         },
         image: function (href, title, text) {
           var u = cleanUrl(href, true);
-          if (u === null) return text;
+          if (u === null) {
+            // A remote image is never fetched by the panel: it is shown as a link.
+            var l = cleanUrl(unescapeMarked(href), false);
+            if (l === null) return text;
+            return '<a href="' + esc(l) + '" rel="noopener noreferrer">' + (text || esc(l)) + '</a>';
+          }
           var out = '<img src="' + esc(u) + '" alt="' + attrText(text) + '"';
           if (title) out += ' title="' + attrText(title) + '"';
           return out + '>';
@@ -183,14 +197,22 @@
       if (attrs.href !== undefined) {
         var hv = plainUrlValue(attrs.href);
         var hu = hv === null ? null : cleanUrl(hv, false);
-        if (hu !== null) out += ' href="' + esc(hu) + '"';
+        if (hu === null) return ''; // no usable destination: drop the tag, keep its text
+        out += ' href="' + esc(hu) + '"';
+      } else {
+        return '';
       }
       if (attrs.title !== undefined) out += ' title="' + attrText(attrs.title) + '"';
       out += ' rel="noopener noreferrer"';
     } else if (tag === 'img') {
       var sv = attrs.src === undefined ? null : plainUrlValue(attrs.src);
       var su = sv === null ? null : cleanUrl(sv, true);
-      if (su === null) return null; // an image with no allowed source is dropped
+      if (su === null) {
+        // A remote image becomes a link to it; any other source drops the tag.
+        var ru = sv === null ? null : cleanUrl(sv, false);
+        if (ru === null) return '';
+        return '<a href="' + esc(ru) + '" rel="noopener noreferrer">' + (attrs.alt ? attrText(attrs.alt) : esc(ru)) + '</a>';
+      }
       out += ' src="' + esc(su) + '"';
       if (attrs.alt !== undefined) out += ' alt="' + attrText(attrs.alt) + '"';
       if (attrs.title !== undefined) out += ' title="' + attrText(attrs.title) + '"';
@@ -216,6 +238,7 @@
     var out = '';
     var i = 0;
     var n = input.length;
+    var anchors = []; // for each open <a>: whether it was kept
     while (i < n) {
       var lt = input.indexOf('<', i);
       if (lt === -1) { out += input.slice(i); break; }
@@ -227,10 +250,12 @@
       if (m[1]) {
         // closing tag: never carries attributes; void elements have none
         if (m[3].replace(/\s+/g, '') !== '') { out += '&lt;'; i = lt + 1; continue; }
-        if (!VOID_TAGS[tag]) out += '</' + tag + '>';
+        if (tag === 'a') { if (anchors.pop()) out += '</a>'; }
+        else if (!VOID_TAGS[tag]) out += '</' + tag + '>';
       } else {
         var rebuilt = rebuildTag(tag, m[3]);
         if (rebuilt === null) { out += '&lt;'; i = lt + 1; continue; }
+        if (tag === 'a') anchors.push(rebuilt !== '');
         out += rebuilt;
       }
       i = lt + m[0].length;
@@ -260,8 +285,44 @@
       var u = externalUrlToOpen(a.getAttribute('href'));
       if (u && typeof open === 'function') open(u);
     }
-    rootEl.addEventListener('click', onClick);
-    rootEl.addEventListener('auxclick', onClick);
+    // Capture phase: a later stopPropagation in the page cannot bring
+    // navigation back.
+    rootEl.addEventListener('click', onClick, true);
+    rootEl.addEventListener('auxclick', onClick, true);
+  }
+
+  // Streaming replies re-render the whole text on every chunk, which gets slow
+  // on long answers. The renderer applies the first chunk at once, then at most
+  // one render per delayMs, and always ends with a render of the latest text
+  // (the trailing timer), so the final output equals an unthrottled render.
+  function createStreamRenderer(apply, opts) {
+    opts = opts || {};
+    var delay = opts.delayMs == null ? 100 : opts.delayMs;
+    var t = opts.timers || { now: Date.now, setTimeout: setTimeout, clearTimeout: clearTimeout };
+    var last = -Infinity;
+    var timer = null;
+    var pending = null;
+    function run() {
+      timer = null;
+      if (pending === null) return;
+      var text = pending;
+      pending = null;
+      last = t.now();
+      apply(render(text));
+    }
+    return {
+      push: function (text) {
+        pending = text;
+        if (timer !== null) return;
+        var wait = delay - (t.now() - last);
+        if (wait <= 0) run();
+        else timer = t.setTimeout(run, wait);
+      },
+      flush: function () {
+        if (timer !== null) { t.clearTimeout(timer); timer = null; }
+        run();
+      },
+    };
   }
 
   return {
@@ -274,5 +335,6 @@
     safeSvgIconDataUrl: safeSvgIconDataUrl,
     externalUrlToOpen: externalUrlToOpen,
     attachLinkHandler: attachLinkHandler,
+    createStreamRenderer: createStreamRenderer,
   };
 });

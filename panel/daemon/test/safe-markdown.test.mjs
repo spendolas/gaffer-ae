@@ -1,7 +1,7 @@
 // panel/lib/safe-markdown.js turns model output (markdown) into HTML the panel
 // can insert without ever running anything. These tests parse the OUTPUT with a
 // small strict tokenizer (not a regex over the text) and check it against an
-// element/attribute/URL allowlist, for a corpus of hostile-looking inputs, for
+// element/attribute/URL allowlist, for a corpus of unsafe-looking inputs, for
 // every prefix of each input (the panel re-renders the whole reply on every
 // streamed chunk), and for the legitimate markdown that must keep working.
 import { test } from 'node:test';
@@ -31,8 +31,7 @@ function badUrl(name, v, tag) {
   const u = v.replace(/&amp;/g, '&');
   if (/[\u0000- \u007f-\u009f"<>`]/.test(u)) return 'control or quote in url: ' + v;
   if (tag === 'img' && /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(u)) return null;
-  if (/^https?:\/\/[^/?#]/i.test(u)) return null;
-  if (tag === 'a' && /^mailto:/i.test(u)) return null;
+  if (tag === 'a' && /^https?:\/\/[^/?#]/i.test(u)) return null;
   return 'scheme not allowed: ' + v;
 }
 
@@ -65,15 +64,15 @@ function check(html) {
   return problems;
 }
 
-// ---- payload corpus ----
-const BEACON = 'https://tracker.example/beacon.png?x=1';
+// ---- sample corpus ----
+const REMOTE_IMG = 'https://img.example/pic.png?x=1';
 const CORPUS = [
   '<img src=x onerror="require(\'child_process\').exec(\'calc\')">',
   '<IMG SRC=x ONERROR=alert(1)>',
   '<svg onload=alert(1)>',
   '<svg><animate onbegin=alert(1) attributeName=x dur=1s>',
   '<script>alert(1)</script>',
-  '<script src=https://evil.example/x.js></script>',
+  '<script src=https://remote.example/x.js></script>',
   '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
   '<iframe src="javascript:alert(1)">',
   '<details open ontoggle=alert(1)>x</details>',
@@ -89,23 +88,23 @@ const CORPUS = [
   '[x](java&#9;script:alert(1))',
   '[x](vbscript:msgbox(1))',
   '[x](file:///etc/passwd)',
-  '[x](//evil.example/x)',
+  '[x](//remote.example/x)',
   '[x]( javascript:alert(1))',
   '[x](<javascript:alert(1)>)',
   '[x][r]\n\n[r]: javascript:alert(1)',
   '<javascript:alert(1)>',
   '<data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==>',
   '[x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)',
-  '![x](' + BEACON + ')',
+  '![x](' + REMOTE_IMG + ')',
   '![x](x" onerror=alert(1))',
   '![x](javascript:alert(1))',
   '![x](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+)',
   '![x](data:text/html;base64,AAAA)',
   '<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>',
-  '<style>@import "https://evil.example/x.css"</style>',
-  '<form action="https://evil.example"><button>go</button></form>',
+  '<style>@import "https://remote.example/x.css"</style>',
+  '<form action="https://remote.example"><button>go</button></form>',
   '<meta http-equiv="refresh" content="0;url=javascript:alert(1)">',
-  '<base href="https://evil.example/">',
+  '<base href="https://remote.example/">',
   '<object data="javascript:alert(1)"></object><embed src="x">',
   '<input type=image src=x onerror=alert(1)>',
   '<input autofocus onfocus=alert(1)>',
@@ -129,12 +128,12 @@ const CORPUS = [
   '<im' + 'g src=x onerror=alert(1)>',
 ];
 
-test('corpus is at least 25 payloads', () => { assert.ok(CORPUS.length >= 25); });
+test('corpus is at least 25 samples', () => { assert.ok(CORPUS.length >= 25); });
 
-test('structural: every payload renders only allowlisted markup', () => {
+test('structural: every sample renders only allowlisted markup', () => {
   for (const p of CORPUS) {
     const out = SafeMarkdown.render(p);
-    assert.deepEqual(check(out), [], 'payload ' + JSON.stringify(p) + '\n=> ' + out);
+    assert.deepEqual(check(out), [], 'sample ' + JSON.stringify(p) + '\n=> ' + out);
   }
 });
 
@@ -144,7 +143,7 @@ test('structural: dangerous text is shown as text, not dropped silently into mar
   assert.ok(!/<script/i.test(out));
 });
 
-test('streaming: no prefix of any payload yields an executable construct', () => {
+test('streaming: no prefix of any sample yields an executable construct', () => {
   for (const p of CORPUS) {
     for (let n = 0; n <= p.length; n++) {
       const out = SafeMarkdown.render(p.slice(0, n));
@@ -165,7 +164,7 @@ test('streaming: a tag split across two chunks never executes at any render', ()
   }
 });
 
-test('the filter layer alone neutralises hostile markup handed to it directly', () => {
+test('the filter layer alone neutralises unsafe markup handed to it directly', () => {
   for (const p of CORPUS) {
     const out = SafeMarkdown.sanitizeHtml(p);
     assert.deepEqual(check(out), [], 'raw ' + JSON.stringify(p) + '\n=> ' + out);
@@ -183,23 +182,27 @@ test('the marked renderer layer is safe on its own (the filter is a second layer
 });
 
 // ---- URL policy ----
-test('links: only http, https and mailto get an href; rel is set', () => {
-  const ok = SafeMarkdown.render('[a](https://ok.example/p?q=1&r=2) [b](http://ok.example) [c](mailto:me@ok.example)');
+test('links: only http and https get an href; rel is set', () => {
+  const ok = SafeMarkdown.render('[a](https://ok.example/p?q=1&r=2) [b](http://ok.example)');
   assert.match(ok, /<a href="https:\/\/ok\.example\/p\?q=1&amp;r=2" rel="noopener noreferrer">a<\/a>/);
   assert.match(ok, /<a href="http:\/\/ok\.example" rel="noopener noreferrer">b<\/a>/);
-  assert.match(ok, /<a href="mailto:me@ok\.example" rel="noopener noreferrer">c<\/a>/);
-  for (const bad of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', '&#106;avascript:alert(1)', 'vbscript:x', 'file:///etc/passwd', '//evil.example/x', 'data:text/html,hi', 'relative/path', '#frag']) {
+  for (const bad of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', '&#106;avascript:alert(1)', 'mailto:me@ok.example', 'vbscript:x', 'file:///etc/passwd', '//remote.example/x', 'data:text/html,hi', 'relative/path', '#frag']) {
     const out = SafeMarkdown.render('[label](' + bad + ')');
     assert.ok(!/<a\b/.test(out), bad + ' => ' + out);
     assert.ok(out.includes('label'), 'link text survives: ' + out);
   }
 });
 
-test('images: http, https and base64 raster data URLs only', () => {
-  assert.match(SafeMarkdown.render('![alt](https://ok.example/a.png)'), /<img src="https:\/\/ok\.example\/a\.png" alt="alt">/);
+test('images: only base64 raster data URLs become <img>; remote images become plain links', () => {
+  const remote = SafeMarkdown.render('![alt text](https://ok.example/a.png)');
+  assert.ok(!/<img\b/.test(remote), remote);
+  assert.match(remote, /<a href="https:\/\/ok\.example\/a\.png" rel="noopener noreferrer">alt text<\/a>/);
+  assert.match(SafeMarkdown.render('![](https://ok.example/a.png)'), /<a href="https:\/\/ok\.example\/a\.png" rel="noopener noreferrer">https:\/\/ok\.example\/a\.png<\/a>/);
+  assert.ok(!/<img\b/.test(SafeMarkdown.sanitizeHtml('<img src="https://ok.example/a.png" alt="x">')));
+  assert.match(SafeMarkdown.sanitizeHtml('<p><img src="https://ok.example/a.png" alt="x y"></p>'), /<a href="https:\/\/ok\.example\/a\.png" rel="noopener noreferrer">x y<\/a>/);
   const png = 'data:image/png;base64,iVBORw0KGgo=';
   assert.match(SafeMarkdown.render('![pasted](' + png + ')'), /<img src="data:image\/png;base64,iVBORw0KGgo=" alt="pasted">/);
-  for (const bad of ['data:image/svg+xml;base64,PHN2Zz4=', 'data:text/html;base64,AAAA', 'javascript:alert(1)', 'file:///x.png', '//evil.example/a.png', 'data:image/png,notbase64']) {
+  for (const bad of ['data:image/svg+xml;base64,PHN2Zz4=', 'data:text/html;base64,AAAA', 'javascript:alert(1)', 'file:///x.png', '//remote.example/a.png', 'data:image/png,notbase64']) {
     const out = SafeMarkdown.render('![alt](' + bad + ')');
     assert.ok(!/<img\b/.test(out), bad + ' => ' + out);
   }
@@ -286,13 +289,13 @@ test('sanitizeHtml keeps ordinary quote markup', () => {
   assert.deepEqual(check(out), []);
 });
 
-test('sanitizeHtml: stored hostile quote html is neutralised', () => {
+test('sanitizeHtml: stored unsafe quote html is neutralised', () => {
   const stored = [
     '<img src=x onerror=alert(1)>',
     '<p onclick="x()">a</p><a href="javascript:alert(1)">b</a>',
     '<a href="https://ok.example" onmouseover="x()">c</a>',
     '<svg><script>alert(1)</script></svg>',
-    '<img src="https://tracker.example/b.png" onerror="x">',
+    '<img src="https://img.example/b.png" onerror="x">',
     '"><img src=x onerror=alert(1)>',
   ];
   for (const s of stored) assert.deepEqual(check(SafeMarkdown.sanitizeHtml(s)), [], s);
@@ -330,9 +333,13 @@ test('linkTarget: only http(s) URLs may be opened in the system browser', () => 
 test('delegated click handler: opens http(s) in the system browser and always blocks in-frame navigation', () => {
   const calls = [];
   const listeners = {};
-  const root = { addEventListener(t, fn) { listeners[t] = fn; } };
+  const captured = {};
+  const root = { addEventListener(t, fn, capture) { listeners[t] = fn; captured[t] = capture; } };
   SafeMarkdown.attachLinkHandler(root, (u) => calls.push(u));
   assert.equal(typeof listeners.click, 'function');
+  assert.equal(captured.click, true, 'capture phase, so a later stopPropagation cannot restore navigation');
+  assert.equal(typeof listeners.auxclick, 'function');
+  assert.equal(captured.auxclick, true);
   const mkEv = (href) => {
     const a = { getAttribute: (n) => (n === 'href' ? href : null) };
     let prevented = false;
@@ -361,4 +368,91 @@ test('fuzz: random mixes of markup and markdown fragments never yield disallowed
     assert.deepEqual(check(SafeMarkdown.render(s)), [], JSON.stringify(s));
     assert.deepEqual(check(SafeMarkdown.sanitizeHtml(s)), [], 'html ' + JSON.stringify(s));
   }
+});
+
+// ---- regressions found in review ----
+test('links: apostrophes, parentheses, ampersands and unicode in a URL keep a working href', () => {
+  const cases = {
+    "https://en.wikipedia.org/wiki/Hitchhiker's_Guide": 'https://en.wikipedia.org/wiki/Hitchhiker%27s_Guide',
+    'https://en.wikipedia.org/wiki/Foo_(bar)': 'https://en.wikipedia.org/wiki/Foo_(bar)',
+    'https://ok.example/a?x=1&y=2': 'https://ok.example/a?x=1&amp;y=2',
+    'https://ok.example/caf\u00e9/\u6f22': 'https://ok.example/caf%C3%A9/%E6%BC%A2',
+    'https://ok.example/100%25': 'https://ok.example/100%25',
+  };
+  for (const [url, want] of Object.entries(cases)) {
+    for (const md of ['[w](' + url + ')', '<' + url + '>', url]) {
+      const out = SafeMarkdown.render(md);
+      assert.ok(out.includes('href="' + want + '"'), md + ' => ' + out);
+      assert.deepEqual(check(out), [], out);
+    }
+  }
+  assert.equal(SafeMarkdown.cleanUrl("https://x.example/a'b", false), 'https://x.example/a%27b');
+});
+
+test('links: an href that does not survive drops the whole <a>, not just its href', () => {
+  const out = SafeMarkdown.sanitizeHtml('<p><a href="javascript:x">label</a> and <a href="https://ok.example">ok</a></p>');
+  assert.equal(out, '<p>label and <a href="https://ok.example" rel="noopener noreferrer">ok</a></p>');
+});
+
+test('mailto: is shown as plain text, so no dead link appears (bare addresses included)', () => {
+  for (const md of ['[mail me](mailto:me@ok.example)', 'write to me@ok.example please', '<me@ok.example>']) {
+    const out = SafeMarkdown.render(md);
+    assert.ok(!/<a\b/.test(out), md + ' => ' + out);
+    assert.ok(/me@ok\.example|mail me/.test(out));
+  }
+});
+
+test('a bare <br> token is kept as a line break (tables, prose); nothing else is', () => {
+  for (const br of ['<br>', '<br/>', '<br />', '<BR>']) {
+    const cell = SafeMarkdown.render('| a | b |\n|---|---|\n| one' + br + 'two | x |');
+    assert.match(cell, /<td>one<br>two<\/td>/, br + ' => ' + cell);
+    assert.match(SafeMarkdown.render('line' + br + 'two'), /line<br>two/);
+    assert.deepEqual(check(cell), []);
+  }
+  for (const bad of ['<br onclick=alert(1)>', '<br/ x>', '<br class="a">', '<br\n>x<img src=x onerror=1>', '<brx>', '<sub>', '<kbd>x</kbd>']) {
+    const out = SafeMarkdown.render('a' + bad + 'b');
+    assert.ok(!/<br[ \/]|<sub|<kbd/.test(out), bad + ' => ' + out);
+    assert.deepEqual(check(out), [], out);
+  }
+});
+
+test('stream renderer: throttles intermediate renders and always ends on the full render', () => {
+  const full = '# Title\n\nSome **bold** text and a [link](https://ok.example/a).\n\n- [ ] one\n- [x] two\n\n```js\nconst a = 1 < 2;\n```\n';
+  let clock = 0;
+  const timers = [];
+  const timerApi = {
+    now: () => clock,
+    setTimeout: (fn, ms) => { const t = { fn, at: clock + ms, done: false }; timers.push(t); return t; },
+    clearTimeout: (t) => { if (t) t.done = true; },
+  };
+  const advance = (ms) => {
+    const end = clock + ms;
+    for (;;) {
+      const next = timers.filter((t) => !t.done && t.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (!next) break;
+      clock = next.at; next.done = true; next.fn();
+    }
+    clock = end;
+  };
+  let applied = 0, last = null;
+  const r = SafeMarkdown.createStreamRenderer((html) => { applied++; last = html; }, { delayMs: 100, timers: timerApi });
+  let acc = '';
+  for (let i = 0; i < full.length; i += 5) { acc += full.slice(i, i + 5); r.push(acc); advance(10); }
+  assert.ok(applied < full.length / 5 / 3, 'renders were coalesced: ' + applied);
+  advance(500);
+  assert.equal(last, SafeMarkdown.render(full), 'the final output equals the unthrottled render');
+  const before = applied;
+  advance(1000);
+  assert.equal(applied, before, 'nothing is left scheduled');
+  // flush renders the pending text right away
+  r.push(full + 'more');
+  r.flush();
+  assert.equal(last, SafeMarkdown.render(full + 'more'));
+});
+
+test('stream renderer: the first chunk renders immediately', () => {
+  let last = null;
+  const r = SafeMarkdown.createStreamRenderer((h) => { last = h; }, { delayMs: 100, timers: { now: () => 1000, setTimeout: () => ({}), clearTimeout() {} } });
+  r.push('hello');
+  assert.equal(last, '<p>hello</p>\n');
 });
