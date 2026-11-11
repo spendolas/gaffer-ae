@@ -1557,7 +1557,7 @@
         // above the next chip
         chip.style.zIndex = String(MAX_PASTE_FILES - idx);
         var img = document.createElement('img');
-        img.src = item.dataUrl;
+        if (isImageDataUrl(item.dataUrl)) img.src = item.dataUrl;
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
         var x = icon('close', 'paste-chip-x');
         x.addEventListener('click', function (e) {
@@ -1573,7 +1573,7 @@
   }
 
   function openLightbox(dataUrl) {
-    if (!lightboxEl || !lightboxImgEl || !dataUrl) return;
+    if (!lightboxEl || !lightboxImgEl || !isImageDataUrl(dataUrl)) return;
     lightboxImgEl.src = dataUrl;
     tkShow(lightboxEl);
   }
@@ -1867,7 +1867,7 @@
       images.forEach(function (item) {
         var img = document.createElement('img');
         img.className = 'bubble-image';
-        img.src = item.dataUrl;
+        if (isImageDataUrl(item.dataUrl)) img.src = item.dataUrl;
         img.alt = item.name || 'image';
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
         row.appendChild(img);
@@ -1956,6 +1956,19 @@
   function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+  function isImageDataUrl(u) {
+    return typeof SafeMarkdown !== 'undefined' && SafeMarkdown.isSafeImageDataUrl(u);
+  }
+  // Links in chat content never navigate the panel frame (it has Node access):
+  // one delegated handler cancels every link click and hands http(s) targets to
+  // the system browser.
+  if (typeof SafeMarkdown !== 'undefined') SafeMarkdown.attachLinkHandler(document, openExternal);
+  // Markup the panel keeps (reply quotes) goes through the same allowlist filter
+  // as rendered chat; without the filter module it degrades to plain text.
+  function safeHtml(html) {
+    if (typeof SafeMarkdown === 'undefined') return escapeHtml(html == null ? '' : html);
+    return SafeMarkdown.sanitizeHtml(html);
+  }
 
   // Capture the selection as BOTH rendered HTML (preserves bold/code/links for
   // the styled quote) and plain text (what the agent receives). A selection that
@@ -1982,7 +1995,7 @@
     // text from the CLEANED fragment (excludes chrome/hidden pill labels)
     var text = (box.textContent || '').replace(/\s+/g, ' ').trim();
     if (!text) return null;
-    return { html: box.innerHTML, text: text };
+    return { html: safeHtml(box.innerHTML), text: text };
   }
 
   // Return the live selection only when it sits inside a chat bubble (so the
@@ -2101,7 +2114,8 @@
     // reply-quote-text (later in the sheet) overrides size/color/clamp.
     txt.className = 'reply-quote-text msg-text';
     txt.setAttribute('data-fig', '428:3198'); // banner-text
-    txt.innerHTML = q.html || escapeHtml(q.text || ''); // styled snippet
+    // Stored quote HTML (also from older saved chats) is filtered again on every build.
+    txt.innerHTML = q.html ? safeHtml(q.html) : escapeHtml(q.text || ''); // styled snippet
     row.appendChild(wave);
     row.appendChild(txt);
     if (onRemove) {
@@ -2308,25 +2322,11 @@
     }
   });
 
+  // Chat text is untrusted (model output, project content, saved history), so
+  // it only ever reaches innerHTML through SafeMarkdown (panel/lib/safe-markdown.js).
   function renderMarkdown(text) {
-    if (typeof marked === 'undefined') return text;
-    try {
-      // Normalize whitespace: collapse 3+ newlines, strip blanks between list
-      // items so marked produces tight lists (no <p> inside <li>).
-      var clean = text
-        .replace(/(\n[ \t]*){3,}/g, '\n\n')
-        .replace(/^(\s*[-*+]\s+.*)\n\s*\n(?=\s*[-*+]\s)/gm, '$1\n')
-        .replace(/^(\s*\d+\.\s+.*)\n\s*\n(?=\s*\d+\.\s)/gm, '$1\n')
-        .trim();
-      var html = marked.parse(clean, { breaks: false, gfm: true });
-      // GFM task-list items ship as <li><input type=checkbox> with no class.
-      // Tag them so CSS can drop the redundant bullet — CEP Ch99 predates
-      // :has(), so we can't detect the checkbox child in the stylesheet alone.
-      html = html.replace(/<li>(\s*<input\b[^>]*type="checkbox")/g, '<li class="task-item">$1');
-      return html;
-    } catch (e) {
-      return text;
-    }
+    if (typeof SafeMarkdown === 'undefined') return escapeHtml(text == null ? '' : text);
+    return SafeMarkdown.render(text);
   }
 
   function startAssistantMessage() {
@@ -2402,7 +2402,12 @@
       el.appendChild(row);
     }
     // Reuse existing pill for this tool call (dedupe running → done/error)
-    var pill = id ? row.querySelector('[data-tool-id="' + id + '"]') : null;
+    var pill = null;
+    if (id) {
+      for (var pi = 0; pi < row.children.length; pi++) {
+        if (row.children[pi].dataset.toolId === String(id)) { pill = row.children[pi]; break; }
+      }
+    }
     if (!pill) {
       pill = document.createElement('span');
       if (id) pill.dataset.toolId = id;
@@ -2767,10 +2772,13 @@
     // Tiles are vector-or-monogram, nothing else: bundled/CDN brand SVGs
     // render via currentColor; anything without a vector gets the
     // two-letter monogram. (Favicon masking removed — bad experience.)
-    if (s.icon && s.icon.indexOf('image/svg') !== -1) {
+    // The icon comes from a remote server, so it is shown as an image mask
+    // (a vector used as an image cannot run anything), never as inline markup.
+    var iconUrl = (typeof SafeMarkdown !== 'undefined') ? SafeMarkdown.safeSvgIconDataUrl(s.icon) : null;
+    if (iconUrl) {
       var span = document.createElement('span');
-      span.className = 'gicon';
-      span.innerHTML = atob(s.icon.split(',')[1]);
+      span.className = 'gicon gicon-mask';
+      span.style.webkitMaskImage = 'url("' + iconUrl + '")';
       tile.appendChild(span);
     } else {
       var mono = document.createElement('span');
