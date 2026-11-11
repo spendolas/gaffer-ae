@@ -10,6 +10,7 @@ import {
   writeMcpConfigFile, removeMcpConfigFile, ensureChatCwd, chatBaseDir,
   detectLockdownSupport, resetLockdownCacheForTests, runHelpToFile,
   extractPastedImages, buildStreamJsonInput, summaryPromptSection,
+  userSettingsPassthrough, readUserSettings, sweepChatTempFiles,
 } from '../chat-lockdown.js';
 import { assertLockdown, assertNoPositional, value, resumeId } from './lockdown-assert.mjs';
 import { lockdownMissingFlags, lockdownUnsupportedMessage, LOCKDOWN_FLAGS } from '../cli-contract.js';
@@ -395,6 +396,7 @@ test('assertLockdown itself rejects option injection shapes', () => {
   assert.throws(function () { assertLockdown(good.concat(['--resume'])); });
   assert.throws(function () { assertLockdown(good.concat(['stray'])); });
   assert.throws(function () { assertLockdown(good.concat(['--settings=x'])); });
+  assert.throws(function () { assertLockdown(good.concat(['--settings', 'a', '--settings', 'b'])); });
 });
 
 test('buildChatArgs: an unexpected model string is refused', () => {
@@ -432,4 +434,91 @@ test('lockdownMissingFlags: deleting only the real option line of a flag reports
   });
   // a description line that happens to start with a flag, indented like prose
   assert.deepEqual(lockdownMissingFlags('                                        --tools names the tools\n'), LOCKDOWN_FLAGS.slice());
+});
+
+// ---- Settings pass-through (the few user settings chat needs to reach the API) ----
+
+test('userSettingsPassthrough: keeps env and auth helpers, drops hooks, permissions, plugins and the rest', () => {
+  var out = userSettingsPassthrough({
+    env: { HTTPS_PROXY: 'http://p:1', NODE_EXTRA_CA_CERTS: '/ca.pem' },
+    apiKeyHelper: '/bin/key-helper',
+    awsAuthRefresh: 'aws sso login',
+    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'x' }] }] },
+    permissions: { allow: ['Bash(*)'] },
+    enabledPlugins: { 'a@b': true },
+    mcpServers: { x: {} },
+    statusLine: { type: 'command', command: 'y' },
+  });
+  assert.deepEqual(Object.keys(out).sort(), ['apiKeyHelper', 'awsAuthRefresh', 'env']);
+  assert.equal(out.env.HTTPS_PROXY, 'http://p:1');
+});
+
+test('userSettingsPassthrough: nothing to pass is null; a non-object env is dropped', () => {
+  assert.equal(userSettingsPassthrough({}), null);
+  assert.equal(userSettingsPassthrough(null), null);
+  assert.equal(userSettingsPassthrough({ hooks: {} }), null);
+  assert.equal(userSettingsPassthrough({ env: 'nope' }), null);
+  assert.deepEqual(userSettingsPassthrough({ env: { A: 1, B: 'x', C: { d: 1 } } }), { env: { A: '1', B: 'x' } });
+});
+
+test('readUserSettings: reads settings.json from CLAUDE_CONFIG_DIR or ~/.claude, {} when missing or broken', () => {
+  var home = mkdtempSync(join(tmpdir(), 'gaffer-test-home-'));
+  assert.deepEqual(readUserSettings({ env: {}, home: home }), {});
+  mkdirSync(join(home, '.claude'));
+  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ env: { A: 'b' } }));
+  assert.deepEqual(readUserSettings({ env: {}, home: home }), { env: { A: 'b' } });
+  var cfg = mkdtempSync(join(tmpdir(), 'gaffer-test-cfg-'));
+  writeFileSync(join(cfg, 'settings.json'), '{broken');
+  assert.deepEqual(readUserSettings({ env: { CLAUDE_CONFIG_DIR: cfg }, home: home }), {});
+});
+
+test('buildChatArgs / buildCompactArgs: --settings is passed once, only when there is a file', () => {
+  var chat = buildChatArgs({ message: 'x' }, Object.assign({}, base, { settingsPath: '/x/settings.json' }));
+  assert.equal(value(chat, '--settings'), '/x/settings.json');
+  assertLockdown(chat);
+  var compact = buildCompactArgs({ model: 'opus', sessionId: '55555555-5555-4555-8555-555555555555', settingsPath: '/x/settings.json' });
+  assert.equal(value(compact, '--settings'), '/x/settings.json');
+  assertLockdown(compact, { mcp: false });
+  assert.equal(buildChatArgs({ message: 'x' }, base).indexOf('--settings'), -1);
+});
+
+// ---- Housekeeping -----------------------------------------------------------
+
+test('sweepChatTempFiles: removes leftover config and settings files, nothing else', { skip: process.platform === 'win32' }, () => {
+  var dir = join(mkdtempSync(join(tmpdir(), 'gaffer-test-sweep-')), 'chat-mcp');
+  var a = writeMcpConfigFile({ mcpServers: {} }, dir);
+  writeFileSync(join(dir, 'settings-0123456789abcdef.json'), '{}');
+  writeFileSync(join(dir, 'keep.txt'), 'x');
+  sweepChatTempFiles(dir);
+  assert.equal(existsSync(a), false);
+  assert.equal(existsSync(join(dir, 'settings-0123456789abcdef.json')), false);
+  assert.equal(existsSync(join(dir, 'keep.txt')), true);
+  sweepChatTempFiles(join(dir, 'missing')); // no throw
+});
+
+test('writeMcpConfigFile: every call gets its own file name', { skip: process.platform === 'win32' }, () => {
+  var dir = join(mkdtempSync(join(tmpdir(), 'gaffer-test-wx-')), 'chat-mcp');
+  var names = new Set();
+  for (var i = 0; i < 20; i++) names.add(writeMcpConfigFile({ mcpServers: {} }, dir));
+  assert.equal(names.size, 20);
+});
+
+test('chatBaseDir: on Windows the local app-data folder is preferred over the roaming one', () => {
+  var old = process.env.GAFFER_CHAT_DIR;
+  delete process.env.GAFFER_CHAT_DIR;
+  try {
+    assert.equal(chatBaseDir({ platform: 'win32', env: { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' } }), join('C:\\Users\\u\\AppData\\Local', 'Gaffer'));
+    assert.equal(chatBaseDir({ platform: 'darwin', env: { LOCALAPPDATA: 'x' } }), dirname(process.env.GAFFER_CONFIG_PATH));
+    assert.equal(chatBaseDir({ platform: 'win32', env: {} }), dirname(process.env.GAFFER_CONFIG_PATH), 'no LOCALAPPDATA: fall back');
+  } finally {
+    if (old !== undefined) process.env.GAFFER_CHAT_DIR = old;
+  }
+});
+
+test('buildMcpConfig: connectors whose names map to the same tool prefix are not both passed', () => {
+  var userServers = { 'a.b': { type: 'http', url: '1' }, 'a_b': { type: 'http', url: '2' }, 'a b': { type: 'http', url: '3' }, 'gaffer.': { type: 'http', url: '4' }, 'gaffer ': { type: 'http', url: '5' } };
+  var r = buildMcpConfig(['a.b', 'a_b', 'a b', 'gaffer.', 'gaffer '], { gafferUrl: 'u', userServers: userServers, knownIds: new Set(Object.keys(userServers)) });
+  assert.deepEqual(r.included, ['a.b', 'gaffer.']);
+  assert.deepEqual(r.skipped.map(function (x) { return x.id; }).sort(), ['a b', 'a_b', 'gaffer ']);
+  r.skipped.forEach(function (x) { assert.match(x.reason, /same name|collid/i); });
 });

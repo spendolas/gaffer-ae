@@ -3,13 +3,13 @@ import { noopModelCatalog } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, existsSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, statSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatHandler } from '../chat-handler.js';
 import { assertLockdown, value, resumeId } from './lockdown-assert.mjs';
 import { encodePng } from '../png-scale.js';
-import { resetKnownMcpIdsForTests } from '../chat-handler.js';
+import { resetKnownMcpIdsForTests, knownMcpIds } from '../chat-handler.js';
 
 // Drives a real ChatHandler through a fake `claude` child and checks what the
 // handler actually hands to spawn: the lockdown options, the working
@@ -50,9 +50,15 @@ function harness(over) {
     lastClaudeLookup: function () { return { version: '2.1.321 (Claude Code)', step: 'x' }; },
     detectLockdownSupport: over.detect || SUPPORTED,
     readUserMcpServers: over.userServers || function () { return {}; },
+    readUserSettings: over.settings || function () { return {}; },
     spawn: function (bin, args, opts) {
+      if (over.spawnThrows) throw new Error('spawn failed');
       var child = fakeChild();
       var rec = { bin: bin, args: args, opts: opts, child: child };
+      var si = args.indexOf('--settings');
+      if (si !== -1) {
+        try { rec.settingsFile = args[si + 1]; rec.settingsText = readFileSync(rec.settingsFile, 'utf8'); rec.settingsMode = statSync(rec.settingsFile).mode & 0o777; } catch (e) { /* recorded as missing */ }
+      }
       var i = args.indexOf('--mcp-config');
       if (i !== -1) {
         try { rec.mcpFile = args[i + 1]; rec.mcpText = readFileSync(rec.mcpFile, 'utf8'); rec.mcpMode = statSync(rec.mcpFile).mode & 0o777; } catch (e) { /* recorded as missing */ }
@@ -108,7 +114,7 @@ test('chat spawn: with no connectors enabled the MCP config is gaffer alone, nev
   assert.deepEqual(Object.keys(JSON.parse(h.spawns[0].mcpText).mcpServers), ['gaffer']);
 });
 
-test('chat spawn: a hostile enabledMcps id reaches neither argv nor the MCP config', async () => {
+test('chat spawn: a malformed enabledMcps id reaches neither argv nor the MCP config', async () => {
   var evil = 'x__*,Bash,Write,y';
   var h = harness({ userServers: function () { var u = {}; u[evil] = { type: 'http', url: 'h' }; return u; } });
   await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku', enabledMcps: [evil, 'Bash(*)', '-p'] }, fakeSocket()); });
@@ -244,4 +250,117 @@ test('compaction summary: rides in the system prompt as quoted data, never in th
   assert.match(sys, /SUMMARY: we built a logo\./);
   assert.equal(next.child.stdin.written.indexOf('SUMMARY'), -1);
   assertLockdown(next.args);
+});
+
+test('chat spawn: only the allowed user settings (env, auth helpers) are passed, in a private file removed after the turn', { skip: process.platform === 'win32' }, async () => {
+  var h = harness({ settings: function () {
+    return { env: { HTTPS_PROXY: 'http://proxy:3128' }, apiKeyHelper: '/bin/h', hooks: { PreToolUse: [] }, permissions: { allow: ['Bash(*)'] }, enabledPlugins: { 'a@b': true } };
+  } });
+  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku' }, fakeSocket()); });
+  var s = h.spawns[0];
+  assertLockdown(s.args);
+  assert.deepEqual(Object.keys(JSON.parse(s.settingsText)).sort(), ['apiKeyHelper', 'env']);
+  assert.equal(s.settingsMode, 0o600);
+  assert.equal(s.args.join('\u0000').indexOf('proxy:3128'), -1, 'values stay off the command line');
+  s.child.emit('close', 0);
+  await tick();
+  assert.equal(existsSync(s.settingsFile), false);
+  assert.equal(existsSync(s.mcpFile), false);
+});
+
+test('chat spawn: no settings to pass means no --settings option and no file', async () => {
+  var h = harness();
+  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku' }, fakeSocket()); });
+  assert.equal(h.spawns[0].args.indexOf('--settings'), -1);
+});
+
+test('chat spawn: a spawn that throws reports an error and leaves no config file behind', async () => {
+  var h = harness({ spawnThrows: true, settings: function () { return { env: { A: 'b' } }; } });
+  var sock = fakeSocket();
+  var before = require_listing();
+  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku' }, sock); });
+  assert.equal(sock.ofType('chat_error').length, 1);
+  assert.deepEqual(require_listing(), before, 'no leftover files in the chat temp folder');
+});
+
+function require_listing() {
+  try { return readdirSync(join(chatDir, 'chat-mcp')).sort(); } catch (e) { return []; }
+}
+
+test('compaction call also carries the settings pass-through file', { skip: process.platform === 'win32' }, async () => {
+  var h = harness({ settings: function () { return { env: { A: 'b' } }; } });
+  var sock = fakeSocket();
+  await quiet(async function () {
+    await h.handler.handleChat({ message: 'x', model: 'opus' }, sock);
+    h.spawns[0].child.emit('close', 0);
+    h.handler.sessionId = '99999999-0000-4000-8000-999999999999';
+    h.handler.lastContextTokens = 1000;
+    h.handler._compactSession(sock);
+  });
+  var c = h.spawns[1];
+  assertLockdown(c.args, { mcp: false });
+  assert.ok(c.settingsText && JSON.parse(c.settingsText).env.A === 'b');
+  c.child.emit('close', 1);
+  await tick();
+  assert.equal(existsSync(c.settingsFile), false, 'removed after the compaction call');
+});
+
+// ---- Waiting before the spawn: list failure, cancel, a second message -------
+
+function neverResolves() { return new Promise(function () {}); }
+
+test('mcp list that failed is not re-run on every turn (negative cache)', async () => {
+  var saved = knownMcpIds();
+  resetKnownMcpIdsForTests(null);
+  try {
+    var h = harness({ userServers: function () { return { grip: { type: 'http', url: 'h' } }; } });
+    var calls = 0;
+    h.handler.listMcps = async function () { calls++; return { error: 'timed out', servers: [] }; };
+    var sock = fakeSocket();
+    await quiet(async function () {
+      await h.handler.handleChat({ message: 'a', model: 'haiku', enabledMcps: ['grip'] }, sock);
+      h.spawns[0].child.emit('close', 0);
+      await h.handler.handleChat({ message: 'b', model: 'haiku', enabledMcps: ['grip'] }, sock);
+      h.spawns[1].child.emit('close', 0);
+    });
+    assert.equal(calls, 1, 'listed once, then remembered as failed');
+    assert.equal(h.spawns.length, 2, 'chat still works, without the connector');
+    assert.deepEqual(Object.keys(JSON.parse(h.spawns[1].mcpText).mcpServers), ['gaffer']);
+  } finally { resetKnownMcpIdsForTests(saved); }
+});
+
+test('cancel while waiting for the mcp list: no spawn, and the panel is told the turn is over', async () => {
+  var saved = knownMcpIds();
+  resetKnownMcpIdsForTests(null);
+  try {
+    var h = harness({ userServers: function () { return { grip: { type: 'http', url: 'h' } }; } });
+    h.handler.listMcps = neverResolves;
+    var sock = fakeSocket();
+    var done = false;
+    var turn = quiet(function () { return h.handler.handleChat({ message: 'a', model: 'haiku', enabledMcps: ['grip'] }, sock); }).then(function () { done = true; });
+    await tick(); await tick();
+    assert.equal(done, false, 'still waiting');
+    h.handler.cancel();
+    await turn;
+    assert.equal(h.spawns.length, 0);
+    assert.equal(sock.ofType('chat_done').length, 1);
+  } finally { resetKnownMcpIdsForTests(saved); }
+});
+
+test('a second message while the first waits: only one child is ever started', async () => {
+  var saved = knownMcpIds();
+  resetKnownMcpIdsForTests(null);
+  try {
+    var h = harness({ userServers: function () { return { grip: { type: 'http', url: 'h' } }; } });
+    var first = true;
+    h.handler.listMcps = function () { if (first) { first = false; return neverResolves(); } return Promise.resolve({ error: 'x', servers: [] }); };
+    var sock = fakeSocket();
+    var t1 = quiet(function () { return h.handler.handleChat({ message: 'one', model: 'haiku', enabledMcps: ['grip'] }, sock); });
+    await tick(); await tick();
+    await quiet(function () { return h.handler.handleChat({ message: 'two', model: 'haiku', enabledMcps: ['grip'] }, sock); });
+    await t1;
+    assert.equal(h.spawns.length, 1);
+    assert.equal(h.spawns[0].child.stdin.written, 'two');
+    assert.equal(sock.ofType('chat_done').length, 0, 'the superseded turn says nothing');
+  } finally { resetKnownMcpIdsForTests(saved); }
 });
