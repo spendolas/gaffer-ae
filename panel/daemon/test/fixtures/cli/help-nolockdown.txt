@@ -198,6 +198,14 @@ Options:
                                         them, and ignores user, project and
                                         local settings files (managed settings
                                         and --settings still apply; add
+                                        --strict-mcp-config to skip MCP servers
+                                        too). Also confines the file tools to
+                                        the working directories (--add-dir
+                                        included), refuses bypassPermissions,
+                                        and lets only a person or the configured
+                                        permission handler approve writes to
+                                        settings, git and tool-configuration
+                                        files.
   -r, --resume [value]                  Resume a conversation by session ID or
                                         name, or open interactive picker with
                                         optional search term
@@ -214,8 +222,10 @@ Options:
                                         CLAUDE_CODE_SAFE_MODE=1.
   --session-id <uuid>                   Use a specific session ID for the
                                         conversation (must be a valid UUID)
+                                        to load (user, project, local).
   --settings <file-or-json>             Path to a settings JSON file or a JSON
                                         string to load additional settings from
+                                        ignoring all other MCP configurations
   --system-prompt <prompt>              System prompt to use for the session
   --system-prompt-snapshot <on|off>     Record the system prompt once per
                                         conversation and reuse it verbatim on
@@ -239,6 +249,10 @@ Options:
                                         (requires --worktree). Uses iTerm2
                                         native panes when available; use
                                         --tmux=classic for traditional tmux.
+                                        the built-in set. Use "" to disable all
+                                        tools, "default" to use the default set,
+                                        or specify tool names (e.g.
+                                        "Bash,Edit,Read").
   --verbose                             Override verbose mode setting from
                                         config
   -v, --version                         Output the version number
