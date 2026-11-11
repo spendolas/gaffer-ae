@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Chat replies, quoted text and saved chats are now shown as plain text and simple formatting only. Raw HTML in a reply is displayed as text instead of being interpreted. Links in chat open in your browser, and only web and email links are clickable.
-- The panel now loads only its own files and only talks to Gaffer's background service and the update check. Remote images in a reply are not fetched.
+- Chat replies, quoted text and saved chats are now shown as plain text and simple formatting only. Raw HTML in a reply is displayed as text instead of being interpreted, except for plain line breaks. Only web links are clickable, and they open in your browser. Email addresses are shown as text.
+- The panel now loads only its own files and only talks to Gaffer's background service and the update check. Images from the web in a reply are shown as links instead of being loaded, and dropping a link or page onto the panel does nothing.
+- Long replies update on screen a little less often while they stream, so the panel stays responsive. The finished reply is the same.
 - The icons of your connected MCP servers are drawn as images in the panel's colours, and only small image icons are accepted. Servers without a usable icon show their initials.
 - Release packages no longer contain a developer debugging file. Updating or repairing Gaffer removes it from an existing install.
 
