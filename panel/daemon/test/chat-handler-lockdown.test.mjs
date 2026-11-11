@@ -37,7 +37,7 @@ function fakeSocket() {
 }
 
 // The ids the daemon's own `claude mcp list` returned (set by listMcps in production).
-resetKnownMcpIdsForTests(new Set(['grip', 'notion', 'claude.ai Gmail', 'x__*,Bash,Write,y']));
+resetKnownMcpIdsForTests(new Set(['grip', 'notion', 'claude.ai Gmail', 'a__*,b,c,d']));
 
 var SUPPORTED = async function () { return { ok: true, missing: [] }; };
 
@@ -115,13 +115,13 @@ test('chat spawn: with no connectors enabled the MCP config is gaffer alone, nev
 });
 
 test('chat spawn: a malformed enabledMcps id reaches neither argv nor the MCP config', async () => {
-  var evil = 'x__*,Bash,Write,y';
-  var h = harness({ userServers: function () { var u = {}; u[evil] = { type: 'http', url: 'h' }; return u; } });
-  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku', enabledMcps: [evil, 'Bash(*)', '-p'] }, fakeSocket()); });
+  var odd = 'a__*,b,c,d';
+  var h = harness({ userServers: function () { var u = {}; u[odd] = { type: 'http', url: 'h' }; return u; } });
+  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku', enabledMcps: [odd, 'Bash(*)', '-p'] }, fakeSocket()); });
   var s = h.spawns[0];
   assertLockdown(s.args);
   var argv = s.args.join('\u0000');
-  ['Bash', 'Write', 'x__*', 'mcp__'].forEach(function (n) { assert.equal(argv.indexOf(n), -1, n); });
+  ['Bash', 'Write', 'a__*', 'mcp__'].forEach(function (n) { assert.equal(argv.indexOf(n), -1, n); });
   assert.deepEqual(Object.keys(JSON.parse(s.mcpText).mcpServers), ['gaffer']);
 });
 
