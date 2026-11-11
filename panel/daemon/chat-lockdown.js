@@ -8,6 +8,8 @@
 //   --mcp-config <file>        gaffer plus the connectors the user switched on
 //   --setting-sources ""       no user, project or local settings, hooks or
 //                              instruction files (CLAUDE.md) are loaded
+//   --settings <file>          Gaffer's own file with only the user settings the
+//                              child needs to reach the API (env, key helpers)
 //   --disable-slash-commands   no skills or slash commands
 // and a dedicated empty working directory. The prompt travels on stdin: the
 // options above (and --tools) take a variable number of values, so a
@@ -86,6 +88,7 @@ export function buildChatArgs(msg, ctx) {
   if (ctx.effort) args.push('--effort', ctx.effort);
   args = args.concat(lockdownArgs());
   args.push('--mcp-config', ctx.mcpConfigPath);
+  if (ctx.settingsPath) args.push('--settings', ctx.settingsPath);
   if (ctx.sessionId) {
     checkSession(ctx.sessionId);
     args.push(resumeArg(ctx.sessionId));
@@ -102,8 +105,10 @@ export function buildChatArgs(msg, ctx) {
 export function buildCompactArgs(ctx) {
   checkModel(ctx.model);
   checkSession(ctx.sessionId);
-  return ['-p', '--model', ctx.model, resumeArg(ctx.sessionId), '--dangerously-skip-permissions']
+  var args = ['-p', '--model', ctx.model, resumeArg(ctx.sessionId), '--dangerously-skip-permissions']
     .concat(lockdownArgs());
+  if (ctx.settingsPath) args.push('--settings', ctx.settingsPath);
+  return args;
 }
 
 // ---- MCP config ---------------------------------------------------------
@@ -130,6 +135,9 @@ export function buildMcpConfig(enabledIds, opts) {
   var servers = Object.create(null);
   servers.gaffer = { type: 'http', url: opts.gafferUrl };
   var included = [], skipped = [];
+  // The CLI derives each server's tool prefix from its name with these
+  // characters turned into underscores, so two names can collide.
+  var prefixes = { gaffer: true };
   (Array.isArray(enabledIds) ? enabledIds : []).forEach(function (id) {
     if (typeof id !== 'string' || !id || id === 'gaffer') return;
     if (!SAFE_MCP_ID.test(id) || id === '__proto__') { skipped.push({ id: id, reason: 'not a valid connector id' }); return; }
@@ -139,6 +147,9 @@ export function buildMcpConfig(enabledIds, opts) {
       skipped.push({ id: id, reason: 'not a user-level server, so it cannot be used in Gaffer chat' });
       return;
     }
+    var prefix = id.replace(/[\s.\-:]/g, '_');
+    if (ownKey(prefixes, prefix)) { skipped.push({ id: id, reason: 'has the same name as another connector once normalised' }); return; }
+    prefixes[prefix] = true;
     servers[id] = def;
     included.push(id);
   });
@@ -165,10 +176,16 @@ export function readUserMcpServers(deps) {
 // ---- Gaffer's chat folders ---------------------------------------------
 
 // Parent of the chat folders: the per-user Gaffer app-data folder, derived
-// from config-path.js (the one place that path is computed). GAFFER_CHAT_DIR
-// overrides it for tests.
-export function chatBaseDir() {
-  return process.env.GAFFER_CHAT_DIR || dirname(getConfigPath());
+// from config-path.js (the one place that path is computed). On Windows the
+// local (not roaming) app-data folder is preferred: these folders hold
+// temporary files that must not follow a roaming profile. GAFFER_CHAT_DIR
+// overrides everything for tests. opts: platform, env (test seams).
+export function chatBaseDir(opts) {
+  var env = (opts && opts.env) || process.env;
+  var platform = (opts && opts.platform) || process.platform;
+  if (env.GAFFER_CHAT_DIR) return env.GAFFER_CHAT_DIR;
+  if (platform === 'win32' && env.LOCALAPPDATA) return join(env.LOCALAPPDATA, 'Gaffer');
+  return dirname(getConfigPath());
 }
 
 function ensurePrivateDir(dir) {
@@ -192,28 +209,87 @@ export function ensureChatCwd() {
   return dir;
 }
 
-// The 0600 file the per-turn --mcp-config is written to (definitions can carry
-// credentials, so they never ride on the command line). Old files left by a
-// crash are swept when a new one is written.
-export function writeMcpConfigFile(config, dir) {
+// Writes a JSON file that can carry credentials (MCP server definitions, a few
+// user settings) so it never has to ride on the command line: exclusive create,
+// mode 0600, in a 0700 folder, with a random name.
+function writePrivateJson(prefix, value, dir) {
   dir = dir || join(chatBaseDir(), 'chat-mcp');
   ensurePrivateDir(dir);
   try {
     var cutoff = Date.now() - 3600 * 1000;
     readdirSync(dir).forEach(function (f) {
-      if (!/^mcp-[0-9a-f]+\.json$/.test(f)) return;
+      if (!TEMP_FILE.test(f)) return;
       try { if (statSync(join(dir, f)).mtimeMs < cutoff) unlinkSync(join(dir, f)); } catch (e) { /* gone */ }
     });
   } catch (e) { /* nothing to sweep */ }
-  var path = join(dir, 'mcp-' + randomBytes(8).toString('hex') + '.json');
-  writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
+  var path = join(dir, prefix + '-' + randomBytes(8).toString('hex') + '.json');
+  writeFileSync(path, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
   try { chmodSync(path, 0o600); } catch (e) { /* ignored where unsupported */ }
   return path;
 }
 
+var TEMP_FILE = /^(?:mcp|settings)-[0-9a-f]+\.json$/;
+
+// The per-turn --mcp-config file.
+export function writeMcpConfigFile(config, dir) { return writePrivateJson('mcp', config, dir); }
+
+// The per-turn --settings file (see userSettingsPassthrough).
+export function writeSettingsFile(settings, dir) { return writePrivateJson('settings', settings, dir); }
+
 export function removeMcpConfigFile(path) {
   if (!path) return;
   try { unlinkSync(path); } catch (e) { /* already gone */ }
+}
+
+// Removes every leftover per-turn file (a crash or kill can leave one). Called
+// once when the first chat handler of the process is created.
+export function sweepChatTempFiles(dir) {
+  dir = dir || join(chatBaseDir(), 'chat-mcp');
+  try {
+    readdirSync(dir).forEach(function (f) {
+      if (TEMP_FILE.test(f)) { try { unlinkSync(join(dir, f)); } catch (e) { /* gone */ } }
+    });
+  } catch (e) { /* no folder yet */ }
+}
+
+// --setting-sources "" keeps the user's settings files out of the chat child,
+// and with them the few settings that decide how it reaches the API: the
+// environment block (proxy, certificates, base URL, provider switches) and the
+// key and login helpers. This picks exactly those, so they are passed back in
+// through --settings, and nothing else (no hooks, permissions, plugins, status
+// line or MCP servers). Pure. null when there is nothing to pass.
+var PASSTHROUGH_SETTINGS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'forceLoginMethod', 'forceLoginOrgUUID'];
+
+export function userSettingsPassthrough(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return null;
+  var out = {};
+  PASSTHROUGH_SETTINGS.forEach(function (key) {
+    if (typeof settings[key] === 'string' && settings[key]) out[key] = settings[key];
+  });
+  var env = settings.env;
+  if (env && typeof env === 'object' && !Array.isArray(env)) {
+    var e = {};
+    Object.keys(env).forEach(function (k) {
+      var v = env[k];
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') e[k] = String(v);
+    });
+    if (Object.keys(e).length) out.env = e;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The user's settings.json ($CLAUDE_CONFIG_DIR or ~/.claude), {} when missing
+// or unreadable.
+export function readUserSettings(deps) {
+  var env = (deps && deps.env) || process.env;
+  var home = (deps && deps.home) || homedir();
+  var path = join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'settings.json');
+  try {
+    var j = JSON.parse(readFileSync(path, 'utf8'));
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
+  } catch (e) {
+    return {};
+  }
 }
 
 // ---- Fail closed: does this CLI support the lockdown? -------------------

@@ -6,7 +6,7 @@ var UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
 // Flags whose next token is a separate value.
 var VALUE_FLAGS = ['--model', '--output-format', '--input-format', '--effort', '--tools',
-  '--mcp-config', '--setting-sources', '--append-system-prompt'];
+  '--mcp-config', '--setting-sources', '--settings', '--append-system-prompt'];
 // Flags that take no value.
 var BARE_FLAGS = ['-p', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--disable-slash-commands'];
 // --resume takes an OPTIONAL value, so it is only ever passed attached.
@@ -51,7 +51,10 @@ export function assertLockdown(args, opts) {
   assert.equal(value(args, '--setting-sources'), '', 'no settings source may load');
   assert.equal(count(args, '--disable-slash-commands'), 1);
   assert.equal(count(args, '--dangerously-skip-permissions'), 1, 'bypass stays by design');
-  ['--allowedTools', '--disallowedTools', '--settings', '--add-dir', '--plugin-dir', '--agents'].forEach(function (f) {
+  // one --settings is allowed: Gaffer's own 0600 file holding only the few user
+  // settings the chat child needs to reach the API (env, apiKeyHelper, ...)
+  assert.ok(count(args, '--settings') <= 1, 'at most one --settings');
+  ['--allowedTools', '--disallowedTools', '--add-dir', '--plugin-dir', '--agents'].forEach(function (f) {
     assert.equal(args.some(function (a) { return a === f || a.indexOf(f + '=') === 0; }), false, f);
   });
   // no =-form variant of any option other than the attached --resume=<id>
