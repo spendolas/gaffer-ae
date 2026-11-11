@@ -6,8 +6,29 @@
 // Scope: non-interlaced PNGs at 8 or 16 bits per channel (gray, gray+alpha,
 // RGB, RGBA, indexed 8-bit). Anything else decodes to null and the caller
 // decides what to do (pass the original through or skip the image).
+//
+// Bounded work: a file that claims more than MAX_DECODE_PIXELS is refused
+// before anything is inflated, the inflate output is capped at exactly the size
+// the header implies (so a decompression bomb cannot grow), and the decode,
+// scale and encode loops yield to the event loop every few rows so the daemon
+// keeps serving other traffic meanwhile. The zlib calls run on the thread pool.
 
-import { inflateSync, deflateSync } from 'node:zlib';
+import { inflate, deflate } from 'node:zlib';
+
+// 16 megapixels: a 4K UHD frame is 8.3, a 5K frame 14.7.
+export var MAX_DECODE_PIXELS = 16 * 1000 * 1000;
+
+function inflateAsync(buf, maxOutputLength) {
+  return new Promise(function (resolve, reject) {
+    inflate(buf, { maxOutputLength: maxOutputLength }, function (err, out) { if (err) reject(err); else resolve(out); });
+  });
+}
+function deflateAsync(buf, opts) {
+  return new Promise(function (resolve, reject) {
+    deflate(buf, opts, function (err, out) { if (err) reject(err); else resolve(out); });
+  });
+}
+function yieldLoop() { return new Promise(function (resolve) { setImmediate(resolve); }); }
 
 var SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -53,12 +74,12 @@ function paeth(a, b, c) {
 
 // Decodes to { width, height, rgba: Uint8Array } or null when the file is not
 // a PNG this module handles. Never throws.
-export function decodePng(buf) {
+export async function decodePng(buf) {
   try {
     var size = pngSize(buf);
     if (!size) return null;
     var width = size.width, height = size.height;
-    if (!width || !height || width > 16384 || height > 16384) return null;
+    if (!width || !height || width * height > MAX_DECODE_PIXELS) return null;
     var depth = buf[24], colorType = buf[25], interlace = buf[28];
     if (interlace !== 0 || (depth !== 8 && depth !== 16) || !CHANNELS[colorType]) return null;
     if (colorType === 3 && depth !== 8) return null;
@@ -77,13 +98,15 @@ export function decodePng(buf) {
       pos += 12 + len;
     }
     if (!idat.length) return null;
-    var raw = inflateSync(Buffer.concat(idat));
     var stride = width * bytesPer;
-    if (raw.length < (stride + 1) * height) return null;
+    var expected = (stride + 1) * height;
+    var raw = await inflateAsync(Buffer.concat(idat), expected);
+    if (raw.length < expected) return null;
 
     // Unfilter in place into `px`, one row at a time.
     var px = Buffer.alloc(stride * height);
     for (var y = 0; y < height; y++) {
+      if (y % 128 === 127) await yieldLoop();
       var f = raw[y * (stride + 1)];
       var src = y * (stride + 1) + 1;
       var dst = y * stride;
@@ -105,6 +128,7 @@ export function decodePng(buf) {
     var out = new Uint8Array(width * height * 4);
     var step = depth / 8; // bytes per sample
     for (var i = 0; i < width * height; i++) {
+      if (i % 524288 === 524287) await yieldLoop();
       var o = i * 4, p = i * bytesPer;
       if (colorType === 6) {
         out[o] = px[p]; out[o + 1] = px[p + step]; out[o + 2] = px[p + 2 * step]; out[o + 3] = px[p + 3 * step];
@@ -129,10 +153,11 @@ export function decodePng(buf) {
 
 // Area-average downscale with alpha-weighted (premultiplied) colour so
 // transparent pixels do not darken edges. Returns a new rgba array.
-export function scaleRgba(rgba, width, height, nw, nh) {
+export async function scaleRgba(rgba, width, height, nw, nh) {
   var out = new Uint8Array(nw * nh * 4);
   var sx = width / nw, sy = height / nh;
   for (var y = 0; y < nh; y++) {
+    if (y % 32 === 31) await yieldLoop();
     var y0 = y * sy, y1 = (y + 1) * sy;
     var iy0 = Math.floor(y0), iy1 = Math.min(height, Math.ceil(y1));
     for (var x = 0; x < nw; x++) {
@@ -162,7 +187,7 @@ export function scaleRgba(rgba, width, height, nw, nh) {
 // Encodes rgba as a PNG. RGB (type 2) when every pixel is opaque, RGBA (6)
 // otherwise. Adaptive per-row filtering unless opts.filter (0 to 4) forces one
 // (used by tests to exercise every unfilter path).
-export function encodePng(rgba, width, height, opts) {
+export async function encodePng(rgba, width, height, opts) {
   var forced = opts && typeof opts.filter === 'number' ? opts.filter : null;
   var opaque = true;
   for (var i = 3; i < rgba.length; i += 4) { if (rgba[i] !== 255) { opaque = false; break; } }
@@ -172,6 +197,7 @@ export function encodePng(rgba, width, height, opts) {
   var cur = Buffer.alloc(stride);
   var prev = Buffer.alloc(stride);
   for (var y = 0; y < height; y++) {
+    if (y % 64 === 63) await yieldLoop();
     for (var x = 0; x < width; x++) {
       var s = (y * width + x) * 4, d = x * bpp;
       cur[d] = rgba[s]; cur[d + 1] = rgba[s + 1]; cur[d + 2] = rgba[s + 2];
@@ -200,7 +226,7 @@ export function encodePng(rgba, width, height, opts) {
   return Buffer.concat([
     SIGNATURE,
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(rows, { level: 6 })),
+    chunk('IDAT', await deflateAsync(rows, { level: 6 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
@@ -209,7 +235,7 @@ export function encodePng(rgba, width, height, opts) {
 // maxBytes. Returns the original buffer untouched when it already fits.
 // Result { data, width, height, scaled } or null when the PNG cannot be
 // decoded (the caller then passes it through or skips it).
-export function fitPng(buf, opts) {
+export async function fitPng(buf, opts) {
   var maxEdge = (opts && opts.maxEdge) || 1568;
   var maxBytes = (opts && opts.maxBytes) || 3.5 * 1024 * 1024;
   var size = pngSize(buf);
@@ -217,14 +243,14 @@ export function fitPng(buf, opts) {
   if (Math.max(size.width, size.height) <= maxEdge && buf.length <= maxBytes) {
     return { data: buf, width: size.width, height: size.height, scaled: false };
   }
-  var img = decodePng(buf);
+  var img = await decodePng(buf);
   if (!img) return null;
   var edge = Math.min(maxEdge, Math.max(img.width, img.height));
   for (var attempt = 0; attempt < 6; attempt++) {
     var k = edge / Math.max(img.width, img.height);
     var nw = Math.max(1, Math.round(img.width * k)), nh = Math.max(1, Math.round(img.height * k));
-    var data = (nw === img.width && nh === img.height) ? encodePng(img.rgba, nw, nh)
-      : encodePng(scaleRgba(img.rgba, img.width, img.height, nw, nh), nw, nh);
+    var data = (nw === img.width && nh === img.height) ? await encodePng(img.rgba, nw, nh)
+      : await encodePng(await scaleRgba(img.rgba, img.width, img.height, nw, nh), nw, nh);
     if (data.length <= maxBytes || edge <= 256) return { data: data, width: nw, height: nh, scaled: true };
     edge = Math.floor(edge * 0.75);
   }

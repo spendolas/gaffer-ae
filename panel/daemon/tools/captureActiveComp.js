@@ -59,7 +59,7 @@ export function register(server, queue, z) {
           if (inner.error) {
             return { content: [{ type: 'text', text: JSON.stringify(inner) }], isError: true };
           }
-          return { content: captureContent(inner) };
+          return { content: await captureContent(inner, outputPath) };
         } else if (parsed.ok === false) {
           return { content: [{ type: 'text', text: raw }], isError: true };
         }
@@ -67,7 +67,7 @@ export function register(server, queue, z) {
         if (parsed.error) {
           return { content: [{ type: 'text', text: JSON.stringify(parsed) }], isError: true };
         }
-        return { content: captureContent(parsed) };
+        return { content: await captureContent(parsed, outputPath) };
       } catch (e) {
         return {
           content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }],
