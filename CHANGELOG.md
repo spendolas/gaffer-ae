@@ -7,6 +7,10 @@
 - Long replies update on screen a little less often while they stream, so the panel stays responsive. The finished reply is the same.
 - The icons of your connected MCP servers are drawn as images in the panel's colours, and only small image icons are accepted. Servers without a usable icon show their initials.
 - Release packages no longer contain a developer debugging file. Updating or repairing Gaffer removes it from an existing install.
+- Gaffer chat now works with only Gaffer's own tools and the connectors you switch on in Settings. Connectors that come from your Claude account (rather than from Claude Code's own settings) are not available in Gaffer chat; the panel says so once for each one you had switched on.
+- Gaffer chat needs a recent Claude Code. On an older version the panel shows "Update Claude Code to use Gaffer chat" instead of starting a chat.
+- Frames that Gaffer captures and screenshots you paste are now sent to Claude directly as images. Large images are scaled down first, and an image that is too large to scale is skipped with a note.
+- After updating, the first message in an existing chat starts a fresh conversation (you will see "Previous session expired"). Your chat history stays visible in the panel, but Claude does not remember the earlier conversation.
 
 ## v0.12.1 - 2026-10-26
 

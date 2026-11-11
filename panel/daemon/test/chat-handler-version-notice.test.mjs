@@ -1,5 +1,5 @@
 import './isolate-env.mjs';
-import { noopModelCatalog } from './test-catalog.mjs';
+import { noopModelCatalog, lockdownSupported } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -43,6 +43,7 @@ function harness() {
   var handler = new ChatHandler({
     modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
+    detectLockdownSupport: lockdownSupported,
     lastClaudeLookup: function () { return null; },
     spawn: function (bin, args) {
       var child = fakeChild();
@@ -62,7 +63,7 @@ function okStream(version) {
   return [
     JSON.stringify(init),
     JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }], usage: { input_tokens: 1 } } }),
-    JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: 's-1', result: 'Done.', usage: {} }),
+    JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: '11111111-1111-4111-8111-111111111111', result: 'Done.', usage: {} }),
   ].join('\n') + '\n';
 }
 
@@ -209,9 +210,15 @@ test('the spawn args are identical whether or not the version is out of range', 
   var b = harness(), sb = fakeSocket();
   await quiet(function () { return turn(b, sb, okStream('2.1.999')); });
   await quiet(function () { return turn(b, sb, okStream('2.1.999')); });
-  assert.deepEqual(b.spawns[0].args, a.spawns[0].args);
-  assert.deepEqual(b.spawns[1].args, a.spawns[1].args);
-  assert.ok(b.spawns[1].args.indexOf('--resume') !== -1, 'second turn resumes in both');
+  // The per-turn --mcp-config file name is random; everything else must match.
+  var same = function (args) {
+    var out = args.slice();
+    out[out.indexOf('--mcp-config') + 1] = '<mcp-config>';
+    return out;
+  };
+  assert.deepEqual(same(b.spawns[0].args), same(a.spawns[0].args));
+  assert.deepEqual(same(b.spawns[1].args), same(a.spawns[1].args));
+  assert.ok(b.spawns[1].args.some(function (a) { return a.indexOf('--resume=') === 0; }), 'second turn resumes in both');
 });
 
 test.after(() => {

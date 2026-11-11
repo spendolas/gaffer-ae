@@ -1,5 +1,5 @@
 import './isolate-env.mjs';
-import { noopModelCatalog } from './test-catalog.mjs';
+import { noopModelCatalog, lockdownSupported } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ChatHandler } from '../chat-handler.js';
+import { resumeId } from './lockdown-assert.mjs';
 
 // Drives a real ChatHandler.handleChat through a fake `claude` child process
 // (injected spawn) and a fake panel socket, replaying the scrubbed stream-json
@@ -48,6 +49,7 @@ function harness(authHook) {
   var handler = new ChatHandler({
     modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
+    detectLockdownSupport: lockdownSupported,
     spawn: function (bin, args) {
       var child = fakeChild();
       spawns.push({ bin: bin, args: args, child: child });
@@ -97,7 +99,7 @@ test('ok-289: one chat_result, chat_done, session adopted, one turn log line', a
   var r = await captureLogs(async function () {
     await h.handler.handleChat({ message: 'hi', model: 'haiku' }, sock);
     assert.equal(h.spawns.length, 1);
-    assert.equal(h.spawns[0].args.indexOf('--resume'), -1);
+    assert.equal(resumeId(h.spawns[0].args), null);
     finish(h.spawns[0].child, fx.stdout, fx.stderr, 0);
     await nextTick();
   });
@@ -125,12 +127,12 @@ test('resume-289: stale session retries exactly once fresh, dead id never saved'
   await captureLogs(async function () {
     await h.handler.handleChat({ message: 'hi', model: 'haiku', sessionId: dead }, sock);
     assert.equal(h.spawns.length, 1);
-    assert.equal(h.spawns[0].args[h.spawns[0].args.indexOf('--resume') + 1], dead);
+    assert.equal(resumeId(h.spawns[0].args), dead);
     finish(h.spawns[0].child, fx.stdout, fx.stderr, 1);
     // The retry's handleChat awaits findClaudeBinary before spawning.
     await nextTick(); await nextTick();
     assert.equal(h.spawns.length, 2, 'retried once');
-    assert.equal(h.spawns[1].args.indexOf('--resume'), -1, 'retry is a fresh session');
+    assert.equal(resumeId(h.spawns[1].args), null, 'retry is a fresh session');
     assert.equal(h.handler.sessionId, null, 'dead id dropped before the retry');
     // The retry also fails with the same (dead) shape: must NOT loop again.
     finish(h.spawns[1].child, fx.stdout, fx.stderr, 1);
@@ -151,7 +153,7 @@ test('resume-289: stale session retries exactly once fresh, dead id never saved'
 test('resume-289 followed by a good turn: retry succeeds and adopts the new id', async () => {
   var h = harness();
   var sock = fakeSocket();
-  var dead = 'dead-dead-dead';
+  var dead = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
   var bad = fixture('resume-289');
   var good = fixture('ok-289');
   await captureLogs(async function () {
@@ -171,9 +173,9 @@ test('big-289: overflow resets the session with the existing message, CLI error 
   var h = harness();
   var sock = fakeSocket();
   var fx = fixture('big-289');
-  h.handler.sessionId = 'live-session';
+  h.handler.sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   var r = await captureLogs(async function () {
-    await h.handler.handleChat({ message: 'huge', model: 'haiku', sessionId: 'live-session' }, sock);
+    await h.handler.handleChat({ message: 'huge', model: 'haiku', sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, sock);
     finish(h.spawns[0].child, fx.stdout, fx.stderr, 1);
     await nextTick();
   });
@@ -240,14 +242,14 @@ test('a normal reply mentioning context length keeps the session and is a reply'
   var sock = fakeSocket();
   var text = 'Done. I trimmed the layer to match the comp context, so its length is now 5s. The prompt is too long for one line.';
   var stdout = [
-    JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [], session_id: 's-1' }),
+    JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [], session_id: '11111111-1111-4111-8111-111111111111' }),
     JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage: { input_tokens: 5 },
       content: [{ type: 'text', text: text }] } }),
-    JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: 's-1',
+    JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: '11111111-1111-4111-8111-111111111111',
       result: text, usage: { input_tokens: 5, output_tokens: 20 }, total_cost_usd: 0.001 }),
   ].join('\n') + '\n';
   await captureLogs(async function () {
-    await h.handler.handleChat({ message: 'trim it', model: 'haiku', sessionId: 's-1' }, sock);
+    await h.handler.handleChat({ message: 'trim it', model: 'haiku', sessionId: '11111111-1111-4111-8111-111111111111' }, sock);
     finish(h.spawns[0].child, stdout, '', 0);
     await nextTick();
   });
@@ -255,7 +257,7 @@ test('a normal reply mentioning context length keeps the session and is a reply'
   assert.equal(sock.ofType('chat_chunk').length, 1);
   assert.equal(sock.ofType('chat_result').length, 1);
   assert.equal(sock.ofType('chat_done').length, 1);
-  assert.equal(h.handler.sessionId, 's-1', 'session kept');
+  assert.equal(h.handler.sessionId, '11111111-1111-4111-8111-111111111111', 'session kept');
 });
 
 // The CLI can exit non-zero (or die to a signal) after it already streamed a
@@ -267,21 +269,21 @@ test('a normal reply mentioning context length keeps the session and is a reply'
     var sock = fakeSocket();
     var text = 'All set. The prompt is too long for one line so I wrapped it.';
     var stdout = [
-      JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [], session_id: 's-2' }),
+      JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289', mcp_servers: [], session_id: '22222222-2222-4222-8222-222222222222' }),
       JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage: { input_tokens: 5 },
         content: [{ type: 'text', text: text }] } }),
-      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: 's-2',
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: '22222222-2222-4222-8222-222222222222',
         result: text, usage: { input_tokens: 5, output_tokens: 20 }, total_cost_usd: 0.001 }),
     ].join('\n') + '\n';
     var r = await captureLogs(async function () {
-      await h.handler.handleChat({ message: 'go', model: 'haiku', sessionId: 's-2' }, sock);
+      await h.handler.handleChat({ message: 'go', model: 'haiku', sessionId: '22222222-2222-4222-8222-222222222222' }, sock);
       finish(h.spawns[0].child, stdout, 'exit noise\n', code);
       await nextTick();
     });
     var out = outcomes(sock);
     assert.deepEqual(out.map(function (m) { return m.type; }), ['chat_result', 'chat_done']);
     assert.equal(sock.ofType('chat_error').length, 0);
-    assert.equal(h.handler.sessionId, 's-2', 'session kept');
+    assert.equal(h.handler.sessionId, '22222222-2222-4222-8222-222222222222', 'session kept');
     assert.equal(h.spawns.length, 1, 'no retry');
     var turnLines = r.lines.filter(function (l) { return /^Gaffer chat: turn=/.test(l); });
     assert.equal(turnLines.length, 1);
@@ -347,7 +349,7 @@ test('non-JSON stdout lines are ignored and a throwing event handler does not ki
   var stdout = 'Some banner the CLI printed\n'
     + JSON.stringify({ type: 'system', subtype: 'init', claude_code_version: '2.1.289' }) + '\n'
     + JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 1 }, content: 42 } }) + '\n'
-    + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: 's-9', result: 'ok' }) + '\n';
+    + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, session_id: '99999999-9999-4999-8999-999999999999', result: 'ok' }) + '\n';
   var r = await captureLogs(async function () {
     await h.handler.handleChat({ message: 'hi', model: 'haiku' }, sock);
     finish(h.spawns[0].child, stdout, '', 0);
@@ -356,7 +358,7 @@ test('non-JSON stdout lines are ignored and a throwing event handler does not ki
   assert.equal(sock.ofType('chat_error').length, 0);
   assert.equal(sock.ofType('chat_result').length, 1);
   assert.equal(sock.ofType('chat_done').length, 1);
-  assert.equal(h.handler.sessionId, 's-9');
+  assert.equal(h.handler.sessionId, '99999999-9999-4999-8999-999999999999');
   assert.ok(r.lines.some(function (l) { return /ignoring non-JSON stdout line: Some banner/.test(l); }));
   assert.ok(r.lines.some(function (l) { return /event handling failed for type=assistant/.test(l); }));
 });

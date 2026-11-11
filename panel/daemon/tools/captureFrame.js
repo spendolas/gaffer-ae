@@ -3,6 +3,7 @@
  * Optional compId targets a specific comp (else active).
  */
 import { tmpdir } from 'node:os';
+import { captureContent } from '../capture-image.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
@@ -34,7 +35,7 @@ export function register(server, queue, z) {
     'captureFrame',
     {
       description:
-        'Render single frame of a comp at time T (seconds) to PNG. Defaults to active comp + current time. Use compId from listCompositions to target non-active comp.',
+        'Render single frame of a comp at time T (seconds) to PNG. Returns the frame as an image you can look at directly. Defaults to active comp + current time. Use compId from listCompositions to target non-active comp.',
       inputSchema: {
         time: z.number().optional().describe('Time in seconds. Omit for current CTI.'),
         compId: z.number().optional().describe('Target comp id (from listCompositions). Omit for active comp.'),
@@ -49,7 +50,7 @@ export function register(server, queue, z) {
         var parsed = JSON.parse(raw);
         var inner = parsed.ok && parsed.result ? JSON.parse(parsed.result) : parsed;
         if (inner.error) return { content: [{ type: 'text', text: JSON.stringify(inner) }], isError: true };
-        return { content: [{ type: 'text', text: JSON.stringify(inner, null, 2) }] };
+        return { content: await captureContent(inner, outputPath) };
       } catch (e) {
         return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }], isError: true };
       }
