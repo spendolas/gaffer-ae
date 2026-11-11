@@ -12,7 +12,7 @@ import { newTurnState, observe, classify, userMessage as turnUserMessage, versio
 import {
   buildChatArgs, buildCompactArgs, buildMcpConfig, readUserMcpServers,
   writeMcpConfigFile, removeMcpConfigFile, ensureChatCwd, detectLockdownSupport,
-  extractPastedImages, buildStreamJsonInput,
+  extractPastedImages, buildStreamJsonInput, isValidSessionId, isValidModelName,
 } from './chat-lockdown.js';
 import { loadImageForModel } from './capture-image.js';
 // Vendored shared module (panel/daemon/vendor, see CLAUDE.md): live model
@@ -761,6 +761,10 @@ export class ChatHandler {
     // Keep the default consistent for older panels and headless callers
     // that omit advanced settings: Opus Latest at Medium effort.
     var model = msg.model || 'opus';
+    if (!isValidModelName(model)) {
+      socket.send(JSON.stringify({ type: 'chat_error', error: 'The selected model is not available. Pick another model in Gaffer settings and try again.' }));
+      return;
+    }
     // Chat always runs on exactly the requested model/effort — no automatic
     // switching. requestedModel mirrors the final model for telemetry.
     var requestedModel = model;
@@ -821,10 +825,14 @@ export class ChatHandler {
     // sessionIdForTurn forces fresh on newConversation (Clear chat); otherwise
     // resolveSessionId refuses the just-abandoned id so a fresh (summarized)
     // session takes instead of the panel re-echoing the huge one back.
-    var sessionId = sessionIdForTurn(msg.newConversation, msg.sessionId, this.sessionId, this._abandonedSessionId);
+    // Only a UUID is ever a session id (it ends up on the command line); a
+    // panel-supplied value of any other shape is ignored and the turn starts fresh.
+    var panelSessionId = isValidSessionId(msg.sessionId) ? msg.sessionId : null;
+    if (this.sessionId && !isValidSessionId(this.sessionId)) this.sessionId = null;
+    var sessionId = sessionIdForTurn(msg.newConversation, panelSessionId, this.sessionId, this._abandonedSessionId);
     if (!sessionId) this.sessionId = null; // honor the reset even if the panel re-sent the old id
     // Latch is one-shot: once we've gone fresh past the abandoned id, forget it.
-    if (this._abandonedSessionId && (msg.sessionId === this._abandonedSessionId || !sessionId)) {
+    if (this._abandonedSessionId && (panelSessionId === this._abandonedSessionId || !sessionId)) {
       this._abandonedSessionId = null;
     }
     if (sessionId) this.sessionId = sessionId;
@@ -1110,7 +1118,7 @@ export class ChatHandler {
       // echoes the dead id, and an overflowed session would hit the same wall.
       // What the failure was is decided once, at process close, by classify().
       var isErrorResult = event.is_error === true;
-      if (!isErrorResult) this.sessionId = event.session_id || this.sessionId;
+      if (!isErrorResult && isValidSessionId(event.session_id)) this.sessionId = event.session_id;
       // NOTE: lastContextTokens is intentionally NOT set here. The `result`
       // event's usage is CUMULATIVE across the whole turn (every tool
       // round-trip's cache reads summed), which over-counts the real window on a
@@ -1158,6 +1166,7 @@ export class ChatHandler {
   _compactSession(socket) {
     if (!this.claudeBin) return;
     var resumingId = this.sessionId;
+    if (!isValidSessionId(resumingId)) return;
     // Summarize on the model that led the conversation, or not at all — never
     // silently on another model (see compactionSummarizerModel).
     var self = this;

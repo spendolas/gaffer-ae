@@ -87,13 +87,16 @@ export function versionNotice(version) {
 export var LOCKDOWN_FLAGS = ['--tools', '--strict-mcp-config', '--mcp-config', '--setting-sources', '--disable-slash-commands'];
 
 // The flags in LOCKDOWN_FLAGS that `claude --help` text does not define as an
-// option. A definition is an option line (leading spaces, an optional short
-// alias, then the flag), so a flag only mentioned in another option's prose
-// does not count. Pure: a non-string is "everything missing".
+// option. A definition is an option line (exactly two leading spaces, an
+// optional short alias, then the flag), so a flag only mentioned in another
+// option's prose does not count. Pure: a non-string is "everything missing".
 export function lockdownMissingFlags(helpText) {
   var text = typeof helpText === 'string' ? helpText : '';
   return LOCKDOWN_FLAGS.filter(function (flag) {
-    var re = new RegExp('^[ \\t]+(?:-[A-Za-z],[ \\t]+)?' + flag.replace(/[-]/g, '\\-') + '(?=[ \\t,<\\[]|$)', 'm');
+    // Option lines start in the first column (two spaces); the continuation
+    // lines of a wrapped description are indented far deeper, so a description
+    // that happens to begin with a flag never counts.
+    var re = new RegExp('^  (?:-[A-Za-z], )?' + flag.replace(/[-]/g, '\\-') + '(?=[ ,<\\[]|$)', 'm');
     return !re.test(text);
   });
 }
