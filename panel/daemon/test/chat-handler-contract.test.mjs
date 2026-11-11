@@ -1,5 +1,5 @@
 import './isolate-env.mjs';
-import { noopModelCatalog } from './test-catalog.mjs';
+import { noopModelCatalog, lockdownSupported } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -48,6 +48,7 @@ function harness(authHook) {
   var handler = new ChatHandler({
     modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
+    detectLockdownSupport: lockdownSupported,
     spawn: function (bin, args) {
       var child = fakeChild();
       spawns.push({ bin: bin, args: args, child: child });

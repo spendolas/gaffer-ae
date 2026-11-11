@@ -21,6 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalogToPanel, createGafferModelCatalog, scrubLogMessage, ChatHandler, modelCapability } from '../chat-handler.js';
+import { lockdownSupported } from './test-catalog.mjs';
 import { catalogFromModels } from '../vendor/claude-model-catalog/index.mjs';
 
 // Trimmed real /v1/models rows (2026-09-24 probe), deliberately out of order,
@@ -447,7 +448,7 @@ test('the cache file defaults to GAFFER_MODEL_CACHE_PATH, which the test isolati
 // ---- 3. ChatHandler wiring -------------------------------------------------------
 
 function handlerWith(catalog) {
-  return new ChatHandler({ modelCatalog: catalog, findClaudeBinary: async () => '/fake/claude', lastClaudeLookup: () => null });
+  return new ChatHandler({ modelCatalog: catalog, findClaudeBinary: async () => '/fake/claude', detectLockdownSupport: lockdownSupported, lastClaudeLookup: () => null });
 }
 
 const EMPTY_PAYLOAD = {
@@ -577,7 +578,7 @@ test('a completed CLI turn triggers refreshInBackground on the catalog', async (
     const spawns = [];
     const h = new ChatHandler({
       modelCatalog: catalog,
-      findClaudeBinary: async () => '/fake/claude',
+      findClaudeBinary: async () => '/fake/claude', detectLockdownSupport: lockdownSupported,
       lastClaudeLookup: () => null,
       spawn: (bin, args) => {
         const child = new EventEmitter();
@@ -616,7 +617,7 @@ test('a completed CLI turn triggers refreshInBackground on the catalog', async (
 function fakeSpawnHandler(catalog, spawns) {
   return new ChatHandler({
     modelCatalog: catalog,
-    findClaudeBinary: async () => '/fake/claude',
+    findClaudeBinary: async () => '/fake/claude', detectLockdownSupport: lockdownSupported,
     lastClaudeLookup: () => null,
     spawn: () => {
       const child = new EventEmitter();

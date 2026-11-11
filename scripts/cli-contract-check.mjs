@@ -4,7 +4,8 @@
 // latest npm release, signed out and with no API key, so every probe is $0:
 //
 //   1. `--version` prints x.y.z.
-//   2. `--help` still lists every flag chat-handler.js passes, and the
+//   2. `--help` still lists every flag the chat spawn passes (including the
+//      restriction flags), and the
 //      --effort choices cover every level Gaffer can request.
 //   3. `-p ... --resume <zero uuid>` yields the structured stale-session
 //      shape and cli-contract.js classifies it stale_session via=structure.
@@ -41,7 +42,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { newTurnState, observe, classify, LAST_VERIFIED, versionStatus } from '../panel/daemon/cli-contract.js';
+import { newTurnState, observe, classify, LAST_VERIFIED, versionStatus, LOCKDOWN_FLAGS } from '../panel/daemon/cli-contract.js';
 
 // Environment that could sign the child in, point it at a paid backend or
 // route it through a cloud provider. Removed from the child env, always.
@@ -51,13 +52,16 @@ export var SCRUBBED_ENV = [
   'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
 ];
 
-// Flags chat-handler.js passes on every chat spawn (handleChat), the
-// compaction spawn and the resume path. `-p` is listed as "-p, --print".
+// Flags the chat spawn (chat-lockdown.js buildChatArgs and buildCompactArgs)
+// passes. `-p` is listed as "-p, --print". The restriction flags come from
+// cli-contract.js LOCKDOWN_FLAGS, the same list the daemon checks at runtime
+// before it lets chat start, so the weekly check and the runtime gate cannot
+// drift apart.
 export var REQUIRED_FLAGS = [
   '-p', '--output-format', '--verbose', '--dangerously-skip-permissions',
-  '--effort', '--mcp-config', '--allowedTools', '--append-system-prompt',
+  '--effort', '--input-format', '--append-system-prompt',
   '--resume', '--model',
-];
+].concat(LOCKDOWN_FLAGS);
 
 // Every effort level Gaffer can hand to --effort (chat-handler.js
 // MODEL_DISCOVERY_EFFORTS / ALL_EFFORTS). Kept in sync by hand; the test

@@ -14,3 +14,10 @@ export function noopModelCatalog() {
     refreshInBackground: () => Promise.resolve(),
   };
 }
+
+// A lockdown capability check that always passes, for tests that drive a
+// ChatHandler through a turn against a fake `claude` and are not about the
+// lockdown. The real check runs `claude --help` on the binary.
+export async function lockdownSupported() {
+  return { ok: true, missing: [] };
+}
