@@ -53,9 +53,9 @@ gaffer/
 │   ├── daemon-launch.js       # Pure launch logic: resolveDaemonLaunch, cleanDaemonEnv, launch notices
 │   ├── bridge-auth.js         # Panel side of the connection handshake (HMAC gate, token path); tested from daemon/test
 │   ├── update-state.js        # Pure update-check logic (GitHub Releases), tested from daemon/test
-│   ├── host.jsx, .debug
+│   ├── host.jsx
 │   ├── version.json           # {version, commit}: release version; packaged copies carry the full release SHA
-│   ├── lib/CSInterface.js
+│   ├── lib/CSInterface.js, marked.min.js, safe-markdown.js   # safe-markdown wraps marked; the only way chat text reaches innerHTML
 │   ├── daemon/               # Node.js MCP server (lives inside panel); ships as one bundle
 │   │   ├── index.js, mcp-server.js, panel-bridge.js, ports.js
 │   │   ├── bridge-token.js, bridge-messages.js, issued-sessions.js  # connection token + proofs, incoming-message schemas, issued chat session ids
@@ -170,6 +170,8 @@ Daemon: `@modelcontextprotocol/sdk`, `ws`, `zod`. Express comes transitively via
 
 ## CEP Development Notes
 
+- Chat text (model output, project content, saved history) is untrusted and the panel has Node access. It reaches `innerHTML` only through `SafeMarkdown.render` / `SafeMarkdown.sanitizeHtml` (`panel/lib/safe-markdown.js`); `daemon/test/panel-content-policy.test.mjs` fails on any other `innerHTML` source in `main.js`. `index.html` carries a CSP meta (its header comment says how to switch `script-src` to `file:` if CEP's Chromium needs it).
+- `panel/.debug` (CEP debug port 13870, used by `design/scripts/panel-capture.mjs`) is gitignored and never packaged. `scripts/install-mac.sh` / `install-win.ps1` create it for symlinked dev checkouts; the updaters delete it from installs.
 - **PowerShell scripts (`*.ps1`) must be ASCII-only with a UTF-8 BOM.** Windows PowerShell 5.1 reads BOM-less files as Windows-1252 — a single em-dash in a comment produces phantom parse errors ("missing brace"). No typographic dashes/quotes in .ps1 files, ever.
 - **Node child processes on Windows need `windowsHide: true`** (every spawn/execFile/execSync) — console-subsystem children flash a visible cmd window otherwise, and `detached: true` requires real file-handle stdio (with `stdio: 'ignore'` the child dies silently on Win11).
 
