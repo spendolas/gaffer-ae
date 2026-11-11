@@ -358,18 +358,43 @@ export function detectLockdownSupport(claudeBin, deps) {
 // ---- Pasted images ------------------------------------------------------
 
 // Pasted screenshots reach the daemon as leading `[image: <path>]` lines, the
-// path being a file the panel saved in the temp folder. Only files named like
-// the panel's own saves, directly inside the temp folder, are accepted; any
-// other path is dropped (and counted) so a message cannot make the daemon read
-// an arbitrary file. Returns { text, paths, rejected }.
+// path being a file the panel saved in ITS temp folder. The daemon can have a
+// different temp folder than the panel (a daemon started through ExtendScript,
+// or by an earlier After Effects launch, can see another TMPDIR), so files are
+// accepted from a small set of temp locations, not only the daemon's own. A
+// file is read only if it is named like the panel's own saves, sits directly
+// in one of those folders, is a regular file (never a link) and, where the
+// platform has file owners, belongs to the current user. Any other path is
+// dropped (and counted) so a message cannot make the daemon read an arbitrary
+// file. Returns { text, paths, rejected }.
 var PASTE_NAME = /^gaffer-paste-\d+-\d+\.(png|jpe?g|gif|webp)$/i;
+var MAC_USER_TEMP = /^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T$/;
+
+// The folders a pasted image may be in: the daemon's temp folder, the temp
+// variables, /tmp, and the macOS per-user temp folder pattern.
+export function pasteDirs(opts) {
+  var env = (opts && opts.env) || process.env;
+  var dirs = [];
+  if (opts && opts.tmpDirs) dirs = opts.tmpDirs.slice();
+  else {
+    dirs.push((opts && opts.tmpDir) || tmpdir());
+    ['TMPDIR', 'TEMP', 'TMP'].forEach(function (k) { if (env[k]) dirs.push(env[k]); });
+    if (process.platform !== 'win32') dirs.push('/tmp');
+  }
+  var real = [];
+  dirs.forEach(function (d) {
+    try { var r = realpathSync(d); if (real.indexOf(r) === -1) real.push(r); } catch (e) { /* not there */ }
+  });
+  return real;
+}
+
+function isMacUserTemp(dir) { return process.platform === 'darwin' && MAC_USER_TEMP.test(dir); }
 
 export function extractPastedImages(message, opts) {
-  var tmp = (opts && opts.tmpDir) || tmpdir();
+  var allowed = pasteDirs(opts);
   var lines = String(message || '').split('\n');
   var paths = [], rejected = 0, i = 0;
-  var tmpReal = tmp;
-  try { tmpReal = realpathSync(tmp); } catch (e) { /* use as given */ }
+  var uid = typeof process.getuid === 'function' ? process.getuid() : null;
   for (; i < lines.length; i++) {
     var m = /^\[image: (.+)\]$/.exec(lines[i]);
     if (!m) break;
@@ -377,7 +402,11 @@ export function extractPastedImages(message, opts) {
     var ok = false;
     try {
       var real = realpathSync(p);
-      ok = dirname(real) === tmpReal && PASTE_NAME.test(basename(real)) && p.indexOf('..') === -1;
+      var dir = dirname(real);
+      var st = statSync(real);
+      ok = PASTE_NAME.test(basename(real)) && st.isFile() && p.indexOf('..') === -1
+        && (allowed.indexOf(dir) !== -1 || isMacUserTemp(dir))
+        && (uid === null || st.uid === uid);
       if (ok) p = real;
     } catch (e) { ok = false; }
     if (ok) paths.push(p); else rejected++;

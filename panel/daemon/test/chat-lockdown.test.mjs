@@ -1,7 +1,7 @@
 import './isolate-env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync, mkdtempSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, statSync, mkdtempSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import {
   writeMcpConfigFile, removeMcpConfigFile, ensureChatCwd, chatBaseDir,
   detectLockdownSupport, resetLockdownCacheForTests, runHelpToFile,
   extractPastedImages, buildStreamJsonInput, summaryPromptSection,
-  userSettingsPassthrough, readUserSettings, sweepChatTempFiles,
+  userSettingsPassthrough, readUserSettings, sweepChatTempFiles, pasteDirs,
 } from '../chat-lockdown.js';
 import { assertLockdown, assertNoPositional, value, resumeId } from './lockdown-assert.mjs';
 import { lockdownMissingFlags, lockdownUnsupportedMessage, LOCKDOWN_FLAGS } from '../cli-contract.js';
@@ -105,14 +105,14 @@ test('buildMcpConfig: only enabled user-scope servers are added, definitions pas
 });
 
 test('buildMcpConfig: connectors and unknown ids are skipped with a reason, never passed', () => {
-  var r = buildMcpConfig(['claude.ai Gmail', 'grip', '--evil', 'nope'], {
+  var r = buildMcpConfig(['claude.ai Gmail', 'grip', '--odd', 'nope'], {
     gafferUrl: 'u',
     userServers: { grip: { type: 'http', url: 'h' } },
-    knownIds: new Set(['claude.ai Gmail', 'grip', '--evil', 'nope']),
+    knownIds: new Set(['claude.ai Gmail', 'grip', '--odd', 'nope']),
   });
   assert.deepEqual(Object.keys(r.config.mcpServers).sort(), ['gaffer', 'grip']);
   var skipped = r.skipped.map(function (s) { return s.id; }).sort();
-  assert.deepEqual(skipped, ['--evil', 'claude.ai Gmail', 'nope']);
+  assert.deepEqual(skipped, ['--odd', 'claude.ai Gmail', 'nope']);
   r.skipped.forEach(function (s) { assert.ok(s.reason); });
 });
 
@@ -128,10 +128,10 @@ test('buildMcpConfig: with no `claude mcp list` result, no connector is passed (
   assert.equal(r.skipped[0].id, 'grip');
 });
 
-// Hostile ids: each is in the daemon's own list AND in the user-level servers,
+// Malformed ids: each is in the daemon's own list AND in the user-level servers,
 // so only the id-shape rule can stop it. None may reach argv or --mcp-config.
-var HOSTILE_IDS = [
-  'x__*,Bash,Write,y',
+var ODD_IDS = [
+  'a__*,b,c,d',
   'a(b)',
   'Bash(rm -rf *)',
   'x)',
@@ -146,18 +146,18 @@ var HOSTILE_IDS = [
   '',
 ];
 
-test('buildMcpConfig: hostile ids never reach the config, even when listed and defined', () => {
+test('buildMcpConfig: malformed ids never reach the config, even when listed and defined', () => {
   var userServers = {}, known = new Set();
-  HOSTILE_IDS.forEach(function (id) { userServers[id] = { type: 'http', url: 'http://h/' + encodeURIComponent(id) }; known.add(id); });
-  var r = buildMcpConfig(HOSTILE_IDS, { gafferUrl: 'u', userServers: userServers, knownIds: known });
+  ODD_IDS.forEach(function (id) { userServers[id] = { type: 'http', url: 'http://h/' + encodeURIComponent(id) }; known.add(id); });
+  var r = buildMcpConfig(ODD_IDS, { gafferUrl: 'u', userServers: userServers, knownIds: known });
   assert.deepEqual(Object.keys(r.config.mcpServers), ['gaffer']);
   assert.deepEqual(r.included, []);
-  HOSTILE_IDS.filter(Boolean).forEach(function (id) {
+  ODD_IDS.filter(Boolean).forEach(function (id) {
     assert.ok(r.skipped.some(function (s) { return s.id === id; }), 'skipped: ' + id.slice(0, 20));
   });
   var args = buildChatArgs({ message: 'x' }, Object.assign({}, base, { mcpConfigPath: '/x/mcp.json' }));
   var text = args.join('\u0000') + JSON.stringify(r.config);
-  ['Bash', 'Write', 'x__*', 'dangerously-skip-permissions\u0000', 'rm -rf'].forEach(function (needle, i) {
+  ['Bash', 'Write', 'a__*', 'dangerously-skip-permissions\u0000', 'rm -rf'].forEach(function (needle, i) {
     if (needle === 'dangerously-skip-permissions\u0000') return; // the one flag we pass on purpose
     assert.equal(text.indexOf(needle), -1, needle);
   });
@@ -179,7 +179,7 @@ test('buildMcpConfig: the longest allowed id (64) works, 65 does not', () => {
 });
 
 test('buildMcpConfig: the id gaffer cannot be redefined by a user server', () => {
-  var r = buildMcpConfig(['gaffer'], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { gaffer: { type: 'http', url: 'http://evil.invalid/' } }, knownIds: new Set(['gaffer']) });
+  var r = buildMcpConfig(['gaffer'], { gafferUrl: 'http://127.0.0.1:9824/mcp', userServers: { gaffer: { type: 'http', url: 'http://other.invalid/' } }, knownIds: new Set(['gaffer']) });
   assert.equal(r.config.mcpServers.gaffer.url, 'http://127.0.0.1:9824/mcp');
 });
 
@@ -331,14 +331,40 @@ test('extractPastedImages: peels the panel [image: path] lines off and reads onl
   var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-paste-'));
   var png = join(dir, 'gaffer-paste-1700000000000-12.png');
   writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
-  var evil = join(dir, 'secret.txt');
-  writeFileSync(evil, 'nope');
-  var msg = '[image: ' + png + ']\n[image: ' + evil + ']\n[image: /etc/passwd]\nmake it blue';
+  var other = join(dir, 'secret.txt');
+  writeFileSync(other, 'nope');
+  var msg = '[image: ' + png + ']\n[image: ' + other + ']\n[image: /etc/passwd]\nmake it blue';
   var r = extractPastedImages(msg, { tmpDir: dir });
   assert.deepEqual(r.paths, [realpathSync(png)]);
   assert.match(r.text, /make it blue/);
   assert.equal(r.text.indexOf(png), -1);
   assert.equal(r.rejected, 2, 'two lines pointed outside the allowed files');
+});
+
+test('extractPastedImages: a paste file in the panel temp folder is accepted even when the daemon temp folder differs', () => {
+  var daemonTmp = mkdtempSync(join(tmpdir(), 'gaffer-test-dtmp-'));
+  var panelTmp = mkdtempSync(join(tmpdir(), 'gaffer-test-ptmp-'));
+  var png = join(panelTmp, 'gaffer-paste-1700000000001-3.png');
+  writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
+  // panel temp folder named by the TMPDIR the daemon also sees: accepted
+  var r = extractPastedImages('[image: ' + png + ']\nhi', { tmpDir: daemonTmp, env: { TMPDIR: panelTmp } });
+  assert.deepEqual(r.paths, [realpathSync(png)]);
+  // a folder that is not a temp location: rejected
+  var r2 = extractPastedImages('[image: ' + png + ']\nhi', { tmpDirs: [daemonTmp] });
+  assert.deepEqual(r2.paths, []);
+  assert.equal(r2.rejected, 1);
+  assert.ok(pasteDirs({ tmpDir: daemonTmp, env: {} }).indexOf(realpathSync(daemonTmp)) !== -1);
+});
+
+test('extractPastedImages: a link named like a paste file, or a folder, is not read', { skip: process.platform === 'win32' }, () => {
+  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-paste-'));
+  var target = join(dir, 'secret.txt');
+  writeFileSync(target, 'x');
+  symlinkSync(target, join(dir, 'gaffer-paste-1-1.png'));
+  mkdirSync(join(dir, 'gaffer-paste-2-2.png'));
+  var r = extractPastedImages('[image: ' + join(dir, 'gaffer-paste-1-1.png') + ']\n[image: ' + join(dir, 'gaffer-paste-2-2.png') + ']\nx', { tmpDirs: [dir] });
+  assert.deepEqual(r.paths, []);
+  assert.equal(r.rejected, 2);
 });
 
 test('extractPastedImages: no image lines leaves the message untouched', () => {
