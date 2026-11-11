@@ -22,7 +22,7 @@ Gaffer Daemon (one esbuild bundle daemon.mjs, run by the pinned official
   - Chat handler: spawns claude -p, streams response to panel
   - Serialized execution queue (mutex — no concurrent AE calls)
   - JSX safety wrapping (undo groups, try/catch, JSON return)
-    │  WebSocket ws://127.0.0.1:9823
+    │  WebSocket ws://127.0.0.1:9823 (authenticated: per-start token, challenge-response)
     ▼
 Gaffer Panel (CEP extension in AE) — one per AE instance, keyed by aeVersion
   - Chat UI + evalScript bridge
@@ -39,6 +39,7 @@ After Effects
 - Panel auto-starts the daemon on load: `spawnViaNode()` in `main.js` asks `daemon-launch.js` (`resolveDaemonLaunch`) for `runtime/node daemon.mjs` (size-checked against `runtime/VERIFIED`), or a system node for dev installs and 0.11.x installs mid-migration. A runtime that exists but fails the check is an error, never a silent fallback to system node. `spawnViaExtendScript()` (`system.callSystem()` running `start.sh` / `start.ps1`, which mirror the same rules) is the fallback when CEP Node integration is missing.
 - **Zero-dependency install:** end users need only After Effects and Claude. No npm runs on a user machine (install or update). The runtime is the official, unmodified Node binary from nodejs.org (mirror: GitHub release `node-v<version>`), verified by SHA-256 and vendor signature; never modify, re-sign or strip it, and never add `daemon/runtime` to PATH. Every daemon listener binds 127.0.0.1 explicitly.
 - All MCP tools namespaced as `mcp__gaffer__<toolname>`.
+- **Panel connection is authenticated.** The daemon writes a fresh `bridge-token` next to `config.json` on every start (0600, once the bridge is listening). The panel proves it knows the token with an HMAC over fresh nonces and the daemon proves itself the same way; the token never crosses the socket, and the panel drops every daemon message until the daemon's proof verifies (`bridge-auth.js`). Incoming messages are validated by strict zod schemas (`bridge-messages.js`) before any handler runs; after authentication a refused message never closes the socket (a bad chat gets a `chat_error`). Two auth failures in a row show a reload/Repair notice and the panel keeps a slow retry. The MCP port (:9824) is separate and unchanged.
 - **Multi-AE-instance:** each panel registers with the daemon by `aeVersion`; every MCP tool takes an optional `aeVersion` param to route. With one instance connected it's implicit; with several and no param, the call errors listing available versions (`panel-bridge.js`).
 
 ## Repo Layout
@@ -50,12 +51,14 @@ gaffer/
 │   ├── CSXS/manifest.xml
 │   ├── index.html, main.js   # Chat UI + WebSocket client + auto-start + settings/update UI
 │   ├── daemon-launch.js       # Pure launch logic: resolveDaemonLaunch, cleanDaemonEnv, launch notices
+│   ├── bridge-auth.js         # Panel side of the connection handshake (HMAC gate, token path); tested from daemon/test
 │   ├── update-state.js        # Pure update-check logic (GitHub Releases), tested from daemon/test
 │   ├── host.jsx, .debug
 │   ├── version.json           # {version, commit}: release version; packaged copies carry the full release SHA
 │   ├── lib/CSInterface.js
 │   ├── daemon/               # Node.js MCP server (lives inside panel); ships as one bundle
 │   │   ├── index.js, mcp-server.js, panel-bridge.js, ports.js
+│   │   ├── bridge-token.js, bridge-messages.js, issued-sessions.js  # connection token + proofs, incoming-message schemas, issued chat session ids
 │   │   ├── queue.js, safety.js
 │   │   ├── chat-handler.js, claude-binary.js
 │   │   ├── runtime-pins.json      # Single source of truth: Node version, URLs, SHA-256s, sizes, signing identities

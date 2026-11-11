@@ -2,10 +2,12 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
 import { PanelBridge, checkPanelHandshake } from '../panel-bridge.js';
+import { newBridgeToken } from '../bridge-token.js';
 
 // The bridge under test listens on an ephemeral loopback port, never on the
-// real 9823, so these tests run next to a live daemon.
-var bridge = new PanelBridge(0);
+// real 9823, so these tests run next to a live daemon. These cases cover the
+// HTTP-level Host/Origin layer; the token challenge is in panel-bridge-auth.test.mjs.
+var bridge = new PanelBridge(0, { token: newBridgeToken() });
 await bridge.start();
 var port = bridge.port;
 after(() => bridge.stop());
@@ -43,7 +45,7 @@ test('Origin "null" is accepted', async () => {
 });
 
 test('a web page Origin is refused with HTTP 403', async () => {
-  var r = await attempt({ Origin: 'https://evil.example' });
+  var r = await attempt({ Origin: 'https://other.example' });
   assert.equal(r.accepted, false);
   assert.equal(r.status, 403);
   var r2 = await attempt({ Origin: 'http://localhost:8080' });
@@ -51,8 +53,18 @@ test('a web page Origin is refused with HTTP 403', async () => {
   assert.equal(r2.status, 403);
 });
 
+test('only an absent, null or file Origin passes; extension, app and other schemes are refused with 403', async () => {
+  for (var origin of ['chrome-extension://abcdefghijklmnop', 'moz-extension://x', 'app://anything', 'vscode-webview://x', 'ws://127.0.0.1:1', 'about:blank', 'data:text/html,x']) {
+    var r = await attempt({ Origin: origin });
+    assert.equal(r.accepted, false, origin);
+    assert.equal(r.status, 403, origin);
+  }
+  assert.deepEqual(await attempt({ Origin: 'file://' }), { accepted: true });
+  assert.deepEqual(await attempt({ Origin: 'FILE:///x/index.html' }), { accepted: true });
+});
+
 test('a foreign Host header (DNS rebinding) is refused with HTTP 403', async () => {
-  var r = await attempt({ Host: 'evil.example:' + port });
+  var r = await attempt({ Host: 'other.example:' + port });
   assert.equal(r.accepted, false);
   assert.equal(r.status, 403);
 });
@@ -62,7 +74,7 @@ test('localhost Host is accepted', async () => {
 });
 
 test('a refused handshake does not register a panel', async () => {
-  await attempt({ Origin: 'https://evil.example' });
+  await attempt({ Origin: 'https://other.example' });
   assert.equal(bridge.listVersions().length, 0);
 });
 
@@ -74,7 +86,11 @@ test('checkPanelHandshake: policy table', () => {
   assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'file:///a' }, p).ok, true);
   assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'null' }, p).ok, true);
   assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'HTTPS://x.y' }, p).ok, false);
+  assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'chrome-extension://abc' }, p).ok, false);
+  assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'moz-extension://abc' }, p).ok, false);
+  assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: 'file://' }, p).ok, true);
+  assert.equal(checkPanelHandshake({ host: '127.0.0.1:9823', origin: '' }, p).ok, true, 'empty header counts as absent');
   assert.equal(checkPanelHandshake({ host: '127.0.0.1:9824' }, p).ok, false, 'wrong port');
-  assert.equal(checkPanelHandshake({ host: 'evil.example:9823' }, p).ok, false);
+  assert.equal(checkPanelHandshake({ host: 'other.example:9823' }, p).ok, false);
   assert.equal(checkPanelHandshake({}, p).ok, false, 'missing Host');
 });
