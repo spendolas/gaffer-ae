@@ -1782,12 +1782,19 @@
       if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
     }
   });
+  // Every drag over and drop on the panel is cancelled, not only file drags:
+  // otherwise a link dragged out of a chat reply and dropped on the panel would
+  // load that page into the panel frame. Dragging a link out is blocked too.
   document.addEventListener('dragover', function (e) {
-    if (isFileDrag(e)) e.preventDefault();
+    e.preventDefault();
+  });
+  document.addEventListener('dragstart', function (e) {
+    var t = e.target;
+    if (t && typeof t.closest === 'function' && t.closest('a')) e.preventDefault();
   });
   document.addEventListener('drop', function (e) {
-    if (!isFileDrag(e)) return;
     e.preventDefault();
+    if (!isFileDrag(e)) return;
     dragDepth = 0;
     if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
     var files = e.dataTransfer.files;
@@ -2115,7 +2122,7 @@
     txt.className = 'reply-quote-text msg-text';
     txt.setAttribute('data-fig', '428:3198'); // banner-text
     // Stored quote HTML (also from older saved chats) is filtered again on every build.
-    txt.innerHTML = q.html ? safeHtml(q.html) : escapeHtml(q.text || ''); // styled snippet
+    txt.innerHTML = typeof q.html === 'string' && q.html ? safeHtml(q.html) : escapeHtml(q.text || ''); // styled snippet
     row.appendChild(wave);
     row.appendChild(txt);
     if (onRemove) {
@@ -2384,9 +2391,21 @@
       el.appendChild(textNode);
       if (!el.querySelector('.copy-btn')) addCopyButton(el);
     }
-    // Accumulate raw markdown, re-render on each chunk
+    // Accumulate raw markdown. Renders are throttled (a long reply re-renders
+    // the whole text on every chunk); the last one always lands, so the final
+    // DOM equals an unthrottled render.
     textNode.dataset.raw = (textNode.dataset.raw || '') + text;
-    textNode.innerHTML = renderMarkdown(textNode.dataset.raw);
+    if (typeof SafeMarkdown === 'undefined') {
+      textNode.textContent = textNode.dataset.raw;
+    } else {
+      if (!textNode._stream) {
+        textNode._stream = SafeMarkdown.createStreamRenderer(function (html) {
+          textNode.innerHTML = html;
+          scrollToBottom();
+        });
+      }
+      textNode._stream.push(textNode.dataset.raw);
+    }
     scrollToBottom();
   }
 
