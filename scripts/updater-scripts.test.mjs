@@ -1157,3 +1157,51 @@ test('update.ps1 static scan: every non-zero exit follows its result line or is 
   // A cleanup failure after ok: must not turn a success into a failure.
   assert.ok(ps1.includes('Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue\n\n    Write-Host "=== Update complete'), 'the temp cleanup before ok: cannot throw');
 });
+
+// ---- the developer debug file is removed from installs on update and Repair ----
+test('update.sh removes an existing <extension>/.debug after the sync, before version.json (run under bash)', () => {
+  const sync = sh.split('sync_files() {')[1].split('\n}\n')[0];
+  assert.ok(!sync.includes('.debug'), 'no exclude keeps it alive');
+  const at = (s) => { const i = sh.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  assert.ok(at('if ! sync_files; then') < at('remove_debug_file\n'), 'removed after the sync');
+  assert.ok(at('remove_debug_file\n') < at('mv -f "$PANEL_DIR/version.json.tmp" "$PANEL_DIR/version.json"'), 'removed before version.json');
+  // The dev-checkout refusal still comes first: nothing is deleted in a git checkout.
+  assert.ok(at('panel dir is inside a git repo (dev install)') < at('remove_debug_file() {'));
+  const body = [
+    'T="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT; EXTRACT_DIR="$T/x"; PANEL_DIR="$T/p"',
+    'mkdir -p "$EXTRACT_DIR/daemon" "$PANEL_DIR/daemon"',
+    'echo new > "$EXTRACT_DIR/daemon/daemon.mjs"; echo keep > "$PANEL_DIR/chat-history.json"',
+    'echo old > "$PANEL_DIR/.debug"',
+    'sync_files; remove_debug_file',
+    'for p in .debug daemon/daemon.mjs; do if [ -e "$PANEL_DIR/$p" ]; then echo "$p:yes"; else echo "$p:no"; fi; done',
+    // an archive from an earlier release that still carried the file
+    'echo old > "$EXTRACT_DIR/.debug"; sync_files; remove_debug_file',
+    'if [ -e "$PANEL_DIR/.debug" ]; then echo "again:yes"; else echo "again:no"; fi',
+    // a missing file is not an error under set -e
+    'remove_debug_file; echo done',
+  ].join('\n');
+  const fn = (name) => sh.slice(sh.indexOf(name + '() {'), sh.indexOf('\n}\n', sh.indexOf(name + '() {')) + 2);
+  const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + fn('sync_files') + '\n' + fn('remove_debug_file') + '\n' + body], { env: { PATH: process.env.PATH }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split('\n'), ['.debug:no', 'daemon/daemon.mjs:yes', 'again:no', 'done']);
+});
+
+test('update.ps1 removes <extension>\\.debug after robocopy, before version.json', () => {
+  const at = (s) => { const i = ps1.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  const rb = at('robocopy $extractDir $panelDir');
+  const rm = at('Remove-Item -LiteralPath "$panelDir\\.debug" -Force -ErrorAction SilentlyContinue');
+  assert.ok(rb < rm, 'after robocopy');
+  assert.ok(rm < at('Stop-Daemon\n\n    # LAST step'), 'before the final version.json step');
+  assert.ok(at('inside a git repo (dev install)') < rm, 'the dev-checkout refusal comes first');
+  assert.ok(!ps1.slice(rb, rb + 400).includes('.debug'), 'robocopy keeps no exclude for it');
+});
+
+test('dev installers create panel/.debug for checkouts only; the copy-mode excludes stay', () => {
+  assert.match(installMac, /\$PANEL_DIR\/\.debug/);
+  assert.match(installMac, /Port="13870"/);
+  assert.ok(installMac.indexOf('ln -sf "$PANEL_DIR" "$INSTALL_DIR"') < installMac.indexOf('$PANEL_DIR/.debug'));
+  assert.match(installWin, /\$panelDir\\\.debug/);
+  assert.match(installWin, /Port=""13870""|Port="13870"/);
+  assert.match(installWin, /if \(\$installKind -eq "symlink"\)/);
+  assert.ok(installWin.includes('/XF package-lock.json .debug'), 'a copy install never carries it');
+});
