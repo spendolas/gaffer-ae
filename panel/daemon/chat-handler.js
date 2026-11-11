@@ -788,6 +788,11 @@ export class ChatHandler {
     // file, never put on the command line, and rebuilt every turn so MCP
     // toggle changes apply immediately, even on resumed sessions.
     var enabled = Array.isArray(msg.enabledMcps) ? msg.enabledMcps.filter(Boolean) : [];
+    // The daemon's own `claude mcp list` result is the allow set for connector
+    // ids. If no panel has asked for the list yet, fetch it now (once).
+    if (enabled.length && !knownMcpIds()) {
+      try { await this.listMcps(); } catch (e) { /* the list stays unknown: no connectors this turn */ }
+    }
     var mcp = buildMcpConfig(enabled, {
       gafferUrl: mcpUrl(),
       userServers: this._readUserMcpServers(),

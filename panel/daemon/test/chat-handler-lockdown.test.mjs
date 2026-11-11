@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { ChatHandler } from '../chat-handler.js';
 import { assertLockdown, value } from './lockdown-assert.mjs';
 import { encodePng } from '../png-scale.js';
+import { resetKnownMcpIdsForTests } from '../chat-handler.js';
 
 // Drives a real ChatHandler through a fake `claude` child and checks what the
 // handler actually hands to spawn: the lockdown options, the working
@@ -34,6 +35,9 @@ function fakeSocket() {
   sock.ofType = function (t) { return sock.sent.filter(function (m) { return m.type === t; }); };
   return sock;
 }
+
+// The ids the daemon's own `claude mcp list` returned (set by listMcps in production).
+resetKnownMcpIdsForTests(new Set(['grip', 'notion', 'claude.ai Gmail', 'x__*,Bash,Write,y']));
 
 var SUPPORTED = async function () { return { ok: true, missing: [] }; };
 
@@ -102,6 +106,17 @@ test('chat spawn: with no connectors enabled the MCP config is gaffer alone, nev
   var h = harness({ userServers: function () { return { grip: { type: 'http', url: 'h' }, notion: { type: 'http', url: 'n' } }; } });
   await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku' }, fakeSocket()); });
   assert.deepEqual(Object.keys(JSON.parse(h.spawns[0].mcpText).mcpServers), ['gaffer']);
+});
+
+test('chat spawn: a hostile enabledMcps id reaches neither argv nor the MCP config', async () => {
+  var evil = 'x__*,Bash,Write,y';
+  var h = harness({ userServers: function () { var u = {}; u[evil] = { type: 'http', url: 'h' }; return u; } });
+  await quiet(function () { return h.handler.handleChat({ message: 'x', model: 'haiku', enabledMcps: [evil, 'Bash(*)', '-p'] }, fakeSocket()); });
+  var s = h.spawns[0];
+  assertLockdown(s.args);
+  var argv = s.args.join('\u0000');
+  ['Bash', 'Write', 'x__*', 'mcp__'].forEach(function (n) { assert.equal(argv.indexOf(n), -1, n); });
+  assert.deepEqual(Object.keys(JSON.parse(s.mcpText).mcpServers), ['gaffer']);
 });
 
 test('chat spawn: a resumed turn keeps the lockdown too', async () => {
