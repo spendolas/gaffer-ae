@@ -23,7 +23,7 @@
 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, unlinkSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 
 var runTag = process.pid + '-' + Date.now();
 var owned = [];
@@ -46,6 +46,13 @@ if (claimPath('GAFFER_CONFIG_PATH', 'gaffer-test-config-' + runTag + '.json')) {
   try {
     writeFileSync(process.env.GAFFER_CONFIG_PATH, JSON.stringify({ installId: 'test-suite' }));
   } catch (e) { /* the file is optional: readConfig() treats a missing file as {} */ }
+}
+// The chat agent's private working directory and MCP config folder
+// (chat-lockdown.js) would otherwise be created next to the real config.
+if (!process.env.GAFFER_CHAT_DIR) {
+  var chatDir = mkdtempSync(join(tmpdir(), 'gaffer-test-chat-'));
+  process.env.GAFFER_CHAT_DIR = chatDir;
+  process.on('exit', function () { try { rmSync(chatDir, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
 }
 claimPath('GAFFER_BUFFER_PATH', 'gaffer-test-buffer-' + runTag + '.json');
 // ChatHandler's persisted model-catalog cache would otherwise land in the

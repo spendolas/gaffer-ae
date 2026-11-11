@@ -53,7 +53,7 @@ test('GAFFER_WS_PORT / GAFFER_MCP_PORT reach the exported ports and mcpUrl() (wi
 test('chat-handler builds --mcp-config from mcpUrl(), no hardcoded port', () => {
   const src = read('../chat-handler.js');
   assert.ok(/import \{[^}]*\bmcpUrl\b[^}]*\} from '\.\/ports\.js'/.test(src), 'chat-handler must import mcpUrl');
-  assert.ok(src.includes('url: mcpUrl()'), 'mcp-config must use mcpUrl()');
+  assert.ok(src.includes('gafferUrl: mcpUrl()'), 'mcp-config must use mcpUrl()');
   assert.ok(!src.includes('9824'), 'no hardcoded 9824 in chat-handler');
 });
 

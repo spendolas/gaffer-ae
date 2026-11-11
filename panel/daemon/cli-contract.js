@@ -79,6 +79,35 @@ export function versionNotice(version) {
   return null;
 }
 
+// Command-line options Gaffer chat needs to keep the chat agent restricted:
+// no built-in tools, only the MCP servers Gaffer names, and no user or
+// project settings, skills or instruction files. A CLI whose --help does not
+// list all of them is refused (fail closed) instead of running unrestricted.
+// Verified against the --help text of 2.1.304 and 2.1.321 (test/fixtures/cli).
+export var LOCKDOWN_FLAGS = ['--tools', '--strict-mcp-config', '--mcp-config', '--setting-sources', '--disable-slash-commands'];
+
+// The flags in LOCKDOWN_FLAGS that `claude --help` text does not define as an
+// option. A definition is an option line (leading spaces, an optional short
+// alias, then the flag), so a flag only mentioned in another option's prose
+// does not count. Pure: a non-string is "everything missing".
+export function lockdownMissingFlags(helpText) {
+  var text = typeof helpText === 'string' ? helpText : '';
+  return LOCKDOWN_FLAGS.filter(function (flag) {
+    var re = new RegExp('^[ \\t]+(?:-[A-Za-z],[ \\t]+)?' + flag.replace(/[-]/g, '\\-') + '(?=[ \\t,<\\[]|$)', 'm');
+    return !re.test(text);
+  });
+}
+
+// Panel copy when the CLI cannot be locked down. User-facing: no em or en dashes.
+export function lockdownUnsupportedMessage() {
+  return 'Update Claude Code to use Gaffer chat. This version is missing options Gaffer needs to keep chat restricted.';
+}
+
+// Panel copy when the capability check itself could not run.
+export function lockdownProbeFailedMessage() {
+  return 'Gaffer could not check this version of Claude Code. Update Claude Code to use Gaffer chat, then try again.';
+}
+
 var KNOWN_TYPES = ['system', 'assistant', 'user', 'result', 'rate_limit_event', 'stream_event'];
 
 var MAX_CLI_TEXT = 400;

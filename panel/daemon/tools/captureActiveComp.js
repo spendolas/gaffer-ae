@@ -1,10 +1,12 @@
 /**
  * captureActiveComp tool — renders current frame of active comp to PNG.
  * Uses comp.saveFrameToPng() (AE 2023+ / v23.0+).
- * Saves to /tmp/gaffer-capture-<timestamp>.png, cleans up old captures.
+ * Saves to /tmp/gaffer-capture-<timestamp>.png, cleans up old captures, and
+ * returns the frame as MCP image content.
  */
 
 import { tmpdir } from 'node:os';
+import { captureContent } from '../capture-image.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
@@ -35,7 +37,7 @@ export function register(server, queue, z) {
     'captureActiveComp',
     {
       description:
-        'Capture the current frame of the active composition as a PNG screenshot. Returns the file path. Useful for visual inspection of what the comp looks like right now.',
+        'Capture the current frame of the active composition as a PNG screenshot. Returns the frame as an image you can look at directly, plus its size. Useful for visual inspection of what the comp looks like right now.',
       inputSchema: {
         aeVersion: z.string().optional().describe('Target AE version when multiple instances are open. Omit if only one AE is open.'),
       },
@@ -57,7 +59,7 @@ export function register(server, queue, z) {
           if (inner.error) {
             return { content: [{ type: 'text', text: JSON.stringify(inner) }], isError: true };
           }
-          return { content: [{ type: 'text', text: JSON.stringify(inner, null, 2) }] };
+          return { content: captureContent(inner) };
         } else if (parsed.ok === false) {
           return { content: [{ type: 'text', text: raw }], isError: true };
         }
@@ -65,7 +67,7 @@ export function register(server, queue, z) {
         if (parsed.error) {
           return { content: [{ type: 'text', text: JSON.stringify(parsed) }], isError: true };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        return { content: captureContent(parsed) };
       } catch (e) {
         return {
           content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }],

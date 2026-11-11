@@ -1,5 +1,5 @@
 import './isolate-env.mjs';
-import { noopModelCatalog } from './test-catalog.mjs';
+import { noopModelCatalog, lockdownSupported } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -82,6 +82,7 @@ test('the chat turn spawns claude with NODE_EXTRA_CA_CERTS restored and no stash
   var handler = new ChatHandler({
     modelCatalog: noopModelCatalog(), // no Keychain or network after a finished turn
     findClaudeBinary: async function () { return '/fake/claude'; },
+    detectLockdownSupport: lockdownSupported,
     lastClaudeLookup: function () { return null; },
     spawn: function (bin, args, opts) {
       var child = fakeChild();

@@ -3,6 +3,7 @@
  * Wrapped in undo group so the solo flag flip is undoable.
  */
 import { tmpdir } from 'node:os';
+import { captureContent } from '../capture-image.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
@@ -59,7 +60,7 @@ export function register(server, queue, z) {
     'captureLayer',
     {
       description:
-        'Render a single layer in isolation (temporarily soloed) at time T to PNG. Solo state is fully restored. Useful to inspect what one layer looks like.',
+        'Render a single layer in isolation (temporarily soloed) at time T to PNG. Solo state is fully restored. Returns the frame as an image you can look at directly. Useful to inspect what one layer looks like.',
       inputSchema: {
         layerIndex: z.number().describe('1-indexed layer in active comp'),
         time: z.number().optional().describe('Time in seconds. Omit for current CTI.'),
@@ -74,7 +75,7 @@ export function register(server, queue, z) {
         var parsed = JSON.parse(raw);
         var inner = parsed.ok && parsed.result ? JSON.parse(parsed.result) : parsed;
         if (inner.error) return { content: [{ type: 'text', text: JSON.stringify(inner) }], isError: true };
-        return { content: [{ type: 'text', text: JSON.stringify(inner, null, 2) }] };
+        return { content: captureContent(inner) };
       } catch (e) {
         return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: e.message }) }], isError: true };
       }

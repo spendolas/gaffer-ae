@@ -38,7 +38,12 @@ var HELP = [
   '  --dangerously-skip-permissions        Bypass all permission checks.',
   '  --effort <level>                      Effort level for the current session',
   '                                        (low, medium, high, xhigh, max)',
+  '  --disable-slash-commands              Disable all skills and commands',
+  '  --input-format <format>               Input format (only works with --print):',
   '  --mcp-config <configs...>             Load MCP servers from JSON files or',
+  '  --setting-sources <sources>           Comma-separated list of setting sources',
+  '  --strict-mcp-config                   Only use MCP servers from --mcp-config,',
+  '  --tools <tools...>                    Specify the list of available tools from',
   '  --model <model>                       Model for the current session.',
   '  --output-format <format>              Output format (only works with --print):',
   '  -p, --print                           Print response and exit',
@@ -63,6 +68,12 @@ test('helpListsFlag: whole tokens only, aliases on one line, prefixes do not cou
   assert.equal(helpListsFlag('', '-p'), false);
   assert.equal(helpListsFlag('  -p, --print', '-p'), true);
   assert.equal(helpListsFlag('  --print-p', '-p'), false);
+});
+
+test('REQUIRED_FLAGS: includes every restriction flag the daemon checks at runtime', () => {
+  ['--tools', '--strict-mcp-config', '--mcp-config', '--setting-sources', '--disable-slash-commands'].forEach(function (f) {
+    assert.ok(REQUIRED_FLAGS.indexOf(f) !== -1, f);
+  });
 });
 
 test('missingFlags: empty on the full help, names what is gone', () => {

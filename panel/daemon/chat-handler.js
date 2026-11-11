@@ -8,7 +8,13 @@ import { mcpUrl } from './ports.js';
 // session-pruner.js intentionally not imported: mid-session pruning was disabled
 // (2026-09-07, root cause 2) because it invalidates the prompt cache. See below.
 import * as telemetry from './telemetry.js';
-import { newTurnState, observe, classify, userMessage as turnUserMessage, versionDetail, versionNotice } from './cli-contract.js';
+import { newTurnState, observe, classify, userMessage as turnUserMessage, versionDetail, versionNotice, lockdownUnsupportedMessage, lockdownProbeFailedMessage } from './cli-contract.js';
+import {
+  buildChatArgs, buildCompactArgs, buildMcpConfig, readUserMcpServers,
+  writeMcpConfigFile, removeMcpConfigFile, ensureChatCwd, detectLockdownSupport,
+  extractPastedImages, buildStreamJsonInput,
+} from './chat-lockdown.js';
+import { loadImageForModel } from './capture-image.js';
 // Vendored shared module (panel/daemon/vendor, see CLAUDE.md): live model
 // discovery. Change it in its own repo, then `npm run sync-vendor`.
 import { createModelCatalog, EFFORT_LEVELS } from './vendor/claude-model-catalog/index.mjs';
@@ -55,33 +61,10 @@ function maybeNoticeCliVersion(version, socket) {
   } catch (e) { /* a notice must never affect the turn */ }
 }
 
-var GAFFER_TOOLS = [
-  'mcp__gaffer__runJSX',
-  'mcp__gaffer__getProjectSummary',
-  'mcp__gaffer__listEffectMatchNames',
-  'mcp__gaffer__captureActiveComp',
-  'mcp__gaffer__importFromFigma',
-  'mcp__gaffer__listFonts',
-  'mcp__gaffer__listCompositions',
-  'mcp__gaffer__getSelectedLayers',
-  'mcp__gaffer__listFootage',
-  'mcp__gaffer__listExpressions',
-  'mcp__gaffer__listExpressionControls',
-  'mcp__gaffer__getRenderQueue',
-  'mcp__gaffer__getLayerKeyframes',
-  'mcp__gaffer__findLayers',
-  'mcp__gaffer__whereUsed',
-  'mcp__gaffer__captureFrame',
-  'mcp__gaffer__captureLayer',
-  'mcp__gaffer__relinkFootage',
-  'mcp__gaffer__addToRenderQueue',
-  'mcp__gaffer__listMarkers',
-  'mcp__gaffer__listTextLayers',
-  'mcp__gaffer__getLayerEffects',
-  'mcp__gaffer__getShapeContents',
-  'mcp__gaffer__getProjectTree',
-  'mcp__gaffer__getProjectSettings',
-];
+// The chat agent's tools are exactly the MCP servers named in the per-turn
+// --mcp-config (gaffer plus the connectors the user enabled); see
+// chat-lockdown.js. There is no separate tool allowlist to keep in sync.
+
 
 // Claude Code's public model-config matrix is more precise than the CLI's
 // single global `--effort` help line. Keep this compatibility data here so the
@@ -569,9 +552,23 @@ export function claudeChildEnv(env, platform) {
   return out;
 }
 
+// Ids of the MCP servers the last `claude mcp list` returned, or null before
+// the first listing. A chat turn only re-passes a connector the daemon has
+// itself seen in that listing.
+var lastKnownMcpIds = null;
+export function knownMcpIds() { return lastKnownMcpIds; }
+export function resetKnownMcpIdsForTests(ids) { lastKnownMcpIds = ids || null; }
+
 export class ChatHandler {
   constructor(opts) {
     opts = opts || {};
+    // Seams for tests; production uses the real implementations. Which
+    // user-level MCP servers exist (re-passed under --strict-mcp-config) and
+    // whether the CLI supports the options the lockdown needs.
+    this._readUserMcpServers = opts.readUserMcpServers || readUserMcpServers;
+    this._detectLockdown = opts.detectLockdownSupport || detectLockdownSupport;
+    // Connectors already reported as unavailable (once each per handler).
+    this._notifiedUnavailable = new Set();
     this.activeProcess = null;
     this.sessionId = null;
     this.lastContextTokens = 0;
@@ -729,6 +726,24 @@ export class ChatHandler {
       return;
     }
 
+    // Fail closed: chat only runs on a Claude Code that can be restricted (no
+    // built-in tools, only the MCP servers Gaffer names, no user settings). An
+    // older CLI, or a capability check that could not run, never falls back to
+    // an unrestricted spawn.
+    var support = await this._detectLockdown(claudeBin, {
+      version: this._claudeLookupInfo().version,
+      env: augmentedEnv(),
+    });
+    if (!support || !support.ok) {
+      console.log('Gaffer chat: refused, Claude Code cannot be restricted'
+        + (support && support.probeFailed ? ' (capability check failed)' : ' (missing ' + ((support && support.missing) || []).join(' ') + ')'));
+      socket.send(JSON.stringify({
+        type: 'chat_error',
+        error: support && support.probeFailed ? lockdownProbeFailedMessage() : lockdownUnsupportedMessage(),
+      }));
+      return;
+    }
+
     var promptPath = join(__dirname, '..', 'prompts', 'gaffer.md');
     var systemPrompt;
     try {
@@ -765,24 +780,22 @@ export class ChatHandler {
     // The compaction gate reads the model's real context window (no more 1M
     // opt-in toggle — a model's window is just whatever it actually supports).
     this._lastWindow = Math.max.apply(null, capability.contextWindows);
-    var args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
     var EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-    if (effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1) args.push('--effort', effort);
-    // Register the gaffer MCP server inline — chat must work even when the
-    // installer's `claude mcp add` step never ran (e.g. CLI installed after
-    // the panel). Merges with any user-scope registration of the same name.
-    args.push('--mcp-config', JSON.stringify({ mcpServers: { gaffer: { type: 'http', url: mcpUrl() } } }));
+    var turnEffort = effort && EFFORTS.indexOf(effort) !== -1 && capability.efforts.indexOf(effort) !== -1 ? effort : null;
 
-    // Build allowedTools for every call so MCP toggle changes apply
-    // immediately, even on resumed sessions.
+    // MCP servers for this turn: gaffer plus the connectors the user enabled
+    // that can be re-passed (user-level servers). Written to a private 0600
+    // file, never put on the command line, and rebuilt every turn so MCP
+    // toggle changes apply immediately, even on resumed sessions.
     var enabled = Array.isArray(msg.enabledMcps) ? msg.enabledMcps.filter(Boolean) : [];
-    var extra = enabled.map(function (id) {
-      // Claude transforms server names to tool prefixes: spaces/dots/dashes/colons → underscores
-      return 'mcp__' + id.replace(/[\s.\-:]/g, '_') + '__*';
+    var mcp = buildMcpConfig(enabled, {
+      gafferUrl: mcpUrl(),
+      userServers: this._readUserMcpServers(),
+      knownIds: knownMcpIds(),
     });
-    var allowed = GAFFER_TOOLS.concat(extra).join(',');
-    args.push('--allowedTools', allowed);
-    console.log('Gaffer chat args: enabledMcps=' + JSON.stringify(enabled) + ' allowed=' + allowed);
+    console.log('Gaffer chat args: enabledMcps=' + JSON.stringify(enabled) + ' mcp=' + JSON.stringify(['gaffer'].concat(mcp.included))
+      + (mcp.skipped.length ? ' skipped=' + JSON.stringify(mcp.skipped.map(function (x) { return x.id; })) : ''));
+    this._noticeUnavailableConnectors(mcp.skipped, socket);
 
     // Tell the model what its enabled connectors are for (Grip is the live Figma
     // connection) and that unauthenticated connectors are a Settings problem, not a
@@ -809,13 +822,7 @@ export class ChatHandler {
     if (this._abandonedSessionId && (msg.sessionId === this._abandonedSessionId || !sessionId)) {
       this._abandonedSessionId = null;
     }
-    if (sessionId) {
-      args.push('--resume', sessionId);
-      this.sessionId = sessionId;
-    } else {
-      // New conversation also gets the system prompt
-      args.push('--append-system-prompt', systemPrompt);
-    }
+    if (sessionId) this.sessionId = sessionId;
 
     var env = augmentedEnv();
     console.log('Gaffer chat PATH: ' + env.PATH);
@@ -832,21 +839,55 @@ export class ChatHandler {
     this.claudeBin = claudeBin;
     this.envForSpawn = env;
 
-    // Prepend a continuity briefing if we just compacted the previous session.
+    // Pasted screenshots arrive as leading [image: <path>] lines. They are sent
+    // to the agent as image blocks (only the panel's own paste files in the
+    // temp folder are read), so the agent needs no file-reading tool. Without
+    // images the message goes to stdin as plain text, as before.
     var userMessage = msg.message;
-    if (this.compactedSummary && !sessionId) {
-      userMessage = "[Continuity from previous compacted session]\n" + this.compactedSummary + "\n\n[New message]\n" + userMessage;
-      this.compactedSummary = null;
+    var images = [];
+    var pasted = extractPastedImages(msg.message);
+    if (pasted.paths.length || pasted.rejected) {
+      images = pasted.paths.map(loadImageForModel).filter(Boolean);
+      var dropped = pasted.paths.length + pasted.rejected - images.length;
+      userMessage = (dropped > 0
+        ? '[' + dropped + (dropped === 1 ? ' pasted image' : ' pasted images') + ' could not be attached]\n'
+        : '') + pasted.text;
     }
+    var stdinPayload = images.length ? buildStreamJsonInput(userMessage, images) : userMessage;
+
+    // The carried-forward summary of a compacted session goes in the system
+    // prompt (as quoted data) of the fresh session, not in the user turn.
+    var carriedSummary = !sessionId ? this.compactedSummary : null;
+    if (carriedSummary) this.compactedSummary = null;
+
+    var cwd, mcpConfigPath;
+    try {
+      cwd = ensureChatCwd();
+      mcpConfigPath = writeMcpConfigFile(mcp.config);
+    } catch (e) {
+      console.error('Gaffer chat: could not prepare the chat folder: ' + e.message);
+      socket.send(JSON.stringify({ type: 'chat_error', error: 'Gaffer could not prepare its chat folder. Restart After Effects and try again.' }));
+      return;
+    }
+    var args = buildChatArgs(msg, {
+      model: model,
+      effort: turnEffort,
+      mcpConfigPath: mcpConfigPath,
+      sessionId: sessionId,
+      systemPrompt: systemPrompt,
+      compactedSummary: carriedSummary,
+      hasImages: images.length > 0,
+    });
 
     var child = this._spawn(claudeBin, args, {
+      cwd: cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env,
       windowsHide: true, // console-subsystem children flash a cmd window otherwise
     });
     this.activeProcess = child;
 
-    child.stdin.write(userMessage);
+    child.stdin.write(stdinPayload);
     child.stdin.end();
 
     var buffer = '';
@@ -900,6 +941,7 @@ export class ChatHandler {
 
     child.on('close', (code) => {
       this.activeProcess = null;
+      removeMcpConfigFile(mcpConfigPath);
       // Process remaining buffer
       if (buffer.trim()) handleLine(buffer);
       // A spawn failure already reported itself from the 'error' handler.
@@ -986,6 +1028,7 @@ export class ChatHandler {
 
     child.on('error', (err) => {
       this.activeProcess = null;
+      removeMcpConfigFile(mcpConfigPath);
       child._spawnErrored = true; // a following 'close' must not report a second outcome
       if (socket.readyState === 1) {
         socket.send(JSON.stringify({ type: 'chat_error', error: err.message }));
@@ -1134,12 +1177,23 @@ export class ChatHandler {
       }));
     }
 
-    var args = ['-p', '--model', summarizer, '--resume', resumingId, '--dangerously-skip-permissions'];
-    var child = spawn(this.claudeBin, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: this.envForSpawn,
-      windowsHide: true,
-    });
+    // Same restrictions as chat, with no tools and no MCP server at all: the
+    // summarizer only writes text. Same working directory as chat, because the
+    // CLI keys its stored sessions by directory and --resume must find it.
+    var args = buildCompactArgs({ model: summarizer, sessionId: resumingId });
+    var child;
+    try {
+      child = this._spawn(this.claudeBin, args, {
+        cwd: ensureChatCwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: this.envForSpawn,
+        windowsHide: true,
+      });
+    } catch (e) {
+      this.compacting = false;
+      console.error('Gaffer compact error: ' + e.message);
+      return;
+    }
     var out = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString(); });
     child.stderr.on('data', (chunk) => {
@@ -1153,7 +1207,7 @@ export class ChatHandler {
       if (code === 0 && out.trim()) {
         this.compactedSummary = out.trim();
         // Drop the bloated session so the next chat starts fresh; the summary
-        // will be prepended to the next user message. Remember the abandoned id:
+        // goes into that session's system prompt as quoted data. Remember the abandoned id:
         // the panel still holds it and will re-send it next turn, so
         // resolveSessionId must refuse it or the huge session is resurrected and
         // re-compacted every turn (the loop that burned ~$6/turn).
@@ -1183,6 +1237,24 @@ export class ChatHandler {
     child.on('error', (err) => {
       this.compacting = false;
       console.error('Gaffer compact error:', err.message);
+    });
+  }
+
+  // Connectors the user enabled that cannot be used in chat (they live in the
+  // user's Claude account, a plugin or a project rather than in Claude Code's
+  // own settings) are reported once each, so the panel does not stay silent
+  // about a tile that does nothing.
+  _noticeUnavailableConnectors(skipped, socket) {
+    if (!skipped || !skipped.length || !socket || socket.readyState !== 1) return;
+    skipped.forEach((item) => {
+      if (this._notifiedUnavailable.has(item.id)) return;
+      this._notifiedUnavailable.add(item.id);
+      var name = String(item.id);
+      socket.send(JSON.stringify({
+        type: 'chat_event',
+        event: 'connector_unavailable',
+        message: 'The connector "' + name + '" is not available in Gaffer chat. Only connectors added to Claude Code itself can be used here.',
+      }));
     });
   }
 
@@ -1242,6 +1314,7 @@ export class ChatHandler {
           }
           servers.push({ id: id, displayName: displayName, status: status, target: target });
         }
+        lastKnownMcpIds = new Set(servers.map(function (x) { return x.id; }));
         resolveIcons(servers, onIcons);
         resolve({ servers: servers });
       });
