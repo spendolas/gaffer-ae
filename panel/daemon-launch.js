@@ -16,7 +16,9 @@
     'runtime-damaged': "Gaffer's runtime is damaged. Open Settings and click Repair, or reinstall.",
     'runtime-missing': "Gaffer's runtime is missing. Open Settings and click Repair, or reinstall.",
     'launch-failed': 'Gaffer could not start its daemon. Open Settings and click Repair, or reinstall.',
-    'runtime-blocked': "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer."
+    'runtime-blocked': "macOS blocked Gaffer's runtime. Open Settings and click Repair, or reinstall Gaffer.",
+    'bridge-auth': "Reload the Gaffer panel. If this keeps happening, open Settings and click Repair.",
+    'bridge-old-daemon': "An older Gaffer is still running. Open Settings and click Repair."
   };
   // How soon after launch a SIGKILL / exit 137 still reads as Gatekeeper
   // refusing the runtime (it kills at exec, well inside this window).

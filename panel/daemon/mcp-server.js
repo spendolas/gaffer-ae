@@ -74,6 +74,43 @@ export function rejectBrowserOrigin(req, res, next) {
   next();
 }
 
+// Final Express error handler: a JSON-RPC error with a fixed message, never
+// the error's own text, stack or file paths (those go to the daemon log only).
+// 4xx errors from the body parser keep their status.
+export function mcpErrorHandler(err, req, res, next) {
+  // The log keeps the first lines of the stack for diagnosis; the response
+  // below never carries any of it.
+  console.error('Gaffer: MCP request error:', err && err.stack ? String(err.stack).split('\n').slice(0, 6).join('\n') : (err && err.message) || 'unknown');
+  if (res.headersSent) { next(err); return; }
+  var status = err && Number.isInteger(err.status) && err.status >= 400 && err.status < 500 ? err.status : 500;
+  var code = -32603;
+  var message = 'Internal error';
+  if (status !== 500) {
+    code = err.type === 'entity.parse.failed' ? -32700 : -32600;
+    message = code === -32700 ? 'Parse error' : status === 413 ? 'Request too large' : 'Invalid request';
+  }
+  res.status(status).json({ jsonrpc: '2.0', error: { code: code, message: message }, id: null });
+}
+
+// Session bookkeeping (ctx overrides exist for tests). One daemon serves a few
+// long-lived MCP clients (Claude Code, Hub) plus one short-lived session per
+// panel chat turn, and none of them can be told apart from the server side.
+// So the rules never touch a live client:
+//   - a session with a request in flight or an open event stream is never
+//     evicted or expired (an open stream means the client is still there);
+//   - over the cap, only sessions idle for at least sessionEvictMinIdleMs are
+//     eviction candidates, least recently used first; if none qualifies the
+//     cap is simply exceeded for a while;
+//   - a session idle (no request, no stream) for sessionIdleMs is closed.
+// The cap is high and the expiry long: sessions are small, and an MCP client
+// that finds its session gone has to re-initialize.
+export var MCP_SESSION_DEFAULTS = {
+  maxSessions: 256,
+  sessionIdleMs: 12 * 60 * 60 * 1000,
+  sessionEvictMinIdleMs: 5 * 60 * 1000,
+  sessionSweepMs: 60 * 1000,
+};
+
 /**
  * Creates and starts the MCP HTTP server.
  * Each HTTP session gets its own McpServer instance, but all share
@@ -95,8 +132,52 @@ export function startMcpServer(port, queue, ctx) {
   app.use(rejectBrowserOrigin);
   app.use(express.json());
 
-  // Map of active transports by session ID
+  // Map of active transports by session ID, with the last time each was used
   var transports = {};
+  var lastSeen = {};
+  var inFlight = {};
+  var maxSessions = ctx.maxSessions != null ? ctx.maxSessions : MCP_SESSION_DEFAULTS.maxSessions;
+  var sessionIdleMs = ctx.sessionIdleMs != null ? ctx.sessionIdleMs : MCP_SESSION_DEFAULTS.sessionIdleMs;
+  var evictMinIdleMs = ctx.sessionEvictMinIdleMs != null ? ctx.sessionEvictMinIdleMs : MCP_SESSION_DEFAULTS.sessionEvictMinIdleMs;
+  var sessionSweepMs = ctx.sessionSweepMs != null ? ctx.sessionSweepMs : MCP_SESSION_DEFAULTS.sessionSweepMs;
+
+  function touch(sid) { lastSeen[sid] = Date.now(); }
+  // Count a request (or an event stream) as in flight until its response ends.
+  function track(sid, res) {
+    inFlight[sid] = (inFlight[sid] || 0) + 1;
+    var done = false;
+    var end = function () {
+      if (done) return;
+      done = true;
+      inFlight[sid] = Math.max(0, (inFlight[sid] || 1) - 1);
+      touch(sid);
+    };
+    res.on('close', end);
+    res.on('finish', end);
+  }
+  function dropSession(sid) {
+    var t = transports[sid];
+    delete transports[sid];
+    delete lastSeen[sid];
+    delete inFlight[sid];
+    if (t) { try { t.close(); } catch (e) { /* already closed */ } }
+  }
+  function idleFor(sid, now) { return (inFlight[sid] ? 0 : now - (lastSeen[sid] || 0)); }
+  function enforceSessionCap() {
+    var ids = Object.keys(transports);
+    if (ids.length <= maxSessions) return;
+    var now = Date.now();
+    var candidates = ids.filter(function (sid) { return !inFlight[sid] && idleFor(sid, now) >= evictMinIdleMs; });
+    candidates.sort(function (a, b) { return (lastSeen[a] || 0) - (lastSeen[b] || 0); });
+    for (var i = 0; i < candidates.length && Object.keys(transports).length > maxSessions; i++) dropSession(candidates[i]);
+  }
+  var sweepTimer = setInterval(function () {
+    var now = Date.now();
+    Object.keys(transports).forEach(function (sid) {
+      if (!inFlight[sid] && now - (lastSeen[sid] || 0) > sessionIdleMs) dropSession(sid);
+    });
+  }, sessionSweepMs);
+  if (sweepTimer.unref) sweepTimer.unref();
 
   function createServer() {
     var server = new McpServer(
@@ -174,6 +255,8 @@ export function startMcpServer(port, queue, ctx) {
     var sessionId = req.headers['mcp-session-id'];
 
     if (sessionId && transports[sessionId]) {
+      touch(sessionId);
+      track(sessionId, res);
       await transports[sessionId].handleRequest(req, res, req.body);
       return;
     }
@@ -183,12 +266,16 @@ export function startMcpServer(port, queue, ctx) {
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sid) => {
         transports[sid] = transport;
+        touch(sid);
+        enforceSessionCap();
       },
     });
 
     transport.onclose = () => {
       if (transport.sessionId) {
         delete transports[transport.sessionId];
+        delete lastSeen[transport.sessionId];
+        delete inFlight[transport.sessionId];
       }
     };
 
@@ -201,6 +288,8 @@ export function startMcpServer(port, queue, ctx) {
   app.get('/mcp', async (req, res) => {
     var sessionId = req.headers['mcp-session-id'];
     if (sessionId && transports[sessionId]) {
+      touch(sessionId);
+      track(sessionId, res);
       await transports[sessionId].handleRequest(req, res);
     } else {
       res.status(400).json({ error: 'Invalid or missing session ID' });
@@ -217,6 +306,11 @@ export function startMcpServer(port, queue, ctx) {
     }
   });
 
+  // Last: any error from the middleware or handlers above.
+  app.use(mcpErrorHandler);
+
+  app.mcpSessionCount = function () { return Object.keys(transports).length; };
+
   return new Promise((resolve, reject) => {
     // Express 5 passes a listen error to this callback (and the server also
     // emits 'error'); reject here so EADDRINUSE reaches the caller instead of
@@ -226,6 +320,7 @@ export function startMcpServer(port, queue, ctx) {
       var addr = server.address();
       console.log('Gaffer: MCP on http://' + addr.address + ':' + addr.port + '/mcp');
       app.httpServer = server; // lets a test instance (port 0) read its port and close
+      server.on('close', function () { clearInterval(sweepTimer); });
       resolve(app);
     });
     server.on('error', reject);

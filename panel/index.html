@@ -2,6 +2,13 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <!-- Content policy: only this folder's own scripts run, nothing is embedded,
+       and the only network targets are the daemon socket and the update check.
+       This is the second layer behind the escaping renderer (lib/safe-markdown.js).
+       One-place switch: if CEP's Chromium does not treat 'self' as the panel's
+       file: folder, change script-src to "file:" here (and img-src/font-src/
+       media-src the same way); nothing else needs to change. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src ws://127.0.0.1:9823 https://api.github.com; media-src 'self' data: blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Gaffer</title>
   <style>
     /* Source Sans 3 + Source Code Pro (OFL, bundled) — the design baseline
@@ -144,6 +151,14 @@
     /* keep the Lucide stroke at 1 device px at any icon size (e.g. the 8px
        CloseBtn glyph, where a 16-unit viewBox would otherwise scale it to .5px) */
     .gicon svg path { vector-effect: non-scaling-stroke; }
+    /* Remote tile icons are drawn as an image mask in the text colour; the
+       mask-image itself is set from script. */
+    .gicon-mask {
+      background-color: currentColor;
+      -webkit-mask-repeat: no-repeat;
+      -webkit-mask-position: center;
+      -webkit-mask-size: contain;
+    }
 
     /* Chat */
     .chat-messages {
@@ -1884,9 +1899,11 @@
 
   <script src="lib/CSInterface.js"></script>
   <script src="lib/marked.min.js"></script>
+  <script src="lib/safe-markdown.js"></script>
   <script src="icons.js"></script>
   <script src="update-state.js"></script>
   <script src="daemon-launch.js"></script>
+  <script src="bridge-auth.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

@@ -8,15 +8,36 @@ import { findClaudeBinary } from './claude-binary.js';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from './dev-reload.js';
 import * as telemetry from './telemetry.js';
 import { getConfigPath } from './config-path.js';
+import { newBridgeToken, writeBridgeToken, bridgeTokenPath } from './bridge-token.js';
+import { IssuedSessions, trackSessionIds } from './issued-sessions.js';
+import { isModelAllowed } from './bridge-messages.js';
 import { dirname, join as pathJoin } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WS_PORT, MCP_PORT } from './ports.js';
 
 
-var bridge = new PanelBridge(WS_PORT);
+// The panel proves it knows a per-start secret before the bridge accepts
+// anything from it (panel-bridge.js). The secret is generated here, in memory,
+// and only published to <config dir>/bridge-token once the bridge is actually
+// listening: a second daemon that loses the port race exits without having
+// replaced the running daemon's token.
+var bridgeToken = newBridgeToken();
+var issuedSessions = new IssuedSessions(pathJoin(dirname(getConfigPath()), 'issued-sessions.json'));
+var bridge = new PanelBridge(WS_PORT, {
+  token: bridgeToken,
+  sessions: issuedSessions,
+});
 
 // Handle port conflicts — if daemon is already running, exit gracefully
-bridge.start().catch((err) => {
+bridge.start().then(() => {
+  try {
+    writeBridgeToken(bridgeToken);
+  } catch (err) {
+    console.error('Gaffer: could not write the panel connection token', err.message);
+    process.exit(1);
+  }
+  console.log('Gaffer: panel connection token written to ' + bridgeTokenPath());
+}, (err) => {
   if (err.code === 'EADDRINUSE') {
     console.log('Gaffer: port ' + WS_PORT + ' in use, daemon already running. Exiting.');
     process.exit(0);
@@ -42,7 +63,7 @@ bridge.start().catch((err) => {
 // the whole daemon: the model list is account-level state, so every panel's
 // handler shares it, and a sign-in or sign-out below invalidates it once.
 var modelCatalog = createGafferModelCatalog();
-var chatRegistry = createChatRegistry(() => new ChatHandler({
+var chatRegistry = createChatRegistry(() => trackSessionIds(new ChatHandler({
   modelCatalog: modelCatalog,
   onAuthError: async (socket) => {
     try {
@@ -52,8 +73,18 @@ var chatRegistry = createChatRegistry(() => new ChatHandler({
       bridge.onAuthStatus(socket);
     }
   },
-}));
+}), issuedSessions));
 var handlerFor = (socket) => chatRegistry.for(socket && socket._gafferKey);
+// Model membership for a chat: an alias, or an id in the live catalog (the same
+// capability map Settings was given).
+bridge.isModelAllowed = (model, socket) => isModelAllowed(model, handlerFor(socket).liveModelCapabilities);
+// A newly registered panel starts from the session it names (a valid id this
+// daemon issued), never from the one a previous connection left held on the
+// handler for that AE version. Skipped while a turn is running there.
+bridge.onPanelRegistered = (key, socket, info) => {
+  var h = handlerFor(socket);
+  if (h && !h.activeProcess) h.sessionId = null;
+};
 // Cancellation flag for the runJSXLoop chunk driver. The chat-cancel gesture
 // kills the claude subprocess, but a runJSXLoop the agent already started keeps
 // running in this daemon (it is a separate async task), so the driver must poll

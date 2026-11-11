@@ -228,6 +228,29 @@ if ($installKind -eq "copy") {
     }
     Write-Host "  (copied)"
 }
+if ($installKind -eq "symlink") {
+    # Developer-only: the CEP debug port that design/scripts/panel-capture.mjs
+    # connects to. It lives in the checkout (gitignored), so release packages
+    # never carry it; a copy install does not get one either.
+    if (-not (Test-Path -LiteralPath "$panelDir\.debug")) {
+        $debugXml = @'
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionList>
+  <Extension Id="com.gaffer.panel.main">
+    <HostList>
+      <Host Name="AEFT" Port="13870"/>
+    </HostList>
+  </Extension>
+</ExtensionList>
+'@
+        try {
+            Set-Content -LiteralPath "$panelDir\.debug" -Value $debugXml -Encoding ASCII
+            Write-Host "  (created panel\.debug, developer debug port 13870, not committed)"
+        } catch {
+            Write-Host "  (could not create panel\.debug: $($_.Exception.Message))"
+        }
+    }
+}
 if ($historyBackup -and (Test-Path -LiteralPath $historyBackup)) {
     Copy-Item -LiteralPath $historyBackup -Destination "$installDir\chat-history.json" -Force
     Remove-Item -LiteralPath $historyBackup -Force

@@ -109,7 +109,7 @@
   // Gatekeeper block: a repair (updater --repair / -Repair) re-downloads the
   // runtime into a fresh folder and re-syncs the release's files, which is
   // what each of these needs.
-  var REPAIRABLE = ['runtime-damaged', 'runtime-missing', 'runtime-blocked', 'launch-failed'];
+  var REPAIRABLE = ['runtime-damaged', 'runtime-missing', 'runtime-blocked', 'launch-failed', 'bridge-auth', 'bridge-old-daemon'];
   function isRepairableLaunchError(code) {
     return typeof code === 'string' && REPAIRABLE.indexOf(code) !== -1;
   }

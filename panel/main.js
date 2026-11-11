@@ -34,6 +34,10 @@
   var reconnectDelay = 1000;
   var maxDelay = 30000;
   var WS_URL = 'ws://127.0.0.1:9823';
+  // The daemon connection is authenticated (bridge-auth.js): `ws` is only ever
+  // the socket whose daemon has proved it knows the per-start token.
+  var BridgeAuth = window.GafferBridgeAuth;
+  var bridgeRetry = BridgeAuth ? BridgeAuth.createRetryPolicy() : null;
 
   // DOM elements
   var ledEl = document.getElementById('led');
@@ -1303,38 +1307,134 @@
     }
   }
 
-  function connect() {
+  // The daemon writes <user data>/Gaffer/bridge-token on every start; read it
+  // fresh on every connection attempt so a restarted daemon is picked up.
+  // Node fs first, CEP's own file API when Node integration is missing (the
+  // ExtendScript-launched daemon route).
+  function readBridgeToken() {
+    if (!BridgeAuth) return null;
+    var path;
+    try { path = BridgeAuth.tokenPath(cs.getSystemPath(SystemPath.USER_DATA)); } catch (e) { return null; }
     try {
-      ws = new WebSocket(WS_URL);
+      // Read through one open file handle so the ownership check and the read
+      // are about the same file.
+      var fs = require('fs');
+      var fd = fs.openSync(path, 'r');
+      try {
+        var st = fs.fstatSync(fd);
+        if (!BridgeAuth.tokenFileTrusted(st, typeof process.getuid === 'function' ? process.getuid() : undefined, process.platform)) return null;
+        var tok = BridgeAuth.parseToken(fs.readFileSync(fd, 'utf8'));
+        if (tok) return tok;
+      } finally { fs.closeSync(fd); }
+    } catch (e) { /* no Node integration, or no file: try CEP's API */ }
+    try {
+      var r = window.cep && window.cep.fs && window.cep.fs.readFile(path);
+      if (r && r.err === 0) return BridgeAuth.parseToken(r.data);
+    } catch (e) { /* fall through */ }
+    return null;
+  }
+
+  function randomNonceHex() {
+    var bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+    return out;
+  }
+
+  // The daemon proved itself: the connection is live. This is everything the
+  // old onopen did, now gated on the proof.
+  // Drop the "reload / repair" notice once a connection is trusted again.
+  function clearBridgeNotice() {
+    if (daemonLaunchCode !== 'bridge-auth' && daemonLaunchCode !== 'bridge-old-daemon') return;
+    daemonLaunchCode = null;
+    daemonLaunchError = null;
+    try { if (keyedToasts.daemon) keyedToasts.daemon.dismiss(); } catch (e) { /* already gone */ }
+    try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ }
+  }
+
+  function onBridgeTrusted(sock) {
+    ws = sock;
+    if (bridgeRetry) bridgeRetry.onTrusted();
+    clearBridgeNotice();
+    console.log('Gaffer: connected to daemon as AE ' + aeVersion);
+    // Register with daemon so it can route by AE version
+    try {
+      ws.send(JSON.stringify({ type: 'register', aeVersion: aeVersion }));
+    } catch (e) { /* ignore */ }
+    setStatus('connected', 'Connected');
+    wasConnected = true;
+    reconnectDelay = 1000;
+    requestMcpList();
+    // Fetch auth on connect so the account card, the model-section gate, and
+    // the sign-in overlay all reflect the real CLI session (otherwise lastAuth
+    // stays empty and the card is stuck on "Signed out" even when logged in).
+    // This runs `claude auth status --json` via the CLI binary, which reads
+    // its own credential (no Keychain prompt observed) — distinct from the
+    // daemon reading the credential directly for model discovery, which is
+    // still deferred behind the explicit Settings "Allow".
+    try { ws.send(JSON.stringify({ type: 'auth_status' })); } catch (e) { /* ignore */ }
+  }
+
+  function connect() {
+    var sock;
+    try {
+      sock = new WebSocket(WS_URL);
     } catch (e) {
       console.error('Gaffer: WebSocket constructor error', e);
       scheduleReconnect();
       return;
     }
+    var hs = BridgeAuth ? BridgeAuth.createHandshake({ token: readBridgeToken(), randomHex: randomNonceHex }) : null;
+    var opened = false;
+    var timer = null;
+    var authFailed = false;
 
-    ws.onopen = function () {
-      console.log('Gaffer: connected to daemon as AE ' + aeVersion);
-      // Register with daemon so it can route by AE version
-      try {
-        ws.send(JSON.stringify({ type: 'register', aeVersion: aeVersion }));
-      } catch (e) { /* ignore */ }
-      setStatus('connected', 'Connected');
-      wasConnected = true;
-      reconnectDelay = 1000;
-      requestMcpList();
-      // Fetch auth on connect so the account card, the model-section gate, and
-      // the sign-in overlay all reflect the real CLI session (otherwise lastAuth
-      // stays empty and the card is stuck on "Signed out" even when logged in).
-      // This runs `claude auth status --json` via the CLI binary, which reads
-      // its own credential (no Keychain prompt observed) — distinct from the
-      // daemon reading the credential directly for model discovery, which is
-      // still deferred behind the explicit Settings "Allow".
-      try { ws.send(JSON.stringify({ type: 'auth_status' })); } catch (e) { /* ignore */ }
+    function failHandshake(reason) {
+      if (authFailed) return;
+      authFailed = true;
+      clearTimeout(timer);
+      console.warn('Gaffer: daemon connection not authenticated (' + reason + ')');
+      try { sock.close(); } catch (e) { /* ignore */ }
+    }
+
+    sock.onopen = function () {
+      opened = true;
+      // Not connected yet: nothing is sent or shown until the daemon proves it
+      // knows the token. A listener that cannot (or an older daemon without
+      // authentication) never answers, so give it a short deadline.
+      timer = setTimeout(function () { if (!(hs && hs.state() === 'trusted')) failHandshake('timeout'); },
+        BridgeAuth ? BridgeAuth.HANDSHAKE_TIMEOUT_MS : 3000);
     };
 
-    ws.onmessage = handleMessage;
+    sock.onmessage = function (evt) {
+      if (!hs || authFailed) return;
+      var r;
+      try { r = hs.handle(evt.data); } catch (e) { failHandshake('error'); return; }
+      if (r.send) { try { sock.send(r.send); } catch (e) { /* ignore */ } }
+      if (r.failed) { failHandshake(r.failed); return; }
+      if (r.trusted) { clearTimeout(timer); onBridgeTrusted(sock); }
+      if (r.deliver !== null) handleMessage({ data: r.deliver });
+    };
 
-    ws.onclose = function () {
+    sock.onclose = function () {
+      clearTimeout(timer);
+      var wasTrusted = !!(hs && hs.state() === 'trusted');
+      // Only a connection that opened and never got trusted counts as an
+      // authentication failure (a refused connection just means no daemon yet).
+      if (opened && !wasTrusted && !window.__gafferUpdating) {
+        var verdict = bridgeRetry ? bridgeRetry.onAuthFailure() : { reread: false, giveUp: true };
+        if (verdict.giveUp) {
+          // Two failures in a row with a freshly read token: say what to do
+          // (an older daemon still running gets its own message) and keep
+          // trying slowly, so it recovers by itself once the cause is fixed.
+          showLaunchError(BridgeAuth.giveUpCode(hs.state()));
+          setTimeout(function () { connect(); }, BridgeAuth.SLOW_RETRY_MS);
+          return;
+        }
+        scheduleReconnect(); // reads the token file again
+        return;
+      }
       console.log('Gaffer: disconnected from daemon');
       setStatus('disconnected', daemonLaunchError || 'Disconnected');
       // If daemon crashed after being connected, allow restart
@@ -1348,7 +1448,7 @@
       scheduleReconnect();
     };
 
-    ws.onerror = function () {
+    sock.onerror = function () {
       // onclose fires after onerror
     };
   }
@@ -1457,7 +1557,7 @@
         // above the next chip
         chip.style.zIndex = String(MAX_PASTE_FILES - idx);
         var img = document.createElement('img');
-        img.src = item.dataUrl;
+        if (isImageDataUrl(item.dataUrl)) img.src = item.dataUrl;
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
         var x = icon('close', 'paste-chip-x');
         x.addEventListener('click', function (e) {
@@ -1473,7 +1573,7 @@
   }
 
   function openLightbox(dataUrl) {
-    if (!lightboxEl || !lightboxImgEl || !dataUrl) return;
+    if (!lightboxEl || !lightboxImgEl || !isImageDataUrl(dataUrl)) return;
     lightboxImgEl.src = dataUrl;
     tkShow(lightboxEl);
   }
@@ -1682,12 +1782,19 @@
       if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
     }
   });
+  // Every drag over and drop on the panel is cancelled, not only file drags:
+  // otherwise a link dragged out of a chat reply and dropped on the panel would
+  // load that page into the panel frame. Dragging a link out is blocked too.
   document.addEventListener('dragover', function (e) {
-    if (isFileDrag(e)) e.preventDefault();
+    e.preventDefault();
+  });
+  document.addEventListener('dragstart', function (e) {
+    var t = e.target;
+    if (t && typeof t.closest === 'function' && t.closest('a')) e.preventDefault();
   });
   document.addEventListener('drop', function (e) {
-    if (!isFileDrag(e)) return;
     e.preventDefault();
+    if (!isFileDrag(e)) return;
     dragDepth = 0;
     if (dropOverlayEl) dropOverlayEl.classList.remove('visible');
     var files = e.dataTransfer.files;
@@ -1767,7 +1874,7 @@
       images.forEach(function (item) {
         var img = document.createElement('img');
         img.className = 'bubble-image';
-        img.src = item.dataUrl;
+        if (isImageDataUrl(item.dataUrl)) img.src = item.dataUrl;
         img.alt = item.name || 'image';
         img.addEventListener('click', function () { openLightbox(item.dataUrl); });
         row.appendChild(img);
@@ -1856,6 +1963,19 @@
   function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+  function isImageDataUrl(u) {
+    return typeof SafeMarkdown !== 'undefined' && SafeMarkdown.isSafeImageDataUrl(u);
+  }
+  // Links in chat content never navigate the panel frame (it has Node access):
+  // one delegated handler cancels every link click and hands http(s) targets to
+  // the system browser.
+  if (typeof SafeMarkdown !== 'undefined') SafeMarkdown.attachLinkHandler(document, openExternal);
+  // Markup the panel keeps (reply quotes) goes through the same allowlist filter
+  // as rendered chat; without the filter module it degrades to plain text.
+  function safeHtml(html) {
+    if (typeof SafeMarkdown === 'undefined') return escapeHtml(html == null ? '' : html);
+    return SafeMarkdown.sanitizeHtml(html);
+  }
 
   // Capture the selection as BOTH rendered HTML (preserves bold/code/links for
   // the styled quote) and plain text (what the agent receives). A selection that
@@ -1882,7 +2002,7 @@
     // text from the CLEANED fragment (excludes chrome/hidden pill labels)
     var text = (box.textContent || '').replace(/\s+/g, ' ').trim();
     if (!text) return null;
-    return { html: box.innerHTML, text: text };
+    return { html: safeHtml(box.innerHTML), text: text };
   }
 
   // Return the live selection only when it sits inside a chat bubble (so the
@@ -2001,7 +2121,8 @@
     // reply-quote-text (later in the sheet) overrides size/color/clamp.
     txt.className = 'reply-quote-text msg-text';
     txt.setAttribute('data-fig', '428:3198'); // banner-text
-    txt.innerHTML = q.html || escapeHtml(q.text || ''); // styled snippet
+    // Stored quote HTML (also from older saved chats) is filtered again on every build.
+    txt.innerHTML = typeof q.html === 'string' && q.html ? safeHtml(q.html) : escapeHtml(q.text || ''); // styled snippet
     row.appendChild(wave);
     row.appendChild(txt);
     if (onRemove) {
@@ -2208,25 +2329,11 @@
     }
   });
 
+  // Chat text is untrusted (model output, project content, saved history), so
+  // it only ever reaches innerHTML through SafeMarkdown (panel/lib/safe-markdown.js).
   function renderMarkdown(text) {
-    if (typeof marked === 'undefined') return text;
-    try {
-      // Normalize whitespace: collapse 3+ newlines, strip blanks between list
-      // items so marked produces tight lists (no <p> inside <li>).
-      var clean = text
-        .replace(/(\n[ \t]*){3,}/g, '\n\n')
-        .replace(/^(\s*[-*+]\s+.*)\n\s*\n(?=\s*[-*+]\s)/gm, '$1\n')
-        .replace(/^(\s*\d+\.\s+.*)\n\s*\n(?=\s*\d+\.\s)/gm, '$1\n')
-        .trim();
-      var html = marked.parse(clean, { breaks: false, gfm: true });
-      // GFM task-list items ship as <li><input type=checkbox> with no class.
-      // Tag them so CSS can drop the redundant bullet — CEP Ch99 predates
-      // :has(), so we can't detect the checkbox child in the stylesheet alone.
-      html = html.replace(/<li>(\s*<input\b[^>]*type="checkbox")/g, '<li class="task-item">$1');
-      return html;
-    } catch (e) {
-      return text;
-    }
+    if (typeof SafeMarkdown === 'undefined') return escapeHtml(text == null ? '' : text);
+    return SafeMarkdown.render(text);
   }
 
   function startAssistantMessage() {
@@ -2284,9 +2391,21 @@
       el.appendChild(textNode);
       if (!el.querySelector('.copy-btn')) addCopyButton(el);
     }
-    // Accumulate raw markdown, re-render on each chunk
+    // Accumulate raw markdown. Renders are throttled (a long reply re-renders
+    // the whole text on every chunk); the last one always lands, so the final
+    // DOM equals an unthrottled render.
     textNode.dataset.raw = (textNode.dataset.raw || '') + text;
-    textNode.innerHTML = renderMarkdown(textNode.dataset.raw);
+    if (typeof SafeMarkdown === 'undefined') {
+      textNode.textContent = textNode.dataset.raw;
+    } else {
+      if (!textNode._stream) {
+        textNode._stream = SafeMarkdown.createStreamRenderer(function (html) {
+          textNode.innerHTML = html;
+          scrollToBottom();
+        });
+      }
+      textNode._stream.push(textNode.dataset.raw);
+    }
     scrollToBottom();
   }
 
@@ -2302,7 +2421,12 @@
       el.appendChild(row);
     }
     // Reuse existing pill for this tool call (dedupe running → done/error)
-    var pill = id ? row.querySelector('[data-tool-id="' + id + '"]') : null;
+    var pill = null;
+    if (id) {
+      for (var pi = 0; pi < row.children.length; pi++) {
+        if (row.children[pi].dataset.toolId === String(id)) { pill = row.children[pi]; break; }
+      }
+    }
     if (!pill) {
       pill = document.createElement('span');
       if (id) pill.dataset.toolId = id;
@@ -2667,10 +2791,13 @@
     // Tiles are vector-or-monogram, nothing else: bundled/CDN brand SVGs
     // render via currentColor; anything without a vector gets the
     // two-letter monogram. (Favicon masking removed — bad experience.)
-    if (s.icon && s.icon.indexOf('image/svg') !== -1) {
+    // The icon comes from a remote server, so it is shown as an image mask
+    // (a vector used as an image cannot run anything), never as inline markup.
+    var iconUrl = (typeof SafeMarkdown !== 'undefined') ? SafeMarkdown.safeSvgIconDataUrl(s.icon) : null;
+    if (iconUrl) {
       var span = document.createElement('span');
-      span.className = 'gicon';
-      span.innerHTML = atob(s.icon.split(',')[1]);
+      span.className = 'gicon gicon-mask';
+      span.style.webkitMaskImage = 'url("' + iconUrl + '")';
       tile.appendChild(span);
     } else {
       var mono = document.createElement('span');

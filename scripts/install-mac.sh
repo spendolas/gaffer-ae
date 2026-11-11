@@ -74,6 +74,23 @@ if [ -e "$INSTALL_DIR" ]; then
 fi
 ln -sf "$PANEL_DIR" "$INSTALL_DIR"
 
+# 2b. Developer-only: the CEP debug port that design/scripts/panel-capture.mjs
+# connects to. It lives in the checkout (gitignored), so release packages never
+# carry it; end users do not have this file.
+if [ ! -f "$PANEL_DIR/.debug" ]; then
+  cat > "$PANEL_DIR/.debug" <<'DEBUGXML'
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionList>
+  <Extension Id="com.gaffer.panel.main">
+    <HostList>
+      <Host Name="AEFT" Port="13870"/>
+    </HostList>
+  </Extension>
+</ExtensionList>
+DEBUGXML
+  echo "  Created panel/.debug (developer debug port 13870, not committed)"
+fi
+
 # 3. Install daemon dependencies (symlinked dev install: system node runs
 # index.js from the checkout). npm's cache, logs and userconfig stay inside
 # the repo so nothing lands in the developer's home directory (spec 9).

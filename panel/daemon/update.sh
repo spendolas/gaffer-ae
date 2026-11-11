@@ -754,6 +754,15 @@ if ! sync_files; then
   exit 1
 fi
 
+# A developer-only .debug file (CEP debug port) from an earlier release must not
+# survive an update or a Repair. The sync above already deletes it because the
+# archive has none; this keeps that true if an old archive or a future exclude
+# ever lets it through. Only reached after the git-checkout refusal at the top.
+remove_debug_file() {
+  rm -f "$PANEL_DIR/.debug" || true
+}
+remove_debug_file
+
 # Restore chat history and .gaffer-config.json. rsync excluded them, so a
 # failure here leaves them as they were; it still ends with err:sync, the
 # files were replaced and the run is not finished.
