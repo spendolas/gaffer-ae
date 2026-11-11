@@ -34,6 +34,10 @@
   var reconnectDelay = 1000;
   var maxDelay = 30000;
   var WS_URL = 'ws://127.0.0.1:9823';
+  // The daemon connection is authenticated (bridge-auth.js): `ws` is only ever
+  // the socket whose daemon has proved it knows the per-start token.
+  var BridgeAuth = window.GafferBridgeAuth;
+  var bridgeRetry = BridgeAuth ? BridgeAuth.createRetryPolicy() : null;
 
   // DOM elements
   var ledEl = document.getElementById('led');
@@ -1303,38 +1307,134 @@
     }
   }
 
-  function connect() {
+  // The daemon writes <user data>/Gaffer/bridge-token on every start; read it
+  // fresh on every connection attempt so a restarted daemon is picked up.
+  // Node fs first, CEP's own file API when Node integration is missing (the
+  // ExtendScript-launched daemon route).
+  function readBridgeToken() {
+    if (!BridgeAuth) return null;
+    var path;
+    try { path = BridgeAuth.tokenPath(cs.getSystemPath(SystemPath.USER_DATA)); } catch (e) { return null; }
     try {
-      ws = new WebSocket(WS_URL);
+      // Read through one open file handle so the ownership check and the read
+      // are about the same file.
+      var fs = require('fs');
+      var fd = fs.openSync(path, 'r');
+      try {
+        var st = fs.fstatSync(fd);
+        if (!BridgeAuth.tokenFileTrusted(st, typeof process.getuid === 'function' ? process.getuid() : undefined, process.platform)) return null;
+        var tok = BridgeAuth.parseToken(fs.readFileSync(fd, 'utf8'));
+        if (tok) return tok;
+      } finally { fs.closeSync(fd); }
+    } catch (e) { /* no Node integration, or no file: try CEP's API */ }
+    try {
+      var r = window.cep && window.cep.fs && window.cep.fs.readFile(path);
+      if (r && r.err === 0) return BridgeAuth.parseToken(r.data);
+    } catch (e) { /* fall through */ }
+    return null;
+  }
+
+  function randomNonceHex() {
+    var bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+    return out;
+  }
+
+  // The daemon proved itself: the connection is live. This is everything the
+  // old onopen did, now gated on the proof.
+  // Drop the "reload / repair" notice once a connection is trusted again.
+  function clearBridgeNotice() {
+    if (daemonLaunchCode !== 'bridge-auth' && daemonLaunchCode !== 'bridge-old-daemon') return;
+    daemonLaunchCode = null;
+    daemonLaunchError = null;
+    try { if (keyedToasts.daemon) keyedToasts.daemon.dismiss(); } catch (e) { /* already gone */ }
+    try { syncSettingsUpdateButton(); } catch (e) { /* ignore */ }
+  }
+
+  function onBridgeTrusted(sock) {
+    ws = sock;
+    if (bridgeRetry) bridgeRetry.onTrusted();
+    clearBridgeNotice();
+    console.log('Gaffer: connected to daemon as AE ' + aeVersion);
+    // Register with daemon so it can route by AE version
+    try {
+      ws.send(JSON.stringify({ type: 'register', aeVersion: aeVersion }));
+    } catch (e) { /* ignore */ }
+    setStatus('connected', 'Connected');
+    wasConnected = true;
+    reconnectDelay = 1000;
+    requestMcpList();
+    // Fetch auth on connect so the account card, the model-section gate, and
+    // the sign-in overlay all reflect the real CLI session (otherwise lastAuth
+    // stays empty and the card is stuck on "Signed out" even when logged in).
+    // This runs `claude auth status --json` via the CLI binary, which reads
+    // its own credential (no Keychain prompt observed) — distinct from the
+    // daemon reading the credential directly for model discovery, which is
+    // still deferred behind the explicit Settings "Allow".
+    try { ws.send(JSON.stringify({ type: 'auth_status' })); } catch (e) { /* ignore */ }
+  }
+
+  function connect() {
+    var sock;
+    try {
+      sock = new WebSocket(WS_URL);
     } catch (e) {
       console.error('Gaffer: WebSocket constructor error', e);
       scheduleReconnect();
       return;
     }
+    var hs = BridgeAuth ? BridgeAuth.createHandshake({ token: readBridgeToken(), randomHex: randomNonceHex }) : null;
+    var opened = false;
+    var timer = null;
+    var authFailed = false;
 
-    ws.onopen = function () {
-      console.log('Gaffer: connected to daemon as AE ' + aeVersion);
-      // Register with daemon so it can route by AE version
-      try {
-        ws.send(JSON.stringify({ type: 'register', aeVersion: aeVersion }));
-      } catch (e) { /* ignore */ }
-      setStatus('connected', 'Connected');
-      wasConnected = true;
-      reconnectDelay = 1000;
-      requestMcpList();
-      // Fetch auth on connect so the account card, the model-section gate, and
-      // the sign-in overlay all reflect the real CLI session (otherwise lastAuth
-      // stays empty and the card is stuck on "Signed out" even when logged in).
-      // This runs `claude auth status --json` via the CLI binary, which reads
-      // its own credential (no Keychain prompt observed) — distinct from the
-      // daemon reading the credential directly for model discovery, which is
-      // still deferred behind the explicit Settings "Allow".
-      try { ws.send(JSON.stringify({ type: 'auth_status' })); } catch (e) { /* ignore */ }
+    function failHandshake(reason) {
+      if (authFailed) return;
+      authFailed = true;
+      clearTimeout(timer);
+      console.warn('Gaffer: daemon connection not authenticated (' + reason + ')');
+      try { sock.close(); } catch (e) { /* ignore */ }
+    }
+
+    sock.onopen = function () {
+      opened = true;
+      // Not connected yet: nothing is sent or shown until the daemon proves it
+      // knows the token. A listener that cannot (or an older daemon without
+      // authentication) never answers, so give it a short deadline.
+      timer = setTimeout(function () { if (!(hs && hs.state() === 'trusted')) failHandshake('timeout'); },
+        BridgeAuth ? BridgeAuth.HANDSHAKE_TIMEOUT_MS : 3000);
     };
 
-    ws.onmessage = handleMessage;
+    sock.onmessage = function (evt) {
+      if (!hs || authFailed) return;
+      var r;
+      try { r = hs.handle(evt.data); } catch (e) { failHandshake('error'); return; }
+      if (r.send) { try { sock.send(r.send); } catch (e) { /* ignore */ } }
+      if (r.failed) { failHandshake(r.failed); return; }
+      if (r.trusted) { clearTimeout(timer); onBridgeTrusted(sock); }
+      if (r.deliver !== null) handleMessage({ data: r.deliver });
+    };
 
-    ws.onclose = function () {
+    sock.onclose = function () {
+      clearTimeout(timer);
+      var wasTrusted = !!(hs && hs.state() === 'trusted');
+      // Only a connection that opened and never got trusted counts as an
+      // authentication failure (a refused connection just means no daemon yet).
+      if (opened && !wasTrusted && !window.__gafferUpdating) {
+        var verdict = bridgeRetry ? bridgeRetry.onAuthFailure() : { reread: false, giveUp: true };
+        if (verdict.giveUp) {
+          // Two failures in a row with a freshly read token: say what to do
+          // (an older daemon still running gets its own message) and keep
+          // trying slowly, so it recovers by itself once the cause is fixed.
+          showLaunchError(BridgeAuth.giveUpCode(hs.state()));
+          setTimeout(function () { connect(); }, BridgeAuth.SLOW_RETRY_MS);
+          return;
+        }
+        scheduleReconnect(); // reads the token file again
+        return;
+      }
       console.log('Gaffer: disconnected from daemon');
       setStatus('disconnected', daemonLaunchError || 'Disconnected');
       // If daemon crashed after being connected, allow restart
@@ -1348,7 +1448,7 @@
       scheduleReconnect();
     };
 
-    ws.onerror = function () {
+    sock.onerror = function () {
       // onclose fires after onerror
     };
   }
