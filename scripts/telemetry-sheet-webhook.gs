@@ -50,6 +50,14 @@
 // rate limited per install (CacheService), appends run under the script lock,
 // and the sheet stops growing at MAX_ROWS with one "cap reached" row.
 //
+// Limits: RATE_LIMIT_POSTS (20) accepted posts per installId per fixed 6 hour
+// window; GLOBAL_POSTS_PER_HOUR (100) and GLOBAL_POSTS_PER_DAY (1000) accepted
+// posts from all installs together (the installId is chosen by the sender, so
+// the global quota is what bounds a flood); MAX_ROWS (100000) rows in the
+// sheet, then one "(cap reached)" row and nothing more. A dropped post is
+// answered "ok" like any other. If the sheet's last row says "(cap reached)",
+// data was dropped: clear old rows and the script resumes.
+//
 // Deployed-copy maintenance when new fields land: paste the new version of
 // this file into the Apps Script editor and Deploy > Manage deployments >
 // edit > New version. NEVER "New deployment": that makes a new URL, and the
@@ -61,8 +69,10 @@
 var MAX_BODY_CHARS = 8192;
 var MAX_MODELS = 10;
 var MAX_ROWS = 100000;          // header included; one "cap reached" row is written past it
-var RATE_LIMIT_POSTS = 20;      // posts per installId per window
+var RATE_LIMIT_POSTS = 20;      // posts per installId per fixed window
 var RATE_WINDOW_SECONDS = 21600; // CacheService's longest TTL (6 hours)
+var GLOBAL_POSTS_PER_HOUR = 100; // accepted posts from all installs together, per UTC hour
+var GLOBAL_POSTS_PER_DAY = 1000; // and per UTC day (a few hundred legitimate posts a day at most)
 var CAP_MARK = '(cap reached)';
 
 var HEADER = [
@@ -85,6 +95,11 @@ var ERROR_KIND_RE = /^[a-z_]{1,24}$/;
 var MAX_ERROR_KINDS = 12;
 var MAX_COUNT = { turns: 1e6, inputTokens: 1e10, outputTokens: 1e10, cacheReadTokens: 1e10, cacheCreationTokens: 1e10, costUsd: 1e6 };
 var COUNTERS = ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd'];
+
+// The clock, as a function so a test can move it.
+function nowMs() {
+  return new Date().getTime();
+}
 
 function reply() {
   return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
@@ -219,18 +234,53 @@ function rowsForPayload(body) {
   return clean ? rowsForClean(clean) : [];
 }
 
-// True while this install is under its post limit for the window. Best
-// effort: a cache that cannot be read or written never blocks a post. Called
-// under the script lock, so the count cannot race.
+// True while this install is under its post limit for the current fixed
+// window (a 6 hour bucket of the clock, so later posts do not extend it).
+// Best effort: a cache that cannot be read or written never blocks a post.
+// Called under the script lock, so the count cannot race.
 function underRateLimit(installId) {
   try {
     var cache = CacheService.getScriptCache();
-    var key = 'rl_' + installId.toLowerCase();
+    var bucket = Math.floor(nowMs() / (RATE_WINDOW_SECONDS * 1000));
+    var key = 'rl_' + installId.toLowerCase() + '_' + bucket;
     var n = Number(cache.get(key)) || 0;
     if (n >= RATE_LIMIT_POSTS) return false;
     cache.put(key, String(n + 1), RATE_WINDOW_SECONDS);
   } catch (err) { /* best effort */ }
   return true;
+}
+
+// The global quota covers what the per-install limit cannot: a sender picks
+// its own installId, so fresh ids dodge that limit. Accepted posts from all
+// installs together are counted per UTC hour (CacheService) and per UTC day
+// (script properties, a cache cannot hold a value that long). Best effort, and
+// called under the script lock like underRateLimit.
+function underGlobalQuota() {
+  try {
+    var hour = Math.floor(nowMs() / 3600000);
+    if ((Number(CacheService.getScriptCache().get('g_h_' + hour)) || 0) >= GLOBAL_POSTS_PER_HOUR) return false;
+  } catch (err) { /* best effort */ }
+  try {
+    var day = Math.floor(nowMs() / 86400000);
+    var parts = String(PropertiesService.getScriptProperties().getProperty('q_day') || '').split(':');
+    if (Number(parts[0]) === day && (Number(parts[1]) || 0) >= GLOBAL_POSTS_PER_DAY) return false;
+  } catch (err) { /* best effort */ }
+  return true;
+}
+
+function countGlobalPost() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'g_h_' + Math.floor(nowMs() / 3600000);
+    cache.put(key, String((Number(cache.get(key)) || 0) + 1), 3700);
+  } catch (err) { /* best effort */ }
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var day = Math.floor(nowMs() / 86400000);
+    var parts = String(props.getProperty('q_day') || '').split(':');
+    var n = Number(parts[0]) === day ? (Number(parts[1]) || 0) : 0;
+    props.setProperty('q_day', day + ':' + (n + 1));
+  } catch (err) { /* best effort */ }
 }
 
 function appendRows(sheet, rows, sample) {
@@ -265,7 +315,8 @@ function doPost(e) {
     var lock = LockService.getScriptLock();
     try { lock.waitLock(10000); } catch (err) { return reply(); }
     try {
-      if (!underRateLimit(clean.installId)) return reply();
+      if (!underGlobalQuota() || !underRateLimit(clean.installId)) return reply();
+      countGlobalPost();
       appendRows(SpreadsheetApp.getActiveSpreadsheet().getActiveSheet(), rows, clean);
     } finally {
       lock.releaseLock();
