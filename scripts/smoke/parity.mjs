@@ -4,11 +4,16 @@
 //
 //   node scripts/smoke/parity.mjs --ws-port <n> --mcp-port <n> --out <prefix>
 //        [--expect-version <v>] [--expect-tools-sha <hex>] [--expect-jsx-sha <hex>]
-//        [--expect-tool-count <n>] [--timeout-check] [--no-auth]
+//        [--expect-tool-count <n>] [--timeout-check] [--no-auth] --token-file <path>
 //
 // Plays the panel over the WebSocket bridge and an MCP client over Streamable
 // HTTP, then asserts:
 //   - WS handshake policy: no Origin 101, foreign Origin 403, foreign Host 403
+//   - the mock panel authenticates like the real panel: it reads the daemon's
+//     bridge-token file (--token-file, next to the daemon's config.json),
+//     answers the daemon's challenge and checks the daemon's proof; a socket
+//     that registers without that, or answers with a wrong proof, is closed
+//     with code 4401
 //   - register + share_usage_stats (and auth_status unless --no-auth) replies
 //   - MCP foreign Origin / foreign Host 403; initialize with a session id and
 //     serverInfo.version == --expect-version
@@ -27,7 +32,7 @@
 // records every step either way.
 import http from 'node:http';
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -35,6 +40,15 @@ export const PROBE_CODE = 'app.beginUndoGroup("agent group");\nvar comp = app.pr
 export const PROBE_UNDO_LABEL = 'poc probe';
 // A runJSX whose request the mock panel deliberately never answers.
 export const NO_ANSWER_MARKER = '__gaffer_smoke_no_answer__';
+
+export const CLOSE_AUTH = 4401;
+const HANDSHAKE_LABEL = 'gaffer-bridge-v1';
+
+// HMAC over one side's label and the two nonces; the same formula as the
+// daemon (panel/daemon/bridge-token.js) and the panel (panel/bridge-auth.js).
+export function handshakeProof(token, side, first, second) {
+  return createHmac('sha256', token).update(HANDSHAKE_LABEL + ' ' + side + ' ' + first + ' ' + second).digest('hex');
+}
 
 export function sha256(s) { return createHash('sha256').update(s).digest('hex'); }
 
@@ -52,6 +66,7 @@ export function parseArgs(argv) {
     else if (a === '--expect-tool-count') o.expectToolCount = Number(next());
     else if (a === '--timeout-check') o.timeoutCheck = true;
     else if (a === '--no-auth') o.auth = false;
+    else if (a === '--token-file') o.tokenFile = next();
     else throw new Error('unknown argument ' + a);
   }
   for (const k of ['wsPort', 'mcpPort']) {
@@ -59,6 +74,7 @@ export function parseArgs(argv) {
     if (o[k] === 9823 || o[k] === 9824) throw new Error('refusing the default port ' + o[k] + ': it belongs to a live Gaffer daemon');
   }
   if (!o.out) throw new Error('--out <prefix> is required');
+  if (!o.tokenFile) throw new Error('--token-file <path to the daemon\'s bridge-token> is required');
   return o;
 }
 
@@ -70,6 +86,9 @@ export function evaluate(steps, opts) {
   if (st('ws_no_origin').status !== 101) f.push('WS handshake without Origin did not upgrade (want 101): ' + JSON.stringify(steps.ws_no_origin));
   if (st('ws_evil_origin').status !== 403) f.push('WS handshake with a foreign Origin was not refused (want 403): ' + JSON.stringify(steps.ws_evil_origin));
   if (st('ws_foreign_host').status !== 403) f.push('WS handshake with a foreign Host was not refused (want 403): ' + JSON.stringify(steps.ws_foreign_host));
+  if (!(steps.ws_handshake && steps.ws_handshake.authenticated === true)) f.push('mock panel handshake did not authenticate: ' + JSON.stringify(steps.ws_handshake));
+  if (st('ws_unauth_register').closeCode !== CLOSE_AUTH) f.push('an unauthenticated register was not refused with close ' + CLOSE_AUTH + ': ' + JSON.stringify(steps.ws_unauth_register));
+  if (st('ws_bad_proof').closeCode !== CLOSE_AUTH) f.push('a wrong proof was not refused with close ' + CLOSE_AUTH + ': ' + JSON.stringify(steps.ws_bad_proof));
   if (opts.auth && !(steps.auth_status_reply && steps.auth_status_reply.type === 'auth_status')) f.push('no auth_status reply');
   if (!(steps.share_usage_stats_reply && steps.share_usage_stats_reply.type === 'share_usage_stats')) f.push('no share_usage_stats reply');
   if (st('mcp_evil_origin').status !== 403) f.push('MCP request with a foreign Origin was not refused (want 403)');
@@ -148,6 +167,38 @@ function httpPost(port, path, body, headers, hostOverride, timeoutMs) {
   });
 }
 
+// The daemon writes bridge-token just after it starts listening; wait for it.
+async function readTokenFile(path, waitMs) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const t = fs.readFileSync(path, 'utf8').trim();
+      if (/^[0-9a-f]{64}$/.test(t)) return t;
+    } catch (e) { /* not there yet */ }
+    if (Date.now() - start > waitMs) return null;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+// One WebSocket, driven by `onMessage(msg, send)` until the socket closes or
+// `ms` pass. Resolves { closeCode } (null when still open at the deadline).
+function probeSocket(port, onOpen, onMessage, ms) {
+  return new Promise((resolve) => {
+    const sock = new WebSocket('ws://127.0.0.1:' + port);
+    const send = (m) => sock.send(JSON.stringify(m));
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); try { sock.close(); } catch (e) { /* closed */ } resolve(r); } };
+    const timer = setTimeout(() => finish({ closeCode: null, timedOut: true }), ms);
+    sock.onopen = () => { if (onOpen) onOpen(send); };
+    sock.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(String(ev.data)); } catch (e) { return; }
+      if (onMessage) onMessage(msg, send);
+    };
+    sock.onclose = (ev) => finish({ closeCode: ev.code });
+    sock.onerror = () => { /* the close event follows */ };
+  });
+}
+
 export async function runProbe(o) {
   const summary = { wsPort: o.wsPort, mcpPort: o.mcpPort, steps: {} };
   const t0 = Date.now();
@@ -160,10 +211,23 @@ export async function runProbe(o) {
   log('ws_foreign_host', await rawUpgrade(WS, {}, 'evil.example:' + WS));
   log('ws_null_origin', await rawUpgrade(WS, { Origin: 'null' }));
 
-  // 2. Mock panel: register like panel/main.js
+  // 1b. Sockets that do not authenticate are refused. Neither may reach register.
+  const token = await readTokenFile(o.tokenFile, 10000);
+  log('bridge_token', { found: token !== null });
+  log('ws_unauth_register', await probeSocket(WS,
+    (send) => send({ type: 'register', aeVersion: '98.0' }), null, 5000));
+  log('ws_bad_proof', await probeSocket(WS, null, (msg, send) => {
+    if (msg.type === 'auth_challenge') send({ type: 'auth', nonce: 'ab'.repeat(32), proof: '00'.repeat(32) });
+  }, 5000));
+
+  // 2. Mock panel: authenticate and register like panel/main.js
   const ws = new WebSocket('ws://127.0.0.1:' + WS);
   const received = [];
   let capturedJsx = null;
+  let trusted = false;
+  let handshakeError = null;
+  let serverNonce = null;
+  let clientNonce = null;
   const waitFor = (pred, ms) => new Promise((resolve) => {
     const start = Date.now();
     const iv = setInterval(() => {
@@ -173,6 +237,18 @@ export async function runProbe(o) {
   });
   ws.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(String(ev.data)); } catch (e) { received.push({ bad: String(ev.data) }); return; }
+    if (!trusted) {
+      // Like the panel: nothing counts until the daemon has proved it knows the token.
+      if (msg.type === 'auth_challenge' && token && typeof msg.nonce === 'string') {
+        serverNonce = msg.nonce;
+        clientNonce = randomBytes(32).toString('hex');
+        ws.send(JSON.stringify({ type: 'auth', nonce: clientNonce, proof: handshakeProof(token, 'client', serverNonce, clientNonce) }));
+      } else if (msg.type === 'auth_ok' && serverNonce) {
+        if (msg.proof === handshakeProof(token, 'server', clientNonce, serverNonce)) { trusted = true; received.push({ type: '__trusted' }); }
+        else handshakeError = 'daemon proof did not verify';
+      } else if (!handshakeError) handshakeError = 'unexpected message before auth_ok: ' + String(msg.type);
+      return;
+    }
     received.push(msg);
     if (msg.id && msg.code) {
       if (String(msg.code).indexOf(NO_ANSWER_MARKER) !== -1) return; // the timeout check
@@ -181,6 +257,8 @@ export async function runProbe(o) {
     }
   };
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('ws error')); });
+  const ok = await waitFor((m) => m.type === '__trusted', 5000);
+  log('ws_handshake', ok ? { authenticated: true } : { authenticated: false, error: handshakeError || (token ? 'no auth_ok within 5 s' : 'no bridge-token file at ' + o.tokenFile) });
   ws.send(JSON.stringify({ type: 'register', aeVersion: '99.0' }));
   if (o.auth) ws.send(JSON.stringify({ type: 'auth_status' }));
   ws.send(JSON.stringify({ type: 'get_share_usage_stats' }));

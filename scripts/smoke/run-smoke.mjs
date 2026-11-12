@@ -335,6 +335,8 @@ async function main() {
   if (!free) return finish(o, results);
 
   const startDaemon = async (cwd, entry, label) => {
+    // Every start writes a fresh bridge-token: drop the last daemon's so the probe cannot read a stale one.
+    try { fs.unlinkSync(path.join(state, 'bridge-token')); } catch (e) { /* none yet */ }
     const logPath = path.join(o.out, label + '-daemon.log');
     const fd = fs.openSync(logPath, 'w');
     const child = spawn(runtime, [entry], { cwd, env: daemonEnv, stdio: ['ignore', fd, fd], windowsHide: true });
@@ -344,7 +346,7 @@ async function main() {
   };
   const probe = (label, extraArgs) => {
     const prefix = path.join(o.out, label);
-    const r = run(runtime, [path.join(HERE, 'parity.mjs'), '--ws-port', String(o.wsPort), '--mcp-port', String(o.mcpPort), '--out', prefix].concat(o.noAuth ? ['--no-auth'] : [], extraArgs),
+    const r = run(runtime, [path.join(HERE, 'parity.mjs'), '--ws-port', String(o.wsPort), '--mcp-port', String(o.mcpPort), '--out', prefix, '--token-file', path.join(state, 'bridge-token')].concat(o.noAuth ? ['--no-auth'] : [], extraArgs),
       { env: strippedEnv(o.platform, process.env), timeout: 300000 });
     fs.writeFileSync(prefix + '.out', (r.stdout || '') + (r.stderr || ''));
     let summary = null;
