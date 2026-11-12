@@ -114,7 +114,7 @@ test('update.sh ends a failed rsync step with an ERROR line and err:sync, and ha
   assert.ok(!sh.includes('install_deps'), 'the npm block is gone');
   assert.ok(!/\bnpm\b/.test(sh.replace(/^\s*#.*$/gm, '')), 'no npm call outside comments');
   assert.ok(!sh.includes('err:npm'), 'err:npm is gone from the script and its contract comment');
-  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:runtime, err:sync'), 'the contract comment names the codes');
+  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:verify, err:runtime, err:sync'), 'the contract comment names the codes');
 });
 
 // ---- zero-dependency install: the runtime step (spec 6, 7) ----
@@ -134,8 +134,8 @@ test('update.sh checks the archive for daemon/daemon.mjs and orders recovery, st
   assert.ok(sh.includes('missing version.json or daemon/daemon.mjs'));
   const main = sh.slice(sh.indexOf(RT_LAST));
   const at = (s) => { const i = main.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
-  assert.ok(at('if ! recover_runtime; then') < at('if ! download_and_extract; then'), 'recovery runs before anything else is fetched');
-  assert.ok(at('if ! download_and_extract; then') < at('if ! stage_runtime; then'), 'the archive is extracted first, its own fetch-runtime.sh runs');
+  assert.ok(at('if ! recover_runtime; then') < at('if ! download_asset; then'), 'recovery runs before anything else is fetched');
+  assert.ok(at('if ! extract_archive; then') < at('if ! stage_runtime; then'), 'the archive is extracted first, its own fetch-runtime.sh runs');
   assert.ok(at('if ! stage_runtime; then') < at('stop_daemon\n'), 'staged while the daemon still runs');
   assert.ok(at('stop_daemon\n') < at('if ! swap_runtime; then'), 'stopped before the swap');
   assert.ok(at('if ! swap_runtime; then') < at('if ! sync_files; then'), 'swap, then sync');
@@ -249,11 +249,13 @@ test('update.sh freezes a non-leader holder before snapshotting its descendants 
 });
 
 test('update.sh ends a failed download or extract with an ERROR line and err:download', () => {
-  assert.ok(sh.includes('download_and_extract() {'));
-  const fn = sh.split('download_and_extract() {')[1].split('\n}\n')[0];
-  assert.ok(/curl -fsSL[^\n]* \|\| return 1 ;;/.test(fn), 'curl failure returns, not set -e exit');
-  assert.ok(fn.includes('tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" || return 1'), 'tar failure returns too');
-  assert.ok(sh.includes('if ! download_and_extract; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
+  assert.ok(sh.includes('download_asset() {') && sh.includes('extract_archive() {'));
+  const fn = sh.split('download_asset() {')[1].split('\n}\n')[0];
+  assert.ok(fn.includes('fetch_source "$ASSET_SOURCE" "$ARCHIVE" || return 1'), 'a failed fetch returns, not set -e exit');
+  assert.ok(/curl -fsSL[^\n]*"\$1" -o "\$2"/.test(sh.split('fetch_url() {')[1].split('\n}\n')[0]), 'curl is in fetch_url');
+  assert.ok(sh.split('extract_archive() {')[1].split('\n}\n')[0].includes('tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR" || return 1'), 'tar failure returns too');
+  assert.ok(sh.includes('if ! download_asset; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! extract_archive; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
   assert.ok(sh.includes('err:dev-install, err:lock, err:download'), 'the contract comment names the new code');
 });
 
@@ -616,7 +618,7 @@ const ps1Code = ps1.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const ps1Body = ps1.slice(ps1.indexOf('\ntry {\n'));
 
 test('update.ps1 names err:runtime in its contract and has no npm step or Node probe left', () => {
-  assert.ok(ps1.includes('err:download,\n#                           err:sync, err:runtime) after an ERROR line'), 'the contract comment names err:runtime instead of err:npm');
+  assert.ok(ps1.includes('err:download,\n#                           err:verify, err:sync, err:runtime) after an ERROR line'), 'the contract comment names err:runtime instead of err:npm');
   assert.ok(!/npm/i.test(ps1Code), 'a code line still mentions npm: ' + (ps1Code.split('\n').find((l) => /npm/i.test(l)) || '').trim());
   assert.ok(!ps1.includes('err:npm'), 'err:npm is gone');
   for (const probe of ['\\nodejs', 'NVM_SYMLINK', 'Get-Command node', '$env:Path = ']) {
@@ -802,7 +804,7 @@ test('update.ps1 takes -Repair and hands -Force to the archive\'s fetch-runtime.
 
 test('the Windows runtime harness has a repair case', () => {
   const t6 = readFileSync(fileURLToPath(new URL('./windows-tests/test-6-runtime-update.ps1', import.meta.url)), 'utf8');
-  for (const c of ['Case 5a: repair re-provisions a current runtime', 'Case 5b: a damaged runtime at the same version', 'Case 5c: a repair whose download fails']) {
+  for (const c of ['Case 5a: repair re-provisions a current runtime', 'Case 5b: a damaged runtime, plain update of an older install', 'Case 5c: a repair whose download fails']) {
     assert.ok(t6.includes(c), 'missing ' + c);
   }
   assert.ok(t6.includes('"-Repair"'), 'the harness never runs update.ps1 -Repair');
@@ -1342,11 +1344,13 @@ test('update.sh version_cmp agrees with the release gate on prerelease ordering 
   const pairs = [];
   for (const a of versions) for (const b of versions) pairs.push([a, b]);
   const body = pairs.map(([a, b]) => 'echo "$(version_cmp ' + a + ' ' + b + ')"').join('\n');
-  const r = runShSnippet(sh, 'version_cmp() {', '\n}\n', body, {});
+  const snip = sh.slice(sh.indexOf('num_cmp() {'), sh.indexOf('# An update must install a strictly newer'));
+  const run = (b) => { const x = spawnSync('bash', ['-c', 'set -euo pipefail\n' + snip + '\n' + b], { env: { PATH: process.env.PATH }, encoding: 'utf8' }); return { status: x.status, stdout: x.stdout.trim(), stderr: x.stderr.trim() }; };
+  const r = run(body);
   assert.equal(r.status, 0, r.stderr);
   const got = r.stdout.split('\n');
   pairs.forEach(([a, b], i) => assert.equal(Number(got[i]), compareVersions(a, b), a + ' vs ' + b));
-  const bad = runShSnippet(sh, 'version_cmp() {', '\n}\n', 'version_cmp 1.2 1.2.3 && echo ok || echo fail', {});
+  const bad = run('version_cmp 1.2 1.2.3 && echo ok || echo fail');
   assert.equal(bad.stdout, 'fail', 'a non-semver argument is an error, not an order');
 });
 
@@ -1438,9 +1442,10 @@ test('update.sh fetches over https only: every curl carries --proto and --proto-
 });
 
 test('update.sh documents what the checksum does and does not protect against', () => {
-  assert.match(sh, /same release/i);
-  assert.match(sh, /truncat/i);
-  assert.match(sh, /not (a |the )?(compromised|publisher)|does not protect against a (compromised|publisher)/i);
+  const prose = sh.replace(/\n#\s*/g, ' ');
+  assert.match(prose, /same release/i);
+  assert.match(prose, /truncated or partly uploaded/i);
+  assert.match(prose, /does not protect against a compromised publisher/i);
   assert.ok(!/[–—]/.test(sh.split('\n').filter((l) => /ERROR|echo/.test(l)).join('\n')), 'no dashes in log copy');
 });
 
@@ -1449,17 +1454,19 @@ test('update.ps1 verifies the download against SHA256SUMS.txt before it unpacks 
   const at = (s) => { const i = ps1.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
   assert.ok(ps1.includes('SHA256SUMS.txt'));
   assert.ok(ps1.includes('Get-FileHash -LiteralPath $zipPath -Algorithm SHA256'), 'hashes with Get-FileHash');
-  assert.ok(at('Test-DownloadHash') < at('Test-ZipEntries $zipPath'), 'hash first, then the entry listing');
+  assert.ok(at('Test-DownloadHash $zipPath') < at('Test-ZipEntries $zipPath'), 'hash first, then the entry listing');
   assert.ok(at('Test-ZipEntries $zipPath') < at('Expand-Archive -Path $zipPath'), 'entries checked before anything is unpacked');
-  assert.ok(at('Expand-Archive -Path $zipPath') < at('Test-VersionRule'), 'version rule after the version.json is readable');
-  assert.ok(at('Test-VersionRule') < at('$fetchScript = '), 'before the archive\'s fetch-runtime.ps1 is considered');
-  assert.ok(at('Test-VersionRule') < at('& powershell') || !ps1.includes('& powershell'), 'and before it runs');
+  assert.ok(at('Expand-Archive -Path $zipPath') < at('Test-VersionRule $latestVersion'), 'version rule after the version.json is readable');
+  assert.ok(at('Test-VersionRule $latestVersion') < at('$fetchScript = '), 'before the archive\'s fetch-runtime.ps1 is considered');
+  assert.ok(at('$fetchScript = ') < at('-File $fetchScript'), 'and so before it runs');
   const header = ps1.slice(0, ps1.indexOf('$lockPath = '));
   assert.ok(header.includes('err:verify'), 'the contract names err:verify');
   assert.match(ps1, /Exit-Update "[^"]*could not be verified[^"]*" "verify"/);
   assert.ok(ps1.includes('GAFFER_UPDATE_TEST_UNVERIFIED'), 'the same harness switch as update.sh');
-  assert.match(ps1, /same release/i);
-  assert.match(ps1, /truncat/i);
+  const prose = ps1.replace(/\n#\s*/g, ' ');
+  assert.match(prose, /same release/i);
+  assert.match(prose, /truncated or partly uploaded/i);
+  assert.match(prose, /does not protect against a compromised publisher/i);
 });
 
 test('update.ps1 refuses an archive that is not strictly newer (Repair: equal allowed), with the release gate\'s prerelease rules', () => {
@@ -1499,7 +1506,7 @@ test('update.ps1 fetches over https only: curl.exe with --proto and --proto-redi
 
 test('both updaters keep the .debug removal and the git-checkout refusal in front of everything new', () => {
   assert.ok(sh.indexOf('panel dir is inside a git repo (dev install)') < sh.indexOf('if ! download_asset; then'));
-  assert.ok(ps1.indexOf('inside a git repo (dev install)') < ps1.indexOf('Test-DownloadHash'));
+  assert.ok(ps1.indexOf('inside a git repo (dev install)') < ps1.indexOf('Test-DownloadHash $zipPath'));
   assert.ok(sh.includes('remove_debug_file() {') && ps1.includes('"$panelDir\\.debug"'));
 });
 
@@ -1508,6 +1515,7 @@ test('the harnesses set GAFFER_UPDATE_TEST_UNVERIFIED for their unsigned local a
   assert.ok(shHarness.includes('export GAFFER_UPDATE_TEST_UNVERIFIED=1'));
   const winHarness = read('./windows-tests/test-5-update-ps1.ps1');
   assert.ok(winHarness.includes('$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"'));
+  assert.ok(read('./windows-tests/test-6-runtime-update.ps1').includes('$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"'));
   // update.sh honours the switch only for a local file, never a URL.
   const fn = sh.split('verify_download() {')[1].split('\n}\n')[0];
   assert.ok(fn.includes('GAFFER_UPDATE_TEST_UNVERIFIED'));

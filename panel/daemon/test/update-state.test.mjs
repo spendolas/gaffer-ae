@@ -326,6 +326,24 @@ test('updateFailureText err:archive: the download was not a Gaffer release, own 
   assert.equal(U.failureNeedsRepair('archive'), false, 'nothing was changed, no Repair needed');
 });
 
+test('updateFailureText err:verify: "Update could not be verified", the current version still works, no dashes, no Repair offered', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const u = plain(U.updateFailureText('update', 'verify', log));
+  assert.equal(u.banner, 'Update could not be verified');
+  assert.equal(u.notice, 'Update could not be verified. Your current version still works.');
+  const r = plain(U.updateFailureText('repair', 'verify', log));
+  assert.equal(r.banner, 'Repair could not be verified');
+  assert.equal(r.notice, 'Repair could not be verified. Your current version still works. The updater log has details: ' + log + '.');
+  assert.ok(!/[\u2013\u2014]/.test(u.notice + u.banner + r.notice + r.banner));
+  assert.equal(U.failureNeedsRepair('verify'), false, 'nothing was changed, no Repair needed');
+  assert.equal(plain(U.updateToast('fail', 'update', 'verify', log)).action, null, 'a plain dismiss, like err:archive');
+});
+
+test('updateWaitStep: err:verify fails at once with its code', () => {
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:verify\n', exited: false })),
+    { action: 'fail', code: 'verify' });
+});
+
 test('updateFailureText err:internal (the updaters\' catch-all) gets the generic text naming the log', () => {
   const log = '/var/folders/x/T/gaffer-update.log';
   assert.deepEqual(plain(U.updateFailureText('update', 'internal', log)), { banner: 'Update did not complete', notice: 'Update did not complete. The updater log has details: ' + log + '.' });

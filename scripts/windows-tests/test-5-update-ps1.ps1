@@ -141,6 +141,9 @@ $fxPinsPath = Join-Path $fxDir "pins.json"
 [System.IO.File]::WriteAllText($fxPinsPath, ($fxPins | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
 $fxBase = ([System.Uri] ((Join-Path $fxDir "serve") + "\")).AbsoluteUri
 $env:GAFFER_FETCH_TEST = "1"
+# The assets here are built without a SHA256SUMS.txt. A downloaded update is
+# always verified; this switch only lets such a local asset through.
+$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"
 $env:GAFFER_FETCH_PINS = $fxPinsPath
 $env:GAFFER_FETCH_PLATFORM = "win-x64"
 $env:GAFFER_FETCH_BASE_OFFICIAL = $fxBase
@@ -995,7 +998,7 @@ try {
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue
-    foreach ($v in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN")) { Remove-Item "Env:\$v" -ErrorAction SilentlyContinue }
+    foreach ($v in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN", "GAFFER_UPDATE_TEST_UNVERIFIED")) { Remove-Item "Env:\$v" -ErrorAction SilentlyContinue }
     foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE", "GAFFER_UPDATE_TEST_STUCK_AFTER", "GAFFER_UPDATE_TEST_FAIL_LIST")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 }
