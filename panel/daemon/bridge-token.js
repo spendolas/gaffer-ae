@@ -42,7 +42,33 @@ export function isValidToken(token) {
 // permissions than the temp file (a rename keeps the new file's mode even when
 // an older, wider file was being replaced). Windows: the per-user %APPDATA%
 // folder is the access boundary and the mode bits are ignored.
-export function writeBridgeToken(token, path) {
+// The rename can fail briefly on Windows while an antivirus scanner, the file
+// indexer or a reader has the old token open (EPERM / EACCES / EBUSY). Try a
+// few times, a short pause apart, before giving up; anything else is final.
+export var RENAME_TRIES = 5;
+export var RENAME_DELAY_MS = 100;
+var TRANSIENT_RENAME = ['EPERM', 'EACCES', 'EBUSY'];
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(from, to, io) {
+  var rename = (io && io.rename) || renameSync;
+  var sleep = (io && io.sleep) || sleepSync;
+  for (var attempt = 1; ; attempt++) {
+    try {
+      rename(from, to);
+      return;
+    } catch (e) {
+      if (attempt >= RENAME_TRIES || TRANSIENT_RENAME.indexOf(e && e.code) === -1) throw e;
+      sleep(RENAME_DELAY_MS);
+    }
+  }
+}
+
+// `io` ({ rename, sleep }) is a test seam for the retry.
+export function writeBridgeToken(token, path, io) {
   if (!isValidToken(token)) throw new Error('bridge token must be 64 hex characters');
   var target = path || bridgeTokenPath();
   var dir = dirname(target);
@@ -54,7 +80,7 @@ export function writeBridgeToken(token, path) {
   try {
     writeFileSync(tmp, token, { mode: 0o600, flag: 'wx' });
     try { chmodSync(tmp, 0o600); } catch (e) { /* not supported on this platform */ }
-    renameSync(tmp, target);
+    renameWithRetry(tmp, target, io);
   } catch (e) {
     try { unlinkSync(tmp); } catch (e2) { /* already gone */ }
     throw e;

@@ -7,7 +7,8 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs as parityArgs, evaluate, PROBE_CODE, PROBE_UNDO_LABEL } from './parity.mjs';
+import { parseArgs as parityArgs, evaluate, PROBE_CODE, PROBE_UNDO_LABEL, handshakeProof } from './parity.mjs';
+import { clientProof, serverProof } from '../../panel/daemon/bridge-token.js';
 import {
   parseArgs as smokeArgs, strippedEnv, envForPowerShell, checkBinaryAgainstPin, teamIdFromCodesign,
   parseTapCounts, compareParity, findNodeModules, PLACEHOLDER_PIN,
@@ -21,13 +22,16 @@ function goodSteps() {
     ws_no_origin: { status: 101, upgraded: true },
     ws_evil_origin: { status: 403 },
     ws_foreign_host: { status: 403 },
+    ws_handshake: { authenticated: true },
+    ws_unauth_register: { closeCode: 4401 },
+    ws_bad_proof: { closeCode: 4401 },
     auth_status_reply: { type: 'auth_status' },
     share_usage_stats_reply: { type: 'share_usage_stats', enabled: false },
     mcp_evil_origin: { status: 403 },
     mcp_foreign_host: { status: 403 },
     mcp_initialize: { status: 200, sessionId: true, serverInfo: { name: 'gaffer', version: '0.12.0' } },
     mcp_tools_list: { status: 200, count: 26 },
-    tools_sha256: { sha256: baseline.toolsSha256, bytes: 35952 },
+    tools_sha256: { sha256: baseline.toolsSha256, bytes: 36112 },
     mcp_runJSX: { status: 200, result: { content: [{ type: 'text', text: '{"ok":true}' }] } },
     jsx_captured: { captured: true, sha256: baseline.jsxSha256, agentUndoGroupStripped: true, gafferUndoGroupPresent: true, guardPresent: true },
     runjsx_timeout: { status: 200, elapsedMs: 60001, isError: true, text: '{"ok":false,"error":"runJSX timed out after 60s"}' },
@@ -39,8 +43,8 @@ const allOpts = { auth: true, timeoutCheck: true, expectVersion: '0.12.0', expec
 test('parity: the PoC probe inputs are unchanged (the P8 hashes depend on them)', () => {
   assert.equal(PROBE_CODE, 'app.beginUndoGroup("agent group");\nvar comp = app.project.activeItem;\nvar a = 1 + 41;\napp.endUndoGroup();\na');
   assert.equal(PROBE_UNDO_LABEL, 'poc probe');
-  // P8 was 68693916...8223; moved with zod 4 (parity-baseline.json "note").
-  assert.equal(baseline.toolsSha256, '9620aefdc3524d6e84ce219e582c99ea3bf0d7a1953b8690b58e766564d22e25');
+  // P8 was 68693916...8223; moved with zod 4 and again in 0.12.2 (parity-baseline.json "note").
+  assert.equal(baseline.toolsSha256, '2aa54c7b3e8b08f932076e97778dc3f726ed5b654a2a75df83b104b7dff05491');
   assert.equal(baseline.jsxSha256, 'db239664e741baa4ca260e0b29251f91fbc910c67c478529dc941d2b76717faf');
 });
 
@@ -53,6 +57,11 @@ test('parity: each broken rule is reported', () => {
     ['ws_evil_origin', { status: 101 }, /foreign Origin/],
     ['ws_foreign_host', { status: 101 }, /foreign Host/],
     ['ws_no_origin', { status: 403 }, /without Origin/],
+    ['ws_handshake', { authenticated: false, error: 'no auth_challenge' }, /handshake did not authenticate/],
+    ['ws_handshake', undefined, /handshake did not authenticate/],
+    ['ws_unauth_register', { closeCode: 1000 }, /unauthenticated register/],
+    ['ws_unauth_register', { registered: true }, /unauthenticated register/],
+    ['ws_bad_proof', { closeCode: 1000 }, /wrong proof/],
     ['auth_status_reply', null, /auth_status/],
     ['mcp_initialize', { status: 200, sessionId: true, serverInfo: { version: '0.11.3' } }, /serverInfo.version/],
     ['tools_sha256', { sha256: 'x' }, /tools\/list sha256/],
@@ -86,8 +95,22 @@ test('parity: argument parsing refuses the live daemon ports', () => {
   assert.throws(() => parityArgs(['--ws-port', '9823', '--mcp-port', '27832', '--out', 'x']), /default port 9823/);
   assert.throws(() => parityArgs(['--ws-port', '27831', '--mcp-port', '9824', '--out', 'x']), /default port 9824/);
   assert.throws(() => parityArgs(['--ws-port', '27831', '--mcp-port', '27832']), /--out/);
-  const o = parityArgs(['--ws-port', '27831', '--mcp-port', '27832', '--out', 'x', '--timeout-check', '--no-auth', '--expect-tool-count', '26']);
-  assert.equal(o.timeoutCheck, true); assert.equal(o.auth, false); assert.equal(o.expectToolCount, 26);
+  assert.throws(() => parityArgs(['--ws-port', '27831', '--mcp-port', '27832', '--out', 'x']), /--token-file/);
+  const o = parityArgs(['--ws-port', '27831', '--mcp-port', '27832', '--out', 'x', '--token-file', 'state/bridge-token', '--timeout-check', '--no-auth', '--expect-tool-count', '26']);
+  assert.equal(o.timeoutCheck, true); assert.equal(o.auth, false); assert.equal(o.expectToolCount, 26); assert.equal(o.tokenFile, 'state/bridge-token');
+});
+
+test('parity: handshake proofs equal the daemon\'s (same formulas, so the mock panel is accepted)', () => {
+  const token = 'ab'.repeat(32);
+  assert.equal(handshakeProof(token, 'client', 'S1', 'C1'), clientProof(token, 'S1', 'C1'));
+  assert.equal(handshakeProof(token, 'server', 'C1', 'S1'), serverProof(token, 'C1', 'S1'));
+  assert.notEqual(handshakeProof(token, 'client', 'S1', 'C1'), handshakeProof(token, 'server', 'S1', 'C1'));
+});
+
+test('run-smoke gives parity.mjs the token file next to the daemon config and clears a stale one before each start', () => {
+  const src = readFileSync(new URL('./run-smoke.mjs', import.meta.url), 'utf8');
+  assert.ok(/'--token-file', path\.join\(state, 'bridge-token'\)/.test(src), 'probe must pass --token-file <state>/bridge-token');
+  assert.ok(/unlinkSync\(path\.join\(state, 'bridge-token'\)\)|rmSync\(path\.join\(state, 'bridge-token'\)/.test(src), 'a stale token must be removed before each daemon start');
 });
 
 test('run-smoke: argument parsing', () => {

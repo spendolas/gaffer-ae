@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { renameSync as realRename, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -63,6 +63,44 @@ test('writeBridgeToken tightens a pre-existing wide-open file (mode comes from t
   writeFileSync(p, 'old', { mode: 0o644 });
   T.writeBridgeToken(T.newBridgeToken());
   if (process.platform !== 'win32') assert.equal(statSync(p).mode & 0o777, 0o600);
+});
+
+function transient(code) { var e = new Error(code + ': simulated'); e.code = code; return e; }
+
+test('writeBridgeToken retries a transient rename failure (5 tries, 100 ms apart) and then succeeds', () => {
+  var token = T.newBridgeToken();
+  var calls = 0;
+  var sleeps = [];
+  var target = join(dirname(T.bridgeTokenPath()), 'retry-token');
+  T.writeBridgeToken(token, target, {
+    rename: (from, to) => { calls++; if (calls < 5) throw transient(calls % 2 ? 'EPERM' : 'EACCES'); return realRename(from, to); },
+    sleep: (ms) => sleeps.push(ms),
+  });
+  assert.equal(calls, 5);
+  assert.deepEqual(sleeps, [100, 100, 100, 100]);
+  assert.equal(readFileSync(target, 'utf8'), token);
+  assert.deepEqual(readdirSync(dirname(target)).filter((n) => n.endsWith('.tmp')), []);
+});
+
+test('writeBridgeToken gives up after 5 failed renames, rethrows, and leaves no temp file', () => {
+  var calls = 0;
+  var target = join(dirname(T.bridgeTokenPath()), 'giveup-token');
+  assert.throws(() => T.writeBridgeToken(T.newBridgeToken(), target, {
+    rename: () => { calls++; throw transient('EBUSY'); },
+    sleep: () => {},
+  }), (e) => e.code === 'EBUSY');
+  assert.equal(calls, 5);
+  assert.deepEqual(readdirSync(dirname(target)).filter((n) => n.endsWith('.tmp')), []);
+});
+
+test('writeBridgeToken does not retry an error that is not transient', () => {
+  var calls = 0;
+  var target = join(dirname(T.bridgeTokenPath()), 'nonretry-token');
+  assert.throws(() => T.writeBridgeToken(T.newBridgeToken(), target, {
+    rename: () => { calls++; throw transient('ENOSPC'); },
+    sleep: () => { throw new Error('must not sleep'); },
+  }), (e) => e.code === 'ENOSPC');
+  assert.equal(calls, 1);
 });
 
 test('writeBridgeToken refuses a malformed token', () => {
