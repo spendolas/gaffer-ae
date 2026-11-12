@@ -11,6 +11,11 @@
 - Gaffer chat needs a recent Claude Code. On an older version the panel shows "Update Claude Code to use Gaffer chat" instead of starting a chat.
 - Frames that Gaffer captures and screenshots you paste are now sent to Claude directly as images. Large images are scaled down first, and an image that is too large to scale is skipped with a note.
 - After updating, the first message in an existing chat starts a fresh conversation (you will see "Previous session expired"). Your chat history stays visible in the panel, but Claude does not remember the earlier conversation.
+- Gaffer now checks a downloaded update before installing it. It compares the file with the checksum published in the same release, and it refuses an update that is not newer than the version you have (Repair can still reinstall the same version). If the check fails, the panel shows "Update could not be verified" and your current version keeps working.
+- The checksum comes from the same release as the update, so it protects against incomplete or mismatched downloads. It is not a signature, and signed releases are planned for a later version. Only versions that already include this check verify updates, so the update that brings you to this version is still installed the old way.
+- Updates are downloaded over secure connections only, and an update package with unexpected contents (links, files outside Gaffer's own folder) is refused before anything is unpacked.
+- Optional usage statistics are cleaned before they are sent: model names are reduced to plain lower case letters, digits, dots and dashes, and at most ten models go in one report. The address statistics are sent to can only be redirected to your own computer, for testing.
+- The service that receives usage statistics now validates every field it gets before storing it, limits how often one install can post, and stops growing at a fixed size. Nothing changes for you; it takes effect once the service is updated.
 
 ## v0.12.1 - 2026-10-26
 
