@@ -28,10 +28,21 @@ var __dirname = dirname(fileURLToPath(import.meta.url));
 // throwaway file so an interrupted run never blanks the real one).
 var BUFFER_PATH = process.env.GAFFER_BUFFER_PATH || join(__dirname, '..', '.gaffer-usage-buffer.json');
 // Real, deployed, verified-working Apps Script Web App (temporary stand-in
-// until a real backend exists). Env-var overridable so swapping the
-// destination later is a one-line change.
-var TELEMETRY_URL = process.env.GAFFER_TELEMETRY_URL
-  || 'https://script.google.com/macros/s/AKfycbx4aKRz_jB1EXe0JkZz4m4SNdGvCt7nIWCoWtXQKsd0EJ8pM4iyJ8LJMZ0qmEVUiCuE/exec';
+// until a real backend exists). GAFFER_TELEMETRY_URL redirects it for tests
+// and local runs, and is honoured for a loopback address only (127.0.0.1,
+// localhost, [::1], no credentials in the URL): anywhere else the variable is
+// ignored, so a stray environment value can never send usage data to another
+// host.
+export var DEFAULT_TELEMETRY_URL = 'https://script.google.com/macros/s/AKfycbx4aKRz_jB1EXe0JkZz4m4SNdGvCt7nIWCoWtXQKsd0EJ8pM4iyJ8LJMZ0qmEVUiCuE/exec';
+export function resolveTelemetryUrl(override) {
+  if (typeof override !== 'string' || !override) return DEFAULT_TELEMETRY_URL;
+  var u;
+  try { u = new URL(override); } catch (e) { return DEFAULT_TELEMETRY_URL; }
+  var loopback = ['127.0.0.1', 'localhost', '[::1]'].indexOf(u.hostname) !== -1;
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !loopback || u.username || u.password) return DEFAULT_TELEMETRY_URL;
+  return override;
+}
+var TELEMETRY_URL = resolveTelemetryUrl(process.env.GAFFER_TELEMETRY_URL);
 
 // In-flight flush guard — a simple boolean lock so overlapping flush
 // triggers (e.g. last-panel-disconnect and SIGTERM firing close together)
@@ -244,22 +255,60 @@ function cleanErrorKinds(map) {
   return out;
 }
 
-// The byModel map with cliVersion and cliSource re-run through their
-// sanitizers, so a hand-edited or corrupted buffer can never smuggle free
-// text out under those keys at send time (recordUsage sanitizes on the way
-// in; this is the belt to that brace). Other bucket fields are copied as is.
+// One half of a model key as the receiving sheet accepts it: lower case,
+// only [a-z0-9.-], no leading or trailing - or ., at most 40 characters.
+// Anything else becomes a dash; nothing left reads as "unknown".
+function sanitizeModelPart(part) {
+  var p = String(part).toLowerCase().replace(/[^a-z0-9.\-]+/g, '-').replace(/-{2,}/g, '-');
+  p = p.replace(/^[-.]+/, '').slice(0, 40).replace(/[-.]+$/, '');
+  return p || 'unknown';
+}
+
+// A byModel key ("<model>" or "<model>::<requested model>") reduced to the
+// pattern the sheet endpoint checks, ^[a-z0-9.-]{1,40}(::[a-z0-9.-]{1,40})?$.
+// Only the first :: separates the halves. null for a key that is not a string.
+export function sanitizeModelKey(key) {
+  if (typeof key !== 'string') return null;
+  var at = key.indexOf('::');
+  if (at === -1) return sanitizeModelPart(key);
+  return sanitizeModelPart(key.slice(0, at)) + '::' + sanitizeModelPart(key.slice(at + 2));
+}
+
+var MAX_MODELS_PER_SEND = 10;
+var COUNTER_FIELDS = ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd'];
+
+// The byModel map as it is sent: keys re-run through sanitizeModelKey (two
+// keys that collapse to one are added together), cliVersion and cliSource
+// re-run through their sanitizers, and only the ten busiest models kept, so a
+// hand-edited or corrupted buffer can never smuggle free text out under
+// those keys at send time (recordUsage sanitizes on the way in; this is the
+// belt to that brace). Other bucket fields are copied as is.
 function cleanByModel(map) {
-  var out = {};
-  if (!map || typeof map !== 'object') return out;
-  Object.keys(map).forEach(function (key) {
-    var b = map[key];
+  var out = Object.create(null);
+  if (!map || typeof map !== 'object') return {};
+  Object.keys(map).forEach(function (rawKey) {
+    var b = map[rawKey];
     if (!b || typeof b !== 'object') return;
+    var key = sanitizeModelKey(rawKey);
+    if (!key) return;
     var copy = Object.assign({}, b);
     copy.cliVersion = sanitizeCliVersion(b.cliVersion);
     copy.cliSource = sanitizeCliSource(b.cliSource);
+    var prev = out[key];
+    if (prev) {
+      COUNTER_FIELDS.forEach(function (f) {
+        if (typeof copy[f] === 'number' || typeof prev[f] === 'number') prev[f] = (Number(prev[f]) || 0) + (Number(copy[f]) || 0);
+      });
+      if (prev.cliVersion === 'unknown') prev.cliVersion = copy.cliVersion;
+      if (prev.cliSource === 'unknown') prev.cliSource = copy.cliSource;
+      return;
+    }
     out[key] = copy;
   });
-  return out;
+  var keys = Object.keys(out).sort(function (a, b) { return (Number(out[b].turns) || 0) - (Number(out[a].turns) || 0); });
+  var result = {};
+  keys.slice(0, MAX_MODELS_PER_SEND).forEach(function (k) { result[k] = out[k]; });
+  return result;
 }
 
 // Deletes the on-disk buffer only while it still holds the flushed day. A
