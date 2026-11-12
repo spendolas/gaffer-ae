@@ -246,7 +246,11 @@ test('chat base dir derives from the per-user config path module, not a second c
   var old = process.env.GAFFER_CHAT_DIR;
   delete process.env.GAFFER_CHAT_DIR;
   try {
-    assert.equal(chatBaseDir(), dirname(process.env.GAFFER_CONFIG_PATH));
+    // Windows prefers the local (not roaming) app-data folder on purpose.
+    var expected = (process.platform === 'win32' && process.env.LOCALAPPDATA)
+      ? join(process.env.LOCALAPPDATA, 'Gaffer')
+      : dirname(process.env.GAFFER_CONFIG_PATH);
+    assert.equal(chatBaseDir(), expected);
   } finally {
     if (old !== undefined) process.env.GAFFER_CHAT_DIR = old;
   }
@@ -318,7 +322,11 @@ test('runHelpToFile: reads the whole help even when the CLI prints a lot and exi
   // after printing; the probe reads from a file instead.
   var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-fakecli-'));
   var bin = join(dir, 'claude');
-  writeFileSync(bin, '#!' + process.execPath + '\nprocess.stdout.write("x".repeat(200000) + "\\n  --tools <tools...>  end\\n"); process.exit(0);\n', { mode: 0o755 });
+  var js = join(dir, 'fake-help.js');
+  writeFileSync(js, 'process.stdout.write("x".repeat(200000) + "\\n  --tools <tools...>  end\\n"); process.exit(0);\n');
+  // A shell wrapper, not '#!' + execPath: the runtime can sit in a folder with a
+  // space (the smoke job's does), and a shebang cannot hold one.
+  writeFileSync(bin, '#!/bin/sh\nexec "' + process.execPath + '" "' + js + '"\n', { mode: 0o755 });
   var text = await runHelpToFile(bin, process.env);
   assert.ok(text && text.length > 200000);
   assert.match(text, /--tools <tools\.\.\.>  end/);
