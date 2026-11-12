@@ -1586,3 +1586,24 @@ test('package-release.sh fails the build when the staged package holds a symlink
   const pr = read('./package-release.sh');
   assert.ok(pr.includes('[ -z "$(find "$STAGE" -type l -print -quit)" ] || fail "symlink present'));
 });
+
+// Windows PowerShell 5.1 reads "$name:" inside a double-quoted string as the
+// start of a drive-qualified variable ($env:X, $script:X) and refuses to parse
+// the whole file when a non-name character follows ("v$version: it is..."
+// broke update.ps1 until the Windows VM run caught it). Write ${name}: instead.
+test('no .ps1 has "$name:" followed by a non-name character (PS 5.1 parse trap)', () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.name === 'node_modules' || e.name === '.git' || e.name === 'runtime') return [];
+    const p = join(dir, e.name);
+    return e.isDirectory() ? walk(p) : (/\.ps1$/i.test(e.name) ? [p] : []);
+  });
+  const hits = [];
+  for (const f of walk(root)) {
+    readFileSync(f, 'utf8').split(/\r?\n/).forEach((line, i) => {
+      if (/^\s*#/.test(line)) return;
+      for (const m of line.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*):(?![A-Za-z_$])/g)) hits.push(f.slice(root.length) + ':' + (i + 1) + ': ' + m[0]);
+    });
+  }
+  assert.deepEqual(hits, []);
+});
