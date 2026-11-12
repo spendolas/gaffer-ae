@@ -16,6 +16,7 @@ import {
   extractPastedImages, buildStreamJsonInput, isValidSessionId, isValidModelName,
 } from './chat-lockdown.js';
 import { loadImageForModel } from './capture-image.js';
+import { normalizeSvgIconBuffer } from './svg-icon.js';
 // Vendored shared module (panel/daemon/vendor, see CLAUDE.md): live model
 // discovery. Change it in its own repo, then `npm run sync-vendor`.
 import { createModelCatalog, EFFORT_LEVELS } from './vendor/claude-model-catalog/index.mjs';
@@ -408,6 +409,7 @@ function toDataUrl(file, buf) {
   else if (buf.length > 4 && buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0) mime = 'image/x-icon';
   else if (/\.svg$/i.test(file) || /^\s*<(\?xml|svg)/i.test(buf.slice(0, 100).toString())) mime = 'image/svg+xml';
   else mime = /\.png$/i.test(file) ? 'image/png' : /\.(jpe?g)$/i.test(file) ? 'image/jpeg' : 'image/x-icon';
+  if (mime === 'image/svg+xml') buf = normalizeSvgIconBuffer(buf);
   return 'data:' + mime + ';base64,' + buf.toString('base64');
 }
 
