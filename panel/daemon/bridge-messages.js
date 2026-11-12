@@ -152,6 +152,9 @@ export function chatErrorText(reason) {
   if (r.indexOf('message: too_big') === 0 || r.indexOf('(message): too large') === 0) {
     return 'That message is too long to send. Shorten it or split it into parts.';
   }
+  if (r.indexOf('enabledMcps: too_big') === 0) {
+    return 'Too many connectors are switched on (the limit is ' + MAX_MCPS + '). Turn some off in Settings and try again.';
+  }
   if (r.indexOf('enabledMcps') === 0) {
     return 'One of the enabled connectors has a name Gaffer cannot send. Turn connectors off in Settings and try again.';
   }

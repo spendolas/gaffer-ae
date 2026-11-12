@@ -168,6 +168,8 @@ test('unknown types, non-objects and arrays are rejected', () => {
 test('chatErrorText: plain, specific for the two fixable causes, no dashes', () => {
   assert.match(chatErrorText('message: too_big'), /too long/i);
   assert.match(chatErrorText('enabledMcps.0: invalid_format'), /connector/i);
+  assert.match(chatErrorText('enabledMcps: too_big'), /too many connectors.*32/i);
+  assert.doesNotMatch(chatErrorText('enabledMcps: too_big'), /name/i);
   assert.ok(chatErrorText('model: invalid_format').length > 10);
   for (var r of ['message: too_big', 'enabledMcps.0: x', 'other: y', '(message): too large']) assert.ok(!/[\u2013\u2014]/.test(chatErrorText(r)));
 });
