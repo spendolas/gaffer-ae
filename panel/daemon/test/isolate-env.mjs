@@ -49,6 +49,7 @@ if (claimPath('GAFFER_CONFIG_PATH', 'gaffer-test-config-' + runTag + '.json')) {
 }
 // The chat agent's private working directory and MCP config folder
 // (chat-lockdown.js) would otherwise be created next to the real config.
+process.env.GAFFER_TEST = '1'; // chatBaseDir() honours GAFFER_CHAT_DIR only with this
 if (!process.env.GAFFER_CHAT_DIR) {
   var chatDir = mkdtempSync(join(tmpdir(), 'gaffer-test-chat-'));
   process.env.GAFFER_CHAT_DIR = chatDir;

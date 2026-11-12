@@ -18,6 +18,7 @@ import { resetKnownMcpIdsForTests, knownMcpIds } from '../chat-handler.js';
 // directory or the MCP-less compaction call goes missing.
 
 var chatDir = mkdtempSync(join(tmpdir(), 'gaffer-test-chatdir-'));
+process.env.GAFFER_TEST = '1';
 process.env.GAFFER_CHAT_DIR = chatDir;
 
 function fakeChild() {

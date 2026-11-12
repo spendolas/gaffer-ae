@@ -179,11 +179,14 @@ export function readUserMcpServers(deps) {
 // from config-path.js (the one place that path is computed). On Windows the
 // local (not roaming) app-data folder is preferred: these folders hold
 // temporary files that must not follow a roaming profile. GAFFER_CHAT_DIR
-// overrides everything for tests. opts: platform, env (test seams).
+// overrides everything for tests, and only next to GAFFER_TEST=1 (like the
+// port overrides in ports.js): the panel's launch passes its environment
+// through, so a stray variable must never move these folders in production.
+// opts: platform, env (test seams).
 export function chatBaseDir(opts) {
   var env = (opts && opts.env) || process.env;
   var platform = (opts && opts.platform) || process.platform;
-  if (env.GAFFER_CHAT_DIR) return env.GAFFER_CHAT_DIR;
+  if (env.GAFFER_TEST === '1' && env.GAFFER_CHAT_DIR) return env.GAFFER_CHAT_DIR;
   if (platform === 'win32' && env.LOCALAPPDATA) return join(env.LOCALAPPDATA, 'Gaffer');
   return dirname(getConfigPath());
 }

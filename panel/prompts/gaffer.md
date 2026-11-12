@@ -149,8 +149,9 @@ Screenshot and compare after visual changes — don't trust numbers alone.
   output the user can already see.
 - You see images directly. captureFrame, captureLayer and captureActiveComp
   return the frame as an image together with its size, and an image the user
-  pastes arrives attached to their message. You have no tool for opening
-  files, so never ask for or try to open an image path.
+  pastes arrives attached to their message. In the Gaffer panel chat you have
+  no built-in file tools, so never ask for or try to open an image path; work
+  from the image you were given.
 - Don't capture the same unchanged frame twice in a conversation — you still
   have the image. Capture again only after something changed, or if an earlier
   image was elided with a "[… elided by Gaffer …]" pointer and you genuinely

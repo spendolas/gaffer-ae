@@ -529,6 +529,13 @@ test('writeMcpConfigFile: every call gets its own file name', { skip: process.pl
   assert.equal(names.size, 20);
 });
 
+test('chatBaseDir: GAFFER_CHAT_DIR counts only next to GAFFER_TEST=1 (never in production)', () => {
+  var base = dirname(process.env.GAFFER_CONFIG_PATH);
+  assert.equal(chatBaseDir({ platform: 'darwin', env: { GAFFER_CHAT_DIR: '/somewhere/else' } }), base);
+  assert.equal(chatBaseDir({ platform: 'darwin', env: { GAFFER_TEST: 'true', GAFFER_CHAT_DIR: '/somewhere/else' } }), base);
+  assert.equal(chatBaseDir({ platform: 'darwin', env: { GAFFER_TEST: '1', GAFFER_CHAT_DIR: '/somewhere/else' } }), '/somewhere/else');
+});
+
 test('chatBaseDir: on Windows the local app-data folder is preferred over the roaming one', () => {
   var old = process.env.GAFFER_CHAT_DIR;
   delete process.env.GAFFER_CHAT_DIR;
