@@ -6,8 +6,10 @@ set -euo pipefail
 
 PANEL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DAEMON_DIR="$PANEL_DIR/daemon"
-TMP_DIR="${TMPDIR:-/tmp}/gaffer-update-$$"
-EXTRACT_DIR="$TMP_DIR/extract"
+# The temp folder is created by mktemp -d (0700, an unpredictable name) just
+# before the download; until then there is nothing to clean up.
+TMP_DIR=""
+EXTRACT_DIR=""
 ASSET_NAME="gaffer-update-mac.tar.gz"
 # GAFFER_UPDATE_ASSET overrides the download source with another URL or a
 # local file path. Only scripts/test-update-sh.sh and pre-release checks set it.
@@ -25,13 +27,15 @@ echo "=== Update started: $(date) ==="
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed, always right after an ERROR line. Codes:
-#                           err:dev-install, err:lock, err:download, err:verify, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal, err:stopped
+#                           err:dev-install, err:lock, err:download, err:verify, err:version, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal, err:stopped
 #                           err:dev-install: the panel is a git checkout, refused
 #                           err:lock: the update lock could not be created or taken
 #                           err:download: the asset could not be fetched or unpacked
 #                           err:verify: the download could not be verified (no SHA256SUMS.txt, no line
-#                           or a different hash for the asset) or is not a newer release than the
-#                           installed one; nothing was unpacked or changed
+#                           or a different hash for the asset); nothing was unpacked or changed
+#                           err:version: the release is verified but not newer than the installed one
+#                           (a Repair may reinstall the same version, never an older one); the install
+#                           is untouched
 #                           err:archive: it is not a Gaffer release (an entry that is a link, a device
 #                           or leaves its folder, no version.json, no daemon/daemon.mjs, or no valid
 #                           version in version.json); the install is untouched
@@ -637,11 +641,12 @@ fi
 # "Force stop & retry", whose second updater exits busy against this lock,
 # so a slow run is never corrupted, only late. A 4xx answer (404 on a
 # missing asset) is final: curl does not retry it.
-if ! mkdir -p "$EXTRACT_DIR"; then
-  echo "ERROR: could not create the temporary folder $EXTRACT_DIR (disk full or read-only?)"
+if ! TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-update.XXXXXX")" || ! mkdir -p "$TMP_DIR/extract"; then
+  echo "ERROR: could not create a temporary folder in ${TMPDIR:-/tmp} (disk full or read-only?)"
   result_line "err:internal"
   exit 1
 fi
+EXTRACT_DIR="$TMP_DIR/extract"
 ARCHIVE="$TMP_DIR/$ASSET_NAME"
 case "$ASSET_SOURCE" in
   http://*|https://*) SUMS_SOURCE="${ASSET_SOURCE%/*}/SHA256SUMS.txt" ;;
@@ -895,7 +900,7 @@ if ! version_cmp "$LATEST_VERSION" 0.0.0 >/dev/null 2>&1; then
 fi
 if ! check_version_rule; then
   echo "ERROR: the downloaded update is not a newer release, nothing was changed"
-  result_line "err:verify"
+  result_line "err:version"
   exit 1
 fi
 

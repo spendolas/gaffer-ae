@@ -53,11 +53,12 @@ if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download,
-#                           err:verify, err:sync, err:runtime) after an ERROR line
+#                           err:verify, err:version, err:sync, err:runtime) after an ERROR line
 #                           (err:verify: the download could not be verified
-#                           against SHA256SUMS.txt, or is not a newer release
-#                           than the installed one; nothing was unpacked or
-#                           changed;
+#                           against SHA256SUMS.txt; nothing was unpacked or
+#                           changed; err:version: verified but not newer than
+#                           the installed release (Repair may reinstall the same
+#                           version, never an older one), the install is untouched;
 #                           (err:runtime before the swap: install untouched;
 #                           err:runtime-swap: moving the new runtime into
 #                           place failed, or restoring an interrupted
@@ -846,7 +847,7 @@ function Test-ZipEntries([string] $path) {
 # (as numbers) and text. Returns -1, 0 or 1, or $null when an argument is not
 # a version.
 function Compare-GafferVersion([string] $a, [string] $b) {
-    $re = '^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?$'
+    $re = '^([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?\z'
     $ma = [regex]::Match($a, $re)
     $mb = [regex]::Match($b, $re)
     if (-not $ma.Success -or -not $mb.Success) { return $null }
@@ -860,13 +861,13 @@ function Compare-GafferVersion([string] $a, [string] $b) {
     if ($pa -ceq $pb) { return 0 }
     if (-not $pa) { return 1 }
     if (-not $pb) { return -1 }
-    $ca = [regex]::Matches($pa, '\d+|\D+')
-    $cb = [regex]::Matches($pb, '\d+|\D+')
+    $ca = [regex]::Matches($pa, '[0-9]+|[^0-9]+')
+    $cb = [regex]::Matches($pb, '[0-9]+|[^0-9]+')
     $n = [Math]::Min($ca.Count, $cb.Count)
     for ($i = 0; $i -lt $n; $i++) {
         $x = $ca[$i].Value
         $y = $cb[$i].Value
-        if ($x -match '^\d' -and $y -match '^\d') {
+        if ($x -match '^[0-9]' -and $y -match '^[0-9]') {
             $x = $x.TrimStart('0')
             $y = $y.TrimStart('0')
             if ($x.Length -ne $y.Length) { if ($x.Length -lt $y.Length) { return -1 } else { return 1 } }
@@ -947,7 +948,11 @@ function Test-VersionRule([string] $newVersion) {
         Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
     }
     # Verified before it is listed or unpacked (the order is part of the rule).
-    $verifyProblem = Test-DownloadHash $zipPath $sumsSource
+    try {
+        $verifyProblem = Test-DownloadHash $zipPath $sumsSource
+    } catch {
+        $verifyProblem = "the check itself failed: $($_.Exception.Message)"
+    }
     if ($verifyProblem) {
         Write-Host "Cannot verify the download: $verifyProblem"
         Exit-Update "the downloaded update could not be verified, nothing was changed" "verify"
@@ -987,7 +992,7 @@ function Test-VersionRule([string] $newVersion) {
     $versionProblem = Test-VersionRule $latestVersion
     if ($versionProblem) {
         Write-Host $versionProblem
-        Exit-Update "the downloaded update is not a newer release, nothing was changed" "verify"
+        Exit-Update "the downloaded update is not a newer release, nothing was changed" "version"
     }
 
     $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"

@@ -218,8 +218,8 @@
   // Banner and chat-notice text for a failed update or repair. err:runtime
   // has its own text (spec Failure modes, "Both sources unreachable /
   // update"), and so does err:runtime-swap (the install may be unfinished),
-  // err:verify (the download could not be verified, or is not a newer release;
-  // nothing was changed) and err:archive (the download unpacked but is not a
+  // err:verify (the download could not be verified; nothing was changed),
+  // err:version (the release is not newer than the installed one; nothing was changed) and err:archive (the download unpacked but is not a
   // Gaffer release, the install is untouched); every other code (err:internal, the updaters'
   // catch-all, and err:stopped, included), or none, gets the generic text naming the updater
   // log (logPath when known, else both platforms' usual place).
@@ -233,6 +233,11 @@
       return repair
         ? { banner: 'Repair failed', notice: "Repair failed: could not download Gaffer's runtime. Check your network and try again." }
         : { banner: 'Update failed', notice: "Update failed: could not download Gaffer's runtime. Your current version still works." };
+    }
+    if (code === 'version') {
+      return repair
+        ? { banner: 'Repair could not reinstall', notice: 'Repair could not reinstall: the latest release is older than the version you have installed, so nothing was changed. To reinstall Gaffer, follow the install steps in the README.' }
+        : { banner: 'No newer version to install', notice: 'The latest release is not newer than the version you have, so nothing was changed. Your current version still works.' };
     }
     if (code === 'verify') {
       return repair

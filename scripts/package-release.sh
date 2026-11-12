@@ -72,6 +72,7 @@ fail() { echo "ERROR: stage assertion failed: $1" >&2; exit 1; }
 [ -z "$(find "$STAGE" -name '*.map' -print -quit)" ] || fail ".map file present"
 [ -z "$(find "$STAGE" -name package-lock.json -print -quit)" ] || fail "package-lock.json present"
 [ -z "$(find "$STAGE" \( -name .remember -o -name test -o -name test-fixtures \) -print -quit)" ] || fail "test or .remember dir present"
+[ -z "$(find "$STAGE" -type l -print -quit)" ] || fail "symlink present (the updaters refuse archives with links)"
 [ -z "$(find "$STAGE" -name .debug -print -quit)" ] || fail ".debug present (a development setting, never shipped)"
 [ ! -e "$STAGE/daemon/vendor" ] || fail "daemon/vendor present (vendored modules ship inside daemon.mjs only)"
 [ -z "$(find "$STAGE" -name '*.cjs' ! -path "$STAGE/daemon/launch.cjs" -print -quit)" ] || fail ".cjs file beside daemon/launch.cjs"
