@@ -477,7 +477,7 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 ### Chat features
 
 - **Drop or paste images** into the panel: claude reads them as visual input. Click any thumbnail to zoom.
-- **MCP server tiles** in the activity drawer: one tile per Connected MCP server (Grip, Notion, Figma, ...) with brand icons and color-coded states: enabled, available, needs-auth (click to authorize), failed. Selection is stored locally, never committed.
+- **MCP server tiles** in the activity drawer: one tile per Connected MCP server that is set up in Claude Code itself (for example Grip; connectors that come from your Claude account are not available in panel chat) with brand icons and color-coded states: enabled, available, needs-auth (click to authorize), failed. Selection is stored locally, never committed.
 - **Model, context, and effort selects:** discovered from your installed `claude` CLI, not hardcoded: model aliases (Fable / Opus / Sonnet / Haiku), context window (Latest, 1M, or pinned versions like 4.6), and reasoning effort (Low through Max).
 - **Self-healing sessions:** if the CLI's session storage is wiped (CLI updates, re-auth), the panel detects the dead session and retries on a fresh one automatically.
 
@@ -513,7 +513,7 @@ The panel auto-starts a local daemon that connects Claude to After Effects via M
 
 ### Claude Code skill (optional)
 
-`skills/gaffer/SKILL.md` is a field guide distilled from real Gaffer sessions: tool selection, ExtendScript survival rules, shape/expression techniques. Installing it makes any Claude Code session sharper with the Gaffer tools:
+`skills/gaffer/SKILL.md` is a field guide distilled from real Gaffer sessions: tool selection, ExtendScript survival rules, shape/expression techniques. Installing it makes any Claude Code session sharper with the Gaffer tools (the panel's own chat does not load skills):
 
 ```bash
 mkdir -p ~/.claude/skills/gaffer && curl -sL https://raw.githubusercontent.com/spendolas/gaffer-ae/main/skills/gaffer/SKILL.md -o ~/.claude/skills/gaffer/SKILL.md
