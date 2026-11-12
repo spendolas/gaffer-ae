@@ -266,6 +266,57 @@ test('flush() re-sanitizes cliVersion and cliSource per bucket, so a hand-edited
   assert.equal(PATH_LIKE.test(server.lastBody), false, 'no path-like string anywhere in the payload: ' + server.lastBody);
 });
 
+test('flush() re-sanitizes byModel keys to the endpoint pattern and keeps at most ten models', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  var big = {};
+  for (var i = 0; i < 14; i++) big['m' + i + '::m' + i] = { turns: i + 1 };
+  big['Claude-Opus-4-8[1m]::claude-opus-4-8'] = { turns: 100 };
+  big['=HYPERLINK("http://example.test")::a'] = { turns: 50 };
+  big['__proto__'] = { turns: 1 };
+  writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: big }));
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  var keys = Object.keys(payload.byModel);
+  assert.ok(keys.length <= 10, 'at most ten models: ' + keys.length);
+  keys.forEach(function (k) {
+    assert.match(k, /^[a-z0-9.\-]{1,40}(::[a-z0-9.\-]{1,40})?$/, 'key matches the endpoint pattern: ' + k);
+  });
+  assert.ok('claude-opus-4-8-1m::claude-opus-4-8' in payload.byModel, 'a model name with brackets is normalised, not dropped');
+  assert.ok('hyperlink-http-example.test::a' in payload.byModel, 'a formula-looking key is reduced to its safe characters');
+  assert.equal(payload.byModel['claude-opus-4-8-1m::claude-opus-4-8'].turns, 100, 'the busiest models are the ones kept');
+  assert.equal(keys.some(function (k) { return k.indexOf('proto') !== -1 && Object.prototype.hasOwnProperty.call(payload.byModel, '__proto__'); }), false);
+});
+
+test('sanitizeModelKey: lower case, safe characters only, 40 per half, merged when two keys collapse to one', () => {
+  assert.equal(telemetry.sanitizeModelKey('claude-sonnet-5::claude-opus-4-8'), 'claude-sonnet-5::claude-opus-4-8');
+  assert.equal(telemetry.sanitizeModelKey('Claude Opus 4.8'), 'claude-opus-4.8');
+  assert.equal(telemetry.sanitizeModelKey('a'.repeat(60) + '::' + 'b'.repeat(60)), 'a'.repeat(40) + '::' + 'b'.repeat(40));
+  assert.equal(telemetry.sanitizeModelKey('::'), 'unknown::unknown');
+  assert.equal(telemetry.sanitizeModelKey(''), 'unknown');
+  assert.equal(telemetry.sanitizeModelKey('x::y::z'), 'x::y-z');
+  assert.equal(telemetry.sanitizeModelKey(null), null);
+  assert.equal(telemetry.sanitizeModelKey(5), null);
+  assert.equal(telemetry.sanitizeModelKey('-=x-'), 'x');
+});
+
+test('resolveTelemetryUrl: the endpoint override is honoured for a loopback address only', () => {
+  var real = telemetry.DEFAULT_TELEMETRY_URL;
+  assert.match(real, /^https:\/\/script\.google\.com\//);
+  assert.equal(telemetry.resolveTelemetryUrl(undefined), real);
+  assert.equal(telemetry.resolveTelemetryUrl(''), real);
+  assert.equal(telemetry.resolveTelemetryUrl('http://127.0.0.1:9/'), 'http://127.0.0.1:9/');
+  assert.equal(telemetry.resolveTelemetryUrl('http://localhost:8080/x'), 'http://localhost:8080/x');
+  assert.equal(telemetry.resolveTelemetryUrl('http://[::1]:7/'), 'http://[::1]:7/');
+  assert.equal(telemetry.resolveTelemetryUrl('https://127.0.0.1:7/'), 'https://127.0.0.1:7/');
+  for (var bad of ['https://example.test/collect', 'http://evil.example/', 'http://127.0.0.1.evil.example/', 'http://localhost.evil.example/', 'ftp://127.0.0.1/', 'not a url', 'http://user@evil.example@127.0.0.1/']) {
+    assert.equal(telemetry.resolveTelemetryUrl(bad), real, 'ignored: ' + bad);
+  }
+});
+
 test('day rollover: a flush of yesterday does not delete the new day already written to the buffer', async () => {
   writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
   writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: { 'a::a': { turns: 1 } } }));
