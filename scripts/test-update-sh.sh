@@ -250,12 +250,28 @@ repack_asset() {
   COPYFILE_DISABLE=1 tar -czf "$2" -C "$dir" .
   rm -rf "$dir"
 }
+# sums_add <file>: the updater verifies every asset against the SHA256SUMS.txt
+# in the asset's own folder, and $SCRATCH/dist already holds the one
+# package-release.sh wrote (it lists only the real assets). Each repacked asset
+# gets its own line there, so the cases below run the REAL verification.
+# GAFFER_UPDATE_TEST_UNVERIFIED is only for an asset with no sums file at all
+# (the broken-download case and Case V below), never exported globally.
+sums_add() {
+  local f="$1" dir name hash
+  dir="$(dirname "$f")"; name="$(basename "$f")"
+  hash="$(shasum -a 256 "$f" | awk '{print $1}')"
+  touch "$dir/SHA256SUMS.txt"
+  grep -v "  $name\$" "$dir/SHA256SUMS.txt" > "$dir/SHA256SUMS.txt.new" || true
+  echo "$hash  $name" >> "$dir/SHA256SUMS.txt.new"
+  mv "$dir/SHA256SUMS.txt.new" "$dir/SHA256SUMS.txt"
+}
 ASSET="$SCRATCH/dist/gaffer-update-v1.tar.gz"
 ASSET_V2="$SCRATCH/dist/gaffer-update-v2.tar.gz"
 ASSET_NO_BUNDLE="$SCRATCH/dist/gaffer-update-no-bundle.tar.gz"
 repack_asset "$SCRATCH/pins-$RT_V1.json" "$ASSET"
 repack_asset "$SCRATCH/pins-$RT_V2.json" "$ASSET_V2"
 repack_asset "$SCRATCH/pins-$RT_V1.json" "$ASSET_NO_BUNDLE" daemon/daemon.mjs
+sums_add "$ASSET"; sums_add "$ASSET_V2"; sums_add "$ASSET_NO_BUNDLE"
 # Every updater run below inherits these: the archive's fetch-runtime.sh
 # fetches the fake runtimes from $SRV, never from the network, and skips the
 # Apple signature check (the fake binary is a shell script).
@@ -264,9 +280,6 @@ export GAFFER_FETCH_PLATFORM="$FAKE_PLAT"
 export GAFFER_FETCH_SKIP_CODESIGN=1
 export GAFFER_FETCH_BASE_OFFICIAL="file://$SRV/"
 export GAFFER_FETCH_BASE_MIRROR="file://$SRV/"
-# The assets below are built here without a SHA256SUMS.txt. A downloaded
-# update is always verified; this switch only lets such a local asset through.
-export GAFFER_UPDATE_TEST_UNVERIFIED=1
 # Nothing from npm (the v0.11.3 updater case) lands in the home directory.
 export npm_config_cache="$SCRATCH/npm-cache"
 export npm_config_userconfig="$SCRATCH/npm-cache/no-userconfig"
@@ -357,7 +370,7 @@ else
 fi
 
 if [ "$(tail -n1 "$TMPDIR/gaffer-update.log")" = "ok:9.9.9" ]; then pass "log ends with ok:9.9.9"; else fail "last log line is not ok:9.9.9: $(tail -n1 "$TMPDIR/gaffer-update.log")"; fi
-if ls "$TMPDIR" | grep -q '^gaffer-update-[0-9]'; then fail "temp dir not cleaned up"; else pass "temp dir cleaned up"; fi
+if ls "$TMPDIR" | grep -Eq '^gaffer-update\.[A-Za-z0-9]{6}$'; then fail "temp dir not cleaned up"; else pass "temp dir cleaned up"; fi
 if [ -e "$LOCK_DIR" ]; then fail "update lock left behind after success"; else pass "update lock released after success"; fi
 
 # ---------- Case 2: a broken download changes nothing ----------
@@ -365,7 +378,8 @@ BROKEN_INSTALL="$SCRATCH/Application Support/broken/com.gaffer.panel"
 new_install "$BROKEN_INSTALL"
 echo '<html>Not Found</html>' > "$SCRATCH/not-a-release.tar.gz"
 BEFORE="$(cd "$BROKEN_INSTALL" && find . -path ./daemon/node_modules -prune -o -type f -print0 | sort -z | xargs -0 shasum)"
-if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$SCRATCH/not-a-release.tar.gz" bash "$BROKEN_INSTALL/daemon/update.sh"; then
+# No SHA256SUMS.txt beside it: the unverified switch lets it reach the unpack step.
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_TEST_UNVERIFIED=1 GAFFER_UPDATE_ASSET="$SCRATCH/not-a-release.tar.gz" bash "$BROKEN_INSTALL/daemon/update.sh"; then
   fail "update.sh exited 0 on a broken download"
 else
   pass "update.sh exited non-zero on a broken download"
@@ -622,6 +636,8 @@ ASSET_TRUNCATED="$SCRATCH/dist/gaffer-update-truncated.tar.gz"
 head -c "$(( $(wc -c < "$ASSET") / 2 ))" "$ASSET" > "$ASSET_TRUNCATED"
 ASSET_NO_VERSION="$SCRATCH/dist/gaffer-update-no-version.tar.gz"
 repack_asset "$SCRATCH/pins-$RT_V1.json" "$ASSET_NO_VERSION" version.json
+# Listed with their own hashes, so they get past the check and fail where this case wants.
+sums_add "$ASSET_TRUNCATED"; sums_add "$ASSET_NO_VERSION"
 for pair in "$ASSET_TRUNCATED:err:download" "$ASSET_NO_VERSION:err:archive"; do
   src="${pair%%:err:*}"; want="err:${pair#*:err:}"
   : > "$LOG"
@@ -633,6 +649,51 @@ for pair in "$ASSET_TRUNCATED:err:download" "$ASSET_NO_VERSION:err:archive"; do
   if grep -q '^ERROR: ' "$LOG"; then pass "$(basename "$src"): an ERROR line names the cause"; else fail "$(basename "$src"): no ERROR line"; fi
 done
 if [ "$BEFORE" = "$(full_tree_hash "$RT_TRUNCATED")" ] && [ ! -e "$LOCK_DIR" ]; then pass "truncated / no-version archives: install untouched, lock released"; else fail "truncated / no-version archives: install changed or lock left"; fi
+
+# ---------- Case V: the download is verified against SHA256SUMS.txt ----------
+# A wrong hash, a missing line and a missing sums file all end err:verify with the
+# install untouched; the unverified switch never overrides a sums file that is
+# there; a release that is not newer ends err:version.
+VER_INSTALL="$SCRATCH/Application Support/ver/com.gaffer.panel"
+new_install "$VER_INSTALL"
+BEFORE="$(full_tree_hash "$VER_INSTALL")"
+VDIR="$SCRATCH/vdist"; mkdir -p "$VDIR" "$SCRATCH/vdist-nosums"
+cp "$ASSET" "$VDIR/gaffer-update-v1.tar.gz"
+cp "$ASSET" "$SCRATCH/vdist-nosums/gaffer-update-v1.tar.gz"
+printf '%s  gaffer-update-v1.tar.gz\n' "$(printf 'not the hash' | shasum -a 256 | awk '{print $1}')" > "$VDIR/SHA256SUMS.txt"
+check_verify_fail() {
+  local label="$1"; shift
+  : > "$LOG"
+  set +e
+  env "$@" PATH="$UPDATE_PATH" bash "$VER_INSTALL/daemon/update.sh"
+  RC=$?
+  set -e
+  if [ "$RC" -eq 1 ] && [ "$(tail -n1 "$LOG")" = "err:verify" ]; then pass "$label: exit 1, err:verify"; else fail "$label: exit $RC, last log line: $(tail -n1 "$LOG")"; fi
+  if [ "$BEFORE" = "$(full_tree_hash "$VER_INSTALL")" ] && [ ! -e "$LOCK_DIR" ]; then pass "$label: install untouched, lock released"; else fail "$label: install changed or lock left"; fi
+}
+check_verify_fail "wrong hash in SHA256SUMS.txt" GAFFER_UPDATE_ASSET="$VDIR/gaffer-update-v1.tar.gz"
+check_verify_fail "wrong hash, unverified switch set (a sums file that is there is always checked)" GAFFER_UPDATE_TEST_UNVERIFIED=1 GAFFER_UPDATE_ASSET="$VDIR/gaffer-update-v1.tar.gz"
+printf '%s  some-other-file.tar.gz\n' "$(shasum -a 256 "$ASSET" | awk '{print $1}')" > "$VDIR/SHA256SUMS.txt"
+check_verify_fail "no line for the asset in SHA256SUMS.txt" GAFFER_UPDATE_ASSET="$VDIR/gaffer-update-v1.tar.gz"
+check_verify_fail "no SHA256SUMS.txt and no switch" GAFFER_UPDATE_ASSET="$SCRATCH/vdist-nosums/gaffer-update-v1.tar.gz"
+: > "$LOG"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_TEST_UNVERIFIED=1 GAFFER_UPDATE_ASSET="$SCRATCH/vdist-nosums/gaffer-update-v1.tar.gz" bash "$VER_INSTALL/daemon/update.sh" && [ "$(tail -n1 "$LOG")" = "ok:9.9.9" ]; then
+  pass "no SHA256SUMS.txt with the unverified switch: the update goes through"
+else
+  fail "no SHA256SUMS.txt with the unverified switch: last log line: $(tail -n1 "$LOG")"
+fi
+if grep -q "not verified (test asset" "$LOG"; then pass "the log says the asset was not verified"; else fail "no 'not verified' line in the log"; fi
+# The install is now at 9.9.9: the same release again is not newer (plain update), Repair may reinstall it.
+BEFORE="$(full_tree_hash "$VER_INSTALL")"
+: > "$LOG"
+set +e
+PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$VER_INSTALL/daemon/update.sh"
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && [ "$(tail -n1 "$LOG")" = "err:version" ]; then pass "same version again: exit 1, err:version"; else fail "same version again: exit $RC, last log line: $(tail -n1 "$LOG")"; fi
+if [ "$BEFORE" = "$(full_tree_hash "$VER_INSTALL")" ]; then pass "same version again: install untouched"; else fail "same version again: install changed"; fi
+: > "$LOG"
+if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$VER_INSTALL/daemon/update.sh" --repair && [ "$(tail -n1 "$LOG")" = "ok:9.9.9" ]; then pass "--repair may reinstall the same version"; else fail "--repair of the same version: last log line: $(tail -n1 "$LOG")"; fi
 
 # ---------- Case 3: a second updater exits busy while a live one holds the lock ----------
 BUSY_INSTALL="$SCRATCH/Application Support/busy/com.gaffer.panel"
