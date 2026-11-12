@@ -19,6 +19,8 @@
 - When an update is not newer than the version you already have, the panel now says so ("No newer version to install") instead of reporting a failed check, and tells a Repair how to reinstall.
 - Importing from Figma now treats layer names, text and fonts strictly as text, so names with line breaks or unusual characters come through unchanged.
 - Gaffer's other tools write file paths, names and numbers into After Effects scripts the same careful way, so a path with backslashes or quotes stays exactly as given.
+- The panel and Gaffer's background service now confirm that they are talking to each other before any message is acted on, and incoming messages are checked for size and shape. If the panel cannot connect it says so and offers Repair, and it keeps retrying quietly in the background.
+- The connection that Claude Code uses to reach Gaffer's tools limits how many sessions it keeps and lets idle ones expire. Its error replies no longer include internal details.
 
 ## v0.12.1 - 2026-10-26
 
