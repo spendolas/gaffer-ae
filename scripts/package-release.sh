@@ -79,6 +79,8 @@ EXTRA="$(find "$STAGE/daemon" -type f \( -name '*.js' -o -name '*.mjs' -o -name 
 [ -z "$EXTRA" ] || fail "code modules beside daemon.mjs: $EXTRA"
 [ "$(cat "$STAGE/daemon/index.js")" = "import './daemon.mjs';" ] || fail "index.js is not the shim"
 [ "$(cat "$STAGE/daemon/package.json")" = '{"name":"gaffer-daemon","private":true,"type":"module"}' ] || fail "daemon/package.json is not the dependency-free one"
+# No developer path or secret shape in any text file that ships (the daemon bundle is scanned with a longer list while it is built).
+bash "$REPO_ROOT/scripts/bundle-daemon.sh" --stage-hygiene-only "$STAGE" || fail "hygiene check over the staged package"
 
 # 5. Archives (names unchanged) and SHA256SUMS.txt over them.
 tar -czf "$OUT_DIR/gaffer-install-mac.tar.gz" -C "$STAGE" .
