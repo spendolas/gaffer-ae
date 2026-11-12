@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeSvgRootAttributes, normalizeSvgIconBuffer } from '../svg-icon.js';
+import { dedupeSvgRootAttributes, normalizeSvgIconBuffer, MAX_ROOT_ATTRS, MAX_ICON_BYTES } from '../svg-icon.js';
 
 // What the simple-icons CDN text looks like after the fill injection.
 var BROKEN = '<svg fill="currentColor" fill="#0061D5" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Box</title><path d="M0 0h24v24H0z"/></svg>';
@@ -32,4 +32,16 @@ test('normalizeSvgIconBuffer returns the same buffer when nothing changes', () =
   var b = Buffer.from('<svg xmlns="x"></svg>');
   assert.equal(normalizeSvgIconBuffer(b), b);
   assert.equal(normalizeSvgIconBuffer(Buffer.from(BROKEN)).toString().includes('#0061D5'), false);
+});
+
+test('hostile input stays fast: a huge root tag is left alone instead of scanned', () => {
+  var evil = '<svg' + ' '.repeat(120000) + '=>';
+  var t0 = Date.now();
+  assert.equal(dedupeSvgRootAttributes(evil), evil);
+  assert.ok(Date.now() - t0 < 200, 'took ' + (Date.now() - t0) + ' ms');
+  var big = Buffer.alloc(MAX_ICON_BYTES + 1, 0x20);
+  assert.equal(normalizeSvgIconBuffer(big), big);
+  // just under the root-tag limit still gets repaired
+  var ok = '<svg fill="a" fill="b"' + ' '.repeat(MAX_ROOT_ATTRS - 40) + '>';
+  assert.ok(ok.length > 0 && !/fill="b"/.test(dedupeSvgRootAttributes(ok)));
 });
