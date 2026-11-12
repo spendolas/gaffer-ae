@@ -276,13 +276,50 @@ export function sanitizeModelKey(key) {
 
 var MAX_MODELS_PER_SEND = 10;
 var COUNTER_FIELDS = ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd'];
+// The bounds the receiving endpoint accepts: a counter above its bound would
+// make it drop the whole post, so a corrupted value is clamped instead.
+var COUNTER_MAX = { turns: 1e6, inputTokens: 1e10, outputTokens: 1e10, cacheReadTokens: 1e10, cacheCreationTokens: 1e10, costUsd: 1e6 };
+var AE_VERSION_RE = /^[A-Za-z0-9._-]{1,16}$/;
+var OTHER_KEY = 'other::other';
 
-// The byModel map as it is sent: keys re-run through sanitizeModelKey (two
-// keys that collapse to one are added together), cliVersion and cliSource
-// re-run through their sanitizers, and only the ten busiest models kept, so a
-// hand-edited or corrupted buffer can never smuggle free text out under
-// those keys at send time (recordUsage sanitizes on the way in; this is the
-// belt to that brace). Other bucket fields are copied as is.
+// A counter as a finite number within the endpoint's bounds, else 0.
+function cleanCounter(field, v) {
+  if (typeof v !== 'number' || !isFinite(v) || v < 0) return 0;
+  return Math.min(v, COUNTER_MAX[field]);
+}
+
+// An AE version as the endpoint accepts it, else 'unknown'.
+export function sanitizeAeVersion(v) {
+  return typeof v === 'string' && AE_VERSION_RE.test(v) ? v : 'unknown';
+}
+
+// The buffer's date as YYYY-MM-DD for a real calendar day, else today's.
+function cleanDate(d) {
+  var m = typeof d === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(d) : null;
+  if (m) {
+    var t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    if (t.getUTCFullYear() === +m[1] && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3]) return d;
+  }
+  return todayKey();
+}
+
+function addCounters(target, src) {
+  COUNTER_FIELDS.forEach(function (f) {
+    if (src[f] !== undefined || target[f] !== undefined) {
+      target[f] = Math.min((target[f] || 0) + (src[f] || 0), COUNTER_MAX[f]);
+    }
+  });
+}
+
+// The byModel map as it is sent. Only the known bucket fields are copied
+// (the counters, aeVersion, cliVersion, cliSource), each re-cleaned: keys
+// re-run through sanitizeModelKey (two keys that collapse to one are added
+// together), counters bounded, aeVersion, cliVersion and cliSource through
+// their sanitizers. Anything else in a bucket is dropped, so a hand-edited or
+// corrupted buffer can never smuggle free text out (recordUsage sanitizes on
+// the way in; this is the belt to that brace). At most ten entries go out:
+// the nine busiest models plus one "other::other" bucket holding the rest, so
+// the day's totals stay right.
 function cleanByModel(map) {
   var out = Object.create(null);
   if (!map || typeof map !== 'object') return {};
@@ -291,23 +328,31 @@ function cleanByModel(map) {
     if (!b || typeof b !== 'object') return;
     var key = sanitizeModelKey(rawKey);
     if (!key) return;
-    var copy = Object.assign({}, b);
+    var copy = {};
+    COUNTER_FIELDS.forEach(function (f) { if (b[f] !== undefined) copy[f] = cleanCounter(f, b[f]); });
+    if (b.aeVersion !== undefined) copy.aeVersion = sanitizeAeVersion(b.aeVersion);
     copy.cliVersion = sanitizeCliVersion(b.cliVersion);
     copy.cliSource = sanitizeCliSource(b.cliSource);
     var prev = out[key];
     if (prev) {
-      COUNTER_FIELDS.forEach(function (f) {
-        if (typeof copy[f] === 'number' || typeof prev[f] === 'number') prev[f] = (Number(prev[f]) || 0) + (Number(copy[f]) || 0);
-      });
+      addCounters(prev, copy);
+      if (prev.aeVersion === undefined || prev.aeVersion === 'unknown') { if (copy.aeVersion !== undefined) prev.aeVersion = copy.aeVersion; }
       if (prev.cliVersion === 'unknown') prev.cliVersion = copy.cliVersion;
       if (prev.cliSource === 'unknown') prev.cliSource = copy.cliSource;
       return;
     }
     out[key] = copy;
   });
-  var keys = Object.keys(out).sort(function (a, b) { return (Number(out[b].turns) || 0) - (Number(out[a].turns) || 0); });
+  var keys = Object.keys(out).sort(function (a, b) { return (out[b].turns || 0) - (out[a].turns || 0); });
   var result = {};
-  keys.slice(0, MAX_MODELS_PER_SEND).forEach(function (k) { result[k] = out[k]; });
+  if (keys.length <= MAX_MODELS_PER_SEND) {
+    keys.forEach(function (k) { result[k] = out[k]; });
+    return result;
+  }
+  keys.slice(0, MAX_MODELS_PER_SEND - 1).forEach(function (k) { result[k] = out[k]; });
+  var other = result[OTHER_KEY] || { cliVersion: 'unknown', cliSource: 'unknown', aeVersion: 'unknown' };
+  keys.slice(MAX_MODELS_PER_SEND - 1).forEach(function (k) { addCounters(other, out[k]); });
+  result[OTHER_KEY] = other;
   return result;
 }
 
@@ -350,7 +395,7 @@ export function flush(buffer) {
       // Nothing in here may ever be a path, a hostname, a user name or text
       // from the CLI or the chat.
       var payload = JSON.stringify({
-        date: buffer.date,
+        date: cleanDate(buffer.date),
         sentAt: new Date().toISOString(),
         installId: getInstallId(),
         gafferVersion: getGafferVersion(),
