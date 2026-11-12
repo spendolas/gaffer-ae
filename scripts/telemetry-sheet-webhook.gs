@@ -39,40 +39,169 @@
 // gafferVersion/os/aeVersion (Gaffer 0.10.6) and cliVersion/cliSource/
 // errorKinds (0.11.3) were added daemon-side first.
 //
+// Input rules (the endpoint's URL ships in every client, so anyone can post
+// to it): doPost validates every field before it writes anything. A post that
+// fails any rule is dropped and still answered "ok", so a probe learns
+// nothing. The rules: installId a UUID, date a real YYYY-MM-DD, sentAt an ISO
+// timestamp, gafferVersion/os/aeVersion/cliVersion/cliSource short patterns
+// or the cliSource enum, model keys ^[a-z0-9.-]{1,40}(::[a-z0-9.-]{1,40})?$,
+// counters finite numbers within bounds, at most 10 models, a body of at most
+// 8 KB. Cells that could start a formula get a leading apostrophe. Posts are
+// rate limited per install (CacheService), appends run under the script lock,
+// and the sheet stops growing at MAX_ROWS with one "cap reached" row.
+//
 // Deployed-copy maintenance when new fields land: paste the new version of
 // this file into the Apps Script editor and Deploy > Manage deployments >
-// edit > New version. The header row is only written on an EMPTY sheet, so
+// edit > New version. NEVER "New deployment": that makes a new URL, and the
+// URL is baked into every installed daemon. The header row is only written on an EMPTY sheet, so
 // on an existing sheet type the new header cells in by hand, in the same
 // order as the appendRow below (new columns are always appended at the end
 // so older rows stay aligned).
 
-function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+var MAX_BODY_CHARS = 8192;
+var MAX_MODELS = 10;
+var MAX_ROWS = 100000;          // header included; one "cap reached" row is written past it
+var RATE_LIMIT_POSTS = 20;      // posts per installId per window
+var RATE_WINDOW_SECONDS = 21600; // CacheService's longest TTL (6 hours)
+var CAP_MARK = '(cap reached)';
 
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow([
-      'date', 'sentAt', 'installId', 'model', 'requestedModel', 'turns',
-      'inputTokens', 'outputTokens', 'cacheReadTokens',
-      'cacheCreationTokens', 'costUsd',
-      'gafferVersion', 'os', 'aeVersion', 'cliVersion', 'cliSource', 'errorKinds',
-    ]);
-  }
+var HEADER = [
+  'date', 'sentAt', 'installId', 'model', 'requestedModel', 'turns',
+  'inputTokens', 'outputTokens', 'cacheReadTokens',
+  'cacheCreationTokens', 'costUsd',
+  'gafferVersion', 'os', 'aeVersion', 'cliVersion', 'cliSource', 'errorKinds',
+];
 
-  var body;
-  try {
-    body = JSON.parse(e.postData.contents);
-  } catch (err) {
-    return ContentService.createTextOutput('bad json').setMimeType(ContentService.MimeType.TEXT);
-  }
+var UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+var DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+var SENT_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+var SEMVER_RE = /^(\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z][0-9A-Za-z.-]{0,19})?|unknown)$/;
+var OS_RE = /^[a-z0-9]{1,16} [A-Za-z0-9._+-]{1,40}$/;
+var AE_VERSION_RE = /^[A-Za-z0-9._-]{1,16}$/;
+var CLI_VERSION_RE = /^(\d{1,4}\.\d{1,4}\.\d{1,5}|unknown)$/;
+var CLI_SOURCES = ['desktop-app', 'standalone', 'config-pin', 'path', 'unknown'];
+var MODEL_KEY_RE = /^[a-z0-9.\-]{1,40}(::[a-z0-9.\-]{1,40})?$/;
+var ERROR_KIND_RE = /^[a-z_]{1,24}$/;
+var MAX_ERROR_KINDS = 12;
+var MAX_COUNT = { turns: 1e6, inputTokens: 1e10, outputTokens: 1e10, cacheReadTokens: 1e10, cacheCreationTokens: 1e10, costUsd: 1e6 };
+var COUNTERS = ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'costUsd'];
 
-  var rows = rowsForPayload(body);
-  for (var i = 0; i < rows.length; i++) sheet.appendRow(rows[i]);
-
+function reply() {
   return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
 }
 
-// The rows one POST appends, in header order. Pure (no SpreadsheetApp), so
-// scripts/telemetry-sheet-webhook.test.mjs can run it under Node.
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Optional string field: absent reads as '', present must be a string that
+// matches. Returns null when it does not (the whole post is then dropped).
+function optionalString(v, test) {
+  if (v === undefined) return '';
+  if (typeof v !== 'string' || !test(v)) return null;
+  return v;
+}
+
+function validDate(v) {
+  var m = typeof v === 'string' ? DATE_RE.exec(v) : null;
+  if (!m) return false;
+  var d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+}
+
+// The checked copy of a POST body, or null when anything is wrong. Pure: no
+// SpreadsheetApp, so scripts/telemetry-sheet-webhook.test.mjs can run it under
+// Node with hostile input. Only the fields this script knows are copied;
+// everything else in the body is ignored.
+function validatePayload(body) {
+  if (!isPlainObject(body)) return null;
+  if (typeof body.installId !== 'string' || !UUID_RE.test(body.installId)) return null;
+  if (!validDate(body.date)) return null;
+  var sentAt = optionalString(body.sentAt, function (s) { return SENT_AT_RE.test(s); });
+  var gafferVersion = optionalString(body.gafferVersion, function (s) { return SEMVER_RE.test(s); });
+  var os = optionalString(body.os, function (s) { return OS_RE.test(s); });
+  if (sentAt === null || gafferVersion === null || os === null) return null;
+
+  var rawModels = body.byModel === undefined ? {} : body.byModel;
+  if (!isPlainObject(rawModels)) return null;
+  var keys = Object.keys(rawModels);
+  if (keys.length > MAX_MODELS) return null;
+  var models = [];
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    if (!MODEL_KEY_RE.test(key)) return null;
+    var b = rawModels[key];
+    if (!isPlainObject(b)) return null;
+    var clean = { key: key };
+    for (var c = 0; c < COUNTERS.length; c++) {
+      var name = COUNTERS[c];
+      var v = b[name];
+      if (v === undefined) v = 0;
+      if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > MAX_COUNT[name]) return null;
+      clean[name] = v;
+    }
+    clean.aeVersion = optionalString(b.aeVersion, function (s) { return AE_VERSION_RE.test(s); });
+    clean.cliVersion = optionalString(b.cliVersion, function (s) { return CLI_VERSION_RE.test(s); });
+    clean.cliSource = optionalString(b.cliSource, function (s) { return CLI_SOURCES.indexOf(s) !== -1; });
+    if (clean.aeVersion === null || clean.cliVersion === null || clean.cliSource === null) return null;
+    models.push(clean);
+  }
+
+  var errorKinds = {};
+  var errorCount = 0;
+  if (body.errorKinds !== undefined) {
+    if (!isPlainObject(body.errorKinds)) return null;
+    var ek = Object.keys(body.errorKinds);
+    if (ek.length > MAX_ERROR_KINDS) return null;
+    for (var j = 0; j < ek.length; j++) {
+      var n = body.errorKinds[ek[j]];
+      if (!ERROR_KIND_RE.test(ek[j]) || typeof n !== 'number' || n !== Math.floor(n) || n < 0 || n > 1e6) return null;
+      errorKinds[ek[j]] = n;
+      errorCount++;
+    }
+  }
+
+  return {
+    date: body.date, sentAt: sentAt, installId: body.installId, gafferVersion: gafferVersion, os: os,
+    models: models, errorKinds: errorCount > 0 ? JSON.stringify(errorKinds) : '',
+  };
+}
+
+// A cell that could start a spreadsheet formula (= + - @, or a tab or
+// carriage return in front of one) gets a leading apostrophe, so it is shown
+// as text and never evaluated. Numbers and ordinary text pass unchanged.
+function safeCell(v) {
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v)) return "'" + v;
+  return v;
+}
+
+function rowsForClean(p) {
+  var rows = [];
+  for (var i = 0; i < p.models.length; i++) {
+    var m = p.models[i];
+    var parts = m.key.split('::');
+    var model = parts[0] || '';
+    var requestedModel = parts[1] || model; // no downshift: same as model
+    rows.push([
+      p.date, p.sentAt, p.installId, model, requestedModel,
+      m.turns, m.inputTokens, m.outputTokens, m.cacheReadTokens, m.cacheCreationTokens, m.costUsd,
+      p.gafferVersion, p.os, m.aeVersion, m.cliVersion, m.cliSource,
+      rows.length === 0 ? p.errorKinds : '',
+    ]);
+  }
+  if (rows.length === 0 && p.errorKinds !== '' && p.errorKinds !== '{}') {
+    rows.push([
+      p.date, p.sentAt, p.installId, '(none)', '(none)',
+      0, 0, 0, 0, 0, 0,
+      p.gafferVersion, p.os, '', '', '',
+      p.errorKinds,
+    ]);
+  }
+  return rows.map(function (r) { return r.map(safeCell); });
+}
+
+// The rows one POST appends, in header order, from a raw (unchecked) body: it
+// is validated first, so a bad body yields no rows. Pure (no SpreadsheetApp).
 //
 // errorKinds is install-wide for the day, not per model, so it is written on
 // the FIRST row of a POST only. Writing it on every row would make a
@@ -86,51 +215,61 @@ function doPost(e) {
 // not dropped on the floor: the daemon deletes its buffer once the POST
 // returns, whatever this script did with it.
 function rowsForPayload(body) {
-  var date = body.date || '';
-  var sentAt = body.sentAt || '';
-  var installId = body.installId || '';
-  var byModel = body.byModel && typeof body.byModel === 'object' ? body.byModel : {};
-  var gafferVersion = body.gafferVersion || '';
-  var os = body.os || '';
-  var errorKinds = body.errorKinds && typeof body.errorKinds === 'object'
-    ? JSON.stringify(body.errorKinds) : '';
-  var hasErrorKinds = errorKinds !== '' && errorKinds !== '{}';
+  var clean = validatePayload(body);
+  return clean ? rowsForClean(clean) : [];
+}
 
-  var rows = [];
-  for (var key in byModel) {
-    var parts = key.split('::');
-    var model = parts[0] || '';
-    var requestedModel = parts[1] || model; // no downshift → same as model
-    var m = byModel[key] && typeof byModel[key] === 'object' ? byModel[key] : {};
-    rows.push([
-      date,
-      sentAt,
-      installId,
-      model,
-      requestedModel,
-      m.turns || 0,
-      m.inputTokens || 0,
-      m.outputTokens || 0,
-      m.cacheReadTokens || 0,
-      m.cacheCreationTokens || 0,
-      m.costUsd || 0,
-      gafferVersion,
-      os,
-      m.aeVersion || '',
-      m.cliVersion || '',
-      m.cliSource || '',
-      rows.length === 0 ? errorKinds : '',
-    ]);
+// True while this install is under its post limit for the window. Best
+// effort: a cache that cannot be read or written never blocks a post. Called
+// under the script lock, so the count cannot race.
+function underRateLimit(installId) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = 'rl_' + installId.toLowerCase();
+    var n = Number(cache.get(key)) || 0;
+    if (n >= RATE_LIMIT_POSTS) return false;
+    cache.put(key, String(n + 1), RATE_WINDOW_SECONDS);
+  } catch (err) { /* best effort */ }
+  return true;
+}
+
+function appendRows(sheet, rows, sample) {
+  var last = sheet.getLastRow();
+  if (last === 0) {
+    sheet.appendRow(HEADER);
+    last = 1;
   }
-
-  if (rows.length === 0 && hasErrorKinds) {
-    rows.push([
-      date, sentAt, installId, '(none)', '(none)',
-      0, 0, 0, 0, 0, 0,
-      gafferVersion, os, '', '', '',
-      errorKinds,
-    ]);
+  if (last >= MAX_ROWS) {
+    // The sheet is full: one marker row, once, and nothing more.
+    if (sheet.getRange(last, 4).getValue() !== CAP_MARK) {
+      sheet.appendRow([sample.date, sample.sentAt, sample.installId, CAP_MARK, CAP_MARK, 0, 0, 0, 0, 0, 0, '', '', '', '', '', ''].map(safeCell));
+    }
+    return;
   }
+  rows = rows.slice(0, MAX_ROWS - last);
+  if (rows.length === 0) return;
+  sheet.getRange(last + 1, 1, rows.length, HEADER.length).setValues(rows);
+}
 
-  return rows;
+function doPost(e) {
+  try {
+    var raw = e && e.postData && e.postData.contents;
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_BODY_CHARS) return reply();
+    var body;
+    try { body = JSON.parse(raw); } catch (err) { return reply(); }
+    var clean = validatePayload(body);
+    if (!clean) return reply();
+    var rows = rowsForClean(clean);
+    if (rows.length === 0) return reply();
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(10000); } catch (err) { return reply(); }
+    try {
+      if (!underRateLimit(clean.installId)) return reply();
+      appendRows(SpreadsheetApp.getActiveSpreadsheet().getActiveSheet(), rows, clean);
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) { /* never answer with anything but "ok" */ }
+  return reply();
 }
