@@ -7,7 +7,7 @@
 - Long replies update on screen a little less often while they stream, so the panel stays responsive. The finished reply is the same.
 - The icons of your connected MCP servers are drawn as images in the panel's colours, and only small image icons are accepted. Servers without a usable icon show their initials.
 - Release packages no longer contain a developer debugging file. Updating or repairing Gaffer removes it from an existing install.
-- Gaffer chat now works with only Gaffer's own tools and the connectors you switch on in Settings. Connectors that come from your Claude account (rather than from Claude Code's own settings) are not available in Gaffer chat; the panel says so once for each one you had switched on.
+- Gaffer chat now works with only Gaffer's own tools and the connectors you switch on in Settings. It no longer uses Claude Code's built-in tools (shell, file reading and writing, web search), your own Claude Code memory (CLAUDE.md), skills, hooks or plugins. Only connectors set up in Claude Code itself (user level) are available; connectors that come from your Claude account, and servers that come from plugins or a single project, are not, and the panel says so once for each one you had switched on. Gaffer's own tools, including running scripts in After Effects, work as before.
 - Gaffer chat needs a recent Claude Code. On an older version the panel shows "Update Claude Code to use Gaffer chat" instead of starting a chat.
 - Frames that Gaffer captures and screenshots you paste are now sent to Claude directly as images. Large images are scaled down first, and an image that is too large to scale is skipped with a note.
 - After updating, the first message in an existing chat starts a fresh conversation (you will see "Previous session expired"). Your chat history stays visible in the panel, but Claude does not remember the earlier conversation.
@@ -20,6 +20,7 @@
 - Importing from Figma now treats layer names, text and fonts strictly as text, so names with line breaks or unusual characters come through unchanged.
 - Gaffer's other tools write file paths, names and numbers into After Effects scripts the same careful way, so a path with backslashes or quotes stays exactly as given.
 - The panel and Gaffer's background service now confirm that they are talking to each other before any message is acted on, and incoming messages are checked for size and shape. If the panel cannot connect it says so and offers Repair, and it keeps retrying quietly in the background.
+- After updating, reload the Gaffer panel in every other After Effects that is open. A panel left running old code cannot connect to the new background service and keeps retrying until it is reloaded.
 - The connection that Claude Code uses to reach Gaffer's tools limits how many sessions it keeps and lets idle ones expire. Its error replies no longer include internal details.
 
 ## v0.12.1 - 2026-10-26
