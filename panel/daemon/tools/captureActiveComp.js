@@ -7,6 +7,7 @@
 
 import { tmpdir } from 'node:os';
 import { captureContent } from '../capture-image.js';
+import { jsStr } from './jsx-literal.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
@@ -18,7 +19,7 @@ function buildJSX(outputPath) {
   if (!(comp instanceof CompItem)) {
     return JSON.stringify({ error: "No active composition" });
   }
-  var f = new File("${outputPath}");
+  var f = new File(${jsStr(outputPath)});
   try {
     comp.saveFrameToPng(comp.time, f).wait();
   } catch (e) {

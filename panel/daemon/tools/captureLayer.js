@@ -4,17 +4,19 @@
  */
 import { tmpdir } from 'node:os';
 import { captureContent } from '../capture-image.js';
+import { jsStr, jsNum } from './jsx-literal.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
 var CAPTURE_PREFIX = 'gaffer-layer-';
 
 function buildJSX(outputPath, layerIndex, time) {
-  var t = (time === null || time === undefined) ? 'comp.time' : Number(time);
+  var t = (time === null || time === undefined) ? 'comp.time' : jsNum(Number(time));
+  var idx = jsNum(layerIndex);
   return `(function() {
   var comp = app.project.activeItem;
   if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No active composition" });
-  if (${layerIndex} < 1 || ${layerIndex} > comp.numLayers) return JSON.stringify({ error: "layerIndex out of range" });
+  if (${idx} < 1 || ${idx} > comp.numLayers) return JSON.stringify({ error: "layerIndex out of range" });
 
   // Snapshot solo state of every layer, then solo target only
   var prev = [];
@@ -22,13 +24,13 @@ function buildJSX(outputPath, layerIndex, time) {
     prev.push(comp.layer(i).solo);
     comp.layer(i).solo = false;
   }
-  comp.layer(${layerIndex}).solo = true;
+  comp.layer(${idx}).solo = true;
 
   var t = ${t};
   if (t < 0) t = 0;
   if (t > comp.duration - comp.frameDuration) t = comp.duration - comp.frameDuration;
 
-  var f = new File("${outputPath}");
+  var f = new File(${jsStr(outputPath)});
   var err = null;
   try {
     comp.saveFrameToPng(t, f).wait();
@@ -46,8 +48,8 @@ function buildJSX(outputPath, layerIndex, time) {
   return JSON.stringify({
     ok: true,
     path: f.fsName,
-    layer: comp.layer(${layerIndex}).name,
-    layerIndex: ${layerIndex},
+    layer: comp.layer(${idx}).name,
+    layerIndex: ${idx},
     width: comp.width,
     height: comp.height,
     time: t

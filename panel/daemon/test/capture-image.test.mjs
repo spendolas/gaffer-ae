@@ -141,8 +141,9 @@ function toolHandler(register, name, inner) {
     var queue = {
       enqueue: async function (jsx) {
         seenJsx = jsx;
-        var m = /new File\("([^"]+)"\)/.exec(jsx);
-        writeFileSync(m[1], png);
+        // the path is one string literal (backslashes and quotes are escaped)
+        var m = /new File\(("(?:[^"\\]|\\.)*")\)/.exec(jsx);
+        writeFileSync(JSON.parse(m[1]), png);
         // a reply pointing somewhere else entirely
         return JSON.stringify({ ok: true, result: JSON.stringify({ ok: true, path: '/etc/hosts', width: 2400, height: 1200 }) });
       },

@@ -1,7 +1,10 @@
+import { jsNum } from './jsx-literal.js';
+
 function buildJSX(itemId) {
+  var id = jsNum(itemId);
   return `(function() {
-  var target = app.project.itemByID(${itemId});
-  if (!target) return JSON.stringify({ error: "No item with id " + ${itemId} });
+  var target = app.project.itemByID(${id});
+  if (!target) return JSON.stringify({ error: "No item with id " + ${id} });
   var hits = [];
   var items = app.project.items;
   for (var k = 1; k <= items.length; k++) {
@@ -9,7 +12,7 @@ function buildJSX(itemId) {
     if (!(c instanceof CompItem)) continue;
     for (var i = 1; i <= c.numLayers; i++) {
       var l = c.layer(i);
-      if (l.source && l.source.id === ${itemId}) {
+      if (l.source && l.source.id === ${id}) {
         hits.push({ comp: c.name, compId: c.id, layerIndex: l.index, layerName: l.name });
       }
     }

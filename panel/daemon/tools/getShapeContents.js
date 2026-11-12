@@ -1,3 +1,5 @@
+import { jsNum } from './jsx-literal.js';
+
 export const JSX_CODE = `(function() {
   var layerIndex = __LAYER_INDEX__;
   var includePoints = __INCLUDE_POINTS__;
@@ -88,7 +90,7 @@ export function register(server, queue, z) {
     async ({ layerIndex, includePoints, aeVersion } = {}) => {
       try {
         var code = JSX_CODE
-          .replace('__LAYER_INDEX__', String(Math.floor(layerIndex)))
+          .replace('__LAYER_INDEX__', jsNum(Math.floor(layerIndex)))
           .replace('__INCLUDE_POINTS__', includePoints ? 'true' : 'false');
         var raw = await queue.enqueue(code, 'getShapeContents', true, aeVersion);
         var parsed = JSON.parse(raw);
