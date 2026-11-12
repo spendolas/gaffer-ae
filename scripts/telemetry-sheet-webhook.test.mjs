@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const src = readFileSync(fileURLToPath(new URL('./telemetry-sheet-webhook.gs', import.meta.url)), 'utf8');
 
-function load({ preload = 0, failLock = false, noCache = false } = {}) {
+function load({ preload = 0, failLock = false, noCache = false, noProps = false } = {}) {
   const rows = [];
   for (let i = 0; i < preload; i++) rows.push(['x']);
   const sheet = {
@@ -36,13 +36,22 @@ function load({ preload = 0, failLock = false, noCache = false } = {}) {
     if (noCache) throw new Error('cache unavailable');
     return { get: (k) => (k in store ? store[k] : null), put: (k, v) => { store[k] = String(v); } };
   } };
+  const props = {};
+  const PropertiesService = { getScriptProperties: () => {
+    if (noProps) throw new Error('properties unavailable');
+    return { getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } };
+  } };
   const lockState = { acquired: 0, released: 0 };
   const LockService = { getScriptLock: () => ({
     waitLock: () => { if (failLock) throw new Error('lock timeout'); lockState.acquired++; },
     releaseLock: () => { lockState.released++; },
   }) };
-  const api = new Function('SpreadsheetApp', 'ContentService', 'CacheService', 'LockService', src
-    + '\nreturn { doPost: doPost, rowsForPayload: rowsForPayload, validatePayload: validatePayload, MAX_ROWS: MAX_ROWS, RATE_LIMIT_POSTS: RATE_LIMIT_POSTS, MAX_MODELS: MAX_MODELS, MAX_BODY_CHARS: MAX_BODY_CHARS };')(SpreadsheetApp, ContentService, CacheService, LockService);
+  // The clock is a function in the script (nowMs), replaced here so a test can move time.
+  const api = new Function('SpreadsheetApp', 'ContentService', 'CacheService', 'LockService', 'PropertiesService', src
+    + '\nvar __now = Date.UTC(2026, 10, 12, 13, 0, 0); nowMs = function () { return __now; };'
+    + '\nreturn { doPost: doPost, rowsForPayload: rowsForPayload, validatePayload: validatePayload, MAX_ROWS: MAX_ROWS, RATE_LIMIT_POSTS: RATE_LIMIT_POSTS, MAX_MODELS: MAX_MODELS, MAX_BODY_CHARS: MAX_BODY_CHARS,'
+    + ' GLOBAL_POSTS_PER_HOUR: GLOBAL_POSTS_PER_HOUR, GLOBAL_POSTS_PER_DAY: GLOBAL_POSTS_PER_DAY, RATE_WINDOW_SECONDS: RATE_WINDOW_SECONDS,'
+    + ' setNow: function (t) { __now = t; }, now: function () { return __now; } };')(SpreadsheetApp, ContentService, CacheService, LockService, PropertiesService);
   return {
     rows, store, lockState, api,
     post: (body) => api.doPost({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }),
@@ -378,4 +387,72 @@ test('hostile prototype and nesting tricks do not get through or crash the scrip
   assert.equal(s.post('{"a":'.repeat(2000)).text, 'ok');
   assert.equal(s.post('['.repeat(5000)).text, 'ok');
   assert.equal(s.rows.length, 0);
+});
+
+const uuid = (i) => '00000000-0000-4000-8000-' + String(i).padStart(12, '0');
+const HOUR = 3600 * 1000;
+
+test('a global quota per hour stops a flood of fresh UUIDs; the next hour starts clean', () => {
+  const s = load();
+  const limit = s.api.GLOBAL_POSTS_PER_HOUR;
+  assert.ok(limit >= 50 && limit <= 1000, 'a sane hourly limit: ' + limit);
+  for (let i = 0; i < limit + 20; i++) s.post({ ...base, installId: uuid(i), byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 1 + limit, 'header plus exactly the allowed posts');
+  s.api.setNow(s.api.now() + HOUR);
+  s.post({ ...base, installId: uuid(5000), byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 2 + limit, 'the next hour accepts again');
+});
+
+test('a global quota per day holds across hours and resets the next day', () => {
+  const s = load();
+  const day = s.api.GLOBAL_POSTS_PER_DAY;
+  const hour = s.api.GLOBAL_POSTS_PER_HOUR;
+  assert.ok(day > hour && day <= 20000, 'a sane daily limit: ' + day);
+  const t0 = Date.UTC(2026, 10, 12, 0, 0, 0);
+  let n = 0;
+  for (let h = 0; h < 24; h++) {
+    s.api.setNow(t0 + h * HOUR + 1000);
+    for (let i = 0; i < hour; i++) s.post({ ...base, installId: uuid(n++), byModel: { 'a::a': { turns: 1 } } });
+  }
+  assert.equal(s.rows.length, 1 + day, 'no more than the daily limit in a day, however the hours fall');
+  s.api.setNow(t0 + 24 * HOUR + 1000);
+  s.post({ ...base, installId: uuid(n++), byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 2 + day, 'the next day accepts again');
+});
+
+test('a post rejected by the per-install limit does not use up the global quota', () => {
+  const s = load();
+  const limit = s.api.RATE_LIMIT_POSTS;
+  for (let i = 0; i < limit + 30; i++) s.post({ ...base, byModel: { 'a::a': { turns: 1 } } });
+  for (let i = 0; i < s.api.GLOBAL_POSTS_PER_HOUR - limit; i++) s.post({ ...base, installId: uuid(i), byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 1 + s.api.GLOBAL_POSTS_PER_HOUR, 'only accepted posts were counted');
+});
+
+test('the global quota is best effort: an unavailable cache or properties store never blocks a post', () => {
+  for (const opts of [{ noCache: true }, { noProps: true }, { noCache: true, noProps: true }]) {
+    const s = load(opts);
+    assert.equal(s.post({ ...base, byModel: { 'a::a': { turns: 1 } } }).text, 'ok');
+    assert.equal(s.rows.length, 2, JSON.stringify(opts));
+  }
+});
+
+test('the per-install window is fixed, not sliding: posts spread over a window count together, the next window starts clean', () => {
+  const s = load();
+  const limit = s.api.RATE_LIMIT_POSTS;
+  const windowMs = s.api.RATE_WINDOW_SECONDS * 1000;
+  const start = Math.floor(Date.UTC(2026, 10, 12, 13, 0, 0) / windowMs) * windowMs;
+  s.api.setNow(start + HOUR);
+  for (let i = 0; i < limit / 2; i++) s.post({ ...base, byModel: { 'a::a': { turns: 1 } } });
+  s.api.setNow(start + windowMs - 60 * 1000);
+  for (let i = 0; i < limit; i++) s.post({ ...base, byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 1 + limit, 'the window allows exactly the limit, late posts did not extend it');
+  s.api.setNow(start + windowMs + 1000);
+  s.post({ ...base, byModel: { 'a::a': { turns: 1 } } });
+  assert.equal(s.rows.length, 2 + limit, 'a new window accepts again');
+});
+
+test('the limits are documented at the top of the script', () => {
+  assert.match(src, /GLOBAL_POSTS_PER_HOUR/);
+  assert.match(src, /GLOBAL_POSTS_PER_DAY/);
+  assert.match(src, /Limits:/);
 });
