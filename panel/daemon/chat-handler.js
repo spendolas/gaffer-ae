@@ -16,7 +16,7 @@ import {
   extractPastedImages, buildStreamJsonInput, isValidSessionId, isValidModelName,
 } from './chat-lockdown.js';
 import { loadImageForModel } from './capture-image.js';
-import { normalizeSvgIconBuffer } from './svg-icon.js';
+import { normalizeSvgIconBuffer, MAX_ICON_BYTES } from './svg-icon.js';
 // Vendored shared module (panel/daemon/vendor, see CLAUDE.md): live model
 // discovery. Change it in its own repo, then `npm run sync-vendor`.
 import { createModelCatalog, EFFORT_LEVELS } from './vendor/claude-model-catalog/index.mjs';
@@ -504,7 +504,7 @@ async function fetchSimpleIcon(id, displayName) {
       });
       if (!res.ok) continue;
       var text = await res.text();
-      if (text.indexOf('<svg') === -1) continue;
+      if (text.indexOf('<svg') === -1 || text.length > MAX_ICON_BYTES) continue;
       // fill with currentColor so the panel's tile color drives the glyph
       text = text.replace('<svg', '<svg fill="currentColor"');
       var buf = Buffer.from(text);
