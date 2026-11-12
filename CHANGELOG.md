@@ -11,6 +11,8 @@
 - Gaffer chat needs a recent Claude Code. On an older version the panel shows "Update Claude Code to use Gaffer chat" instead of starting a chat.
 - Frames that Gaffer captures and screenshots you paste are now sent to Claude directly as images. Large images are scaled down first, and an image that is too large to scale is skipped with a note.
 - After updating, the first message in an existing chat starts a fresh conversation (you will see "Previous session expired"). Your chat history stays visible in the panel, but Claude does not remember the earlier conversation.
+- Importing from Figma now treats layer names, text and fonts strictly as text, so names with line breaks or unusual characters come through unchanged.
+- Gaffer's other tools write file paths, names and numbers into After Effects scripts the same careful way, so a path with backslashes or quotes stays exactly as given.
 
 ## v0.12.1 - 2026-10-26
 
