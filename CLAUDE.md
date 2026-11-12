@@ -65,7 +65,7 @@ gaffer/
 │   │   ├── fetch-runtime.sh, fetch-runtime.ps1  # Download, verify and swap in the pinned runtime (installers, updaters)
 │   │   ├── start.sh, start.ps1    # ExtendScript-route launchers, mirror resolveDaemonLaunch
 │   │   ├── launch.cjs             # Detached spawn helper used by start.ps1
-│   │   ├── update.sh, update.ps1  # One-click update from the latest GitHub release asset (stages the runtime when pins change, no npm)
+│   │   ├── update.sh, update.ps1  # One-click update from the latest GitHub release asset: verifies it against SHA256SUMS.txt first, then stages the runtime when pins change (no npm)
 │   │   ├── stop-daemon.ps1        # Stops whatever listens on :9823 (Windows)
 │   │   ├── tools/                 # One file per typed MCP tool (24) + figma-translator.js helper
 │   │   ├── vendor/                # Vendored shared modules (claude-model-catalog: live model discovery); bundled, never shipped as files
@@ -82,6 +82,7 @@ gaffer/
 │   ├── node-runtime-check.mjs # Weekly runtime pin checker (node-runtime-check.yml)
 │   ├── readme-pins.mjs        # Generates the README runtime steps from runtime-pins.json (--write)
 │   ├── install-mac.sh, install-win.ps1  # Dev installers from a checkout
+│   ├── telemetry-sheet-webhook.gs  # Apps Script that receives usage stats (deployed by the owner, tested under Node by its .test.mjs)
 │   └── gaffer-cli.sh          # CLI wrapper
 ├── docs/                      # Spec, Claude Hub integration, bug reports
 ├── assets/                    # Local-only store (untracked): fonts/AdobeClean.zip (licensed), fonts/SourceSans3 (OFL, staged for bundling), Knowledge/ (AE SDK/CEP reference archives)
@@ -121,7 +122,7 @@ Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-on
 
 ## Releasing
 
-- A release is: bump `version` in `panel/version.json`, add a `CHANGELOG.md` section headed `## v<version> - <date>` (bold one-line summary, then plain-language bullets), push to `main`. `.github/workflows/release.yml` runs `scripts/release-gate.mjs` (skip, create or recover), the tests and `scripts/package-release.sh`, then publishes release `v<version>` with five assets: `gaffer-install-mac.tar.gz`, `gaffer-install-win.zip`, `gaffer-update-mac.tar.gz`, `gaffer-update-win.zip` and `SHA256SUMS.txt` (the README install verifies the package against it). Before publishing, the `build` job (Node 24) bundles `daemon.mjs`, writes `THIRD-PARTY-NOTICES.txt`, runs the hygiene checks and `npm audit`, and the `smoke` job runs the packaged bundle on the official runtime on macOS arm64, macOS Intel and Windows. A push that does not change `version` publishes nothing. A version with a `-` suffix (`0.12.0-beta.1`) becomes a prerelease, which the panel never offers.
+- A release is: bump `version` in `panel/version.json`, add a `CHANGELOG.md` section headed `## v<version> - <date>` (bold one-line summary, then plain-language bullets), push to `main`. `.github/workflows/release.yml` runs `scripts/release-gate.mjs` (skip, create or recover), the tests and `scripts/package-release.sh`, then publishes release `v<version>` with five assets: `gaffer-install-mac.tar.gz`, `gaffer-install-win.zip`, `gaffer-update-mac.tar.gz`, `gaffer-update-win.zip` and `SHA256SUMS.txt` (the README install and both updaters verify the package against it, so it must be published with every release and list each asset under its exact name). Before publishing, the `build` job (Node 24) bundles `daemon.mjs`, writes `THIRD-PARTY-NOTICES.txt`, runs the hygiene checks and `npm audit`, and the `smoke` job runs the packaged bundle on the official runtime on macOS arm64, macOS Intel and Windows. A push that does not change `version` publishes nothing. A version with a `-` suffix (`0.12.0-beta.1`) becomes a prerelease, which the panel never offers.
 - **What ships:** `daemon/daemon.mjs` (the bundle), the one-line shim `daemon/index.js` and a dependency-free `daemon/package.json`, never `node_modules`, a source map, tests or daemon source modules. Keep the shim and the dependency-free `package.json` in every release while 0.11.x clients exist: their old updater requires `daemon/index.js` and runs `npm install --omit=dev`. The runtime is not in the package; installers and updaters fetch it.
 - **Runtime pins:** `panel/daemon/runtime-pins.json` is the only place the Node version, URLs, SHA-256s, sizes and signing identities live. After changing it, run `node scripts/readme-pins.mjs --write`. A release that changes the pinned version makes the updater download the new runtime once. The mirror is a normal versioned GitHub release `node-v<version>` on `spendolas/gaffer-ae` with the official archives byte for byte plus `SHASUMS256.txt` and `.sig`, created with `gh release create node-v<version> --latest=false` (without `--latest=false` it becomes "latest" and breaks every `releases/latest` URL and the panel's update check). `.github/workflows/node-runtime-check.yml` runs weekly (Monday 08:30 UTC) and fails on a newer security release of the pinned line, a pinned hash that differs from nodejs.org, a mirror that differs from the official archives, or `releases/latest` pointing at a non-`v*` tag.
 - Dry run: `gh workflow run release.yml -f dry_run=true`, then `gh run download <run-id> -n gaffer-release`. Retry a failed publish with `gh workflow run release.yml -f dry_run=false` on `main`.
@@ -161,6 +162,18 @@ Tests/linters: `node scripts/check-ps-encoding.mjs` (every .ps1 must be ASCII-on
 - **Serialization at daemon level** — daemon must not send concurrent messages to a panel.
 - Panel disconnect mid-call → reject pending promise with clear error, never hang.
 - Never render, save, close, or delete unless explicitly asked (`addToRenderQueue` queues only — never starts a render).
+
+## Security invariants
+
+Rules every change must keep true. Most are pinned by tests that fail when one is broken; extend the test when you extend the rule.
+
+- **Chat spawn:** `claude` for chat is only ever started through `buildChatArgs` in `chat-lockdown.js`, which always adds the restriction flags (no built-in tools, strict MCP config, no inherited settings, empty working directory). The prompt goes on stdin. Chat refuses to start when the installed Claude CLI lacks a required flag.
+- **Untrusted text:** model output, project content and saved chat history never go into `innerHTML` except through `SafeMarkdown.render` / `SafeMarkdown.sanitizeHtml` (`panel/lib/safe-markdown.js`). Use `textContent` for everything else, and keep the CSP meta in `index.html`.
+- **No developer files in releases:** `panel/.debug` stays untracked and out of every release archive (`package-release.sh` asserts it); the updaters delete it from installs.
+- **Panel connection:** the panel and daemon authenticate each other with the per-start token handshake before anything else is processed, and every incoming message is checked against a schema in `bridge-messages.js`. A new message type needs a schema first.
+- **Updates are verified before they are installed:** `update.sh` and `update.ps1` fetch `SHA256SUMS.txt` from the same release and compare the archive's SHA-256, then inspect the archive entries (no links, devices, absolute or `..` paths), unpack it into a private temp folder, require a strictly newer version from the archive's `version.json` (Repair may reinstall the same one, never an older one), and only then run the archive's own `fetch-runtime.*`. All fetches are https only. A failed check ends with `err:verify` (hash or sums), `err:archive` (entries or contents) or `err:version` (not newer) and leaves the install untouched. Keep that order. The same-release checksum covers truncated, partial or mismatched downloads; it is not a signature.
+- **Telemetry input is closed and checked on both ends:** the daemon sends only the documented fields, each re-cleaned at send time (model keys reduced to `[a-z0-9.-]`, counters bounded, `aeVersion`, `cliVersion`, `cliSource` and the date through their sanitizers, at most ten models with the rest folded into `other::other`), the endpoint override is honoured for loopback addresses only, and `scripts/telemetry-sheet-webhook.gs` validates every field before writing and limits posts per install and in total (the limits are listed at the top of the script). A new telemetry field is added to the daemon, the script and its test together. Redeploy the script with Manage deployments > edit > New version, never a new deployment (the URL is built into the daemon).
+- **Local files stay local:** project files, exports and screenshots in the repo folder are gitignored; do not widen `git add` beyond what you changed.
 
 ## Dependencies
 

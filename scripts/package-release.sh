@@ -72,6 +72,7 @@ fail() { echo "ERROR: stage assertion failed: $1" >&2; exit 1; }
 [ -z "$(find "$STAGE" -name '*.map' -print -quit)" ] || fail ".map file present"
 [ -z "$(find "$STAGE" -name package-lock.json -print -quit)" ] || fail "package-lock.json present"
 [ -z "$(find "$STAGE" \( -name .remember -o -name test -o -name test-fixtures \) -print -quit)" ] || fail "test or .remember dir present"
+[ -z "$(find "$STAGE" -type l -print -quit)" ] || fail "symlink present (the updaters refuse archives with links)"
 [ -z "$(find "$STAGE" -name .debug -print -quit)" ] || fail ".debug present (a development setting, never shipped)"
 [ ! -e "$STAGE/daemon/vendor" ] || fail "daemon/vendor present (vendored modules ship inside daemon.mjs only)"
 [ -z "$(find "$STAGE" -name '*.cjs' ! -path "$STAGE/daemon/launch.cjs" -print -quit)" ] || fail ".cjs file beside daemon/launch.cjs"
@@ -79,6 +80,8 @@ EXTRA="$(find "$STAGE/daemon" -type f \( -name '*.js' -o -name '*.mjs' -o -name 
 [ -z "$EXTRA" ] || fail "code modules beside daemon.mjs: $EXTRA"
 [ "$(cat "$STAGE/daemon/index.js")" = "import './daemon.mjs';" ] || fail "index.js is not the shim"
 [ "$(cat "$STAGE/daemon/package.json")" = '{"name":"gaffer-daemon","private":true,"type":"module"}' ] || fail "daemon/package.json is not the dependency-free one"
+# No developer path or secret shape in any text file that ships (the daemon bundle is scanned with a longer list while it is built).
+bash "$REPO_ROOT/scripts/bundle-daemon.sh" --stage-hygiene-only "$STAGE" || fail "hygiene check over the staged package"
 
 # 5. Archives (names unchanged) and SHA256SUMS.txt over them.
 tar -czf "$OUT_DIR/gaffer-install-mac.tar.gz" -C "$STAGE" .

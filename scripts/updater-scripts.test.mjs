@@ -6,11 +6,13 @@
 // on the platform a developer is not running.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 // Runs a snippet of update.sh (a function or a case block, cut out by its
@@ -112,7 +114,7 @@ test('update.sh ends a failed rsync step with an ERROR line and err:sync, and ha
   assert.ok(!sh.includes('install_deps'), 'the npm block is gone');
   assert.ok(!/\bnpm\b/.test(sh.replace(/^\s*#.*$/gm, '')), 'no npm call outside comments');
   assert.ok(!sh.includes('err:npm'), 'err:npm is gone from the script and its contract comment');
-  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:runtime, err:sync'), 'the contract comment names the codes');
+  assert.ok(sh.includes('err:dev-install, err:lock, err:download, err:verify, err:version, err:runtime, err:sync'), 'the contract comment names the codes');
 });
 
 // ---- zero-dependency install: the runtime step (spec 6, 7) ----
@@ -132,8 +134,8 @@ test('update.sh checks the archive for daemon/daemon.mjs and orders recovery, st
   assert.ok(sh.includes('missing version.json or daemon/daemon.mjs'));
   const main = sh.slice(sh.indexOf(RT_LAST));
   const at = (s) => { const i = main.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
-  assert.ok(at('if ! recover_runtime; then') < at('if ! download_and_extract; then'), 'recovery runs before anything else is fetched');
-  assert.ok(at('if ! download_and_extract; then') < at('if ! stage_runtime; then'), 'the archive is extracted first, its own fetch-runtime.sh runs');
+  assert.ok(at('if ! recover_runtime; then') < at('if ! download_asset; then'), 'recovery runs before anything else is fetched');
+  assert.ok(at('if ! extract_archive; then') < at('if ! stage_runtime; then'), 'the archive is extracted first, its own fetch-runtime.sh runs');
   assert.ok(at('if ! stage_runtime; then') < at('stop_daemon\n'), 'staged while the daemon still runs');
   assert.ok(at('stop_daemon\n') < at('if ! swap_runtime; then'), 'stopped before the swap');
   assert.ok(at('if ! swap_runtime; then') < at('if ! sync_files; then'), 'swap, then sync');
@@ -247,11 +249,13 @@ test('update.sh freezes a non-leader holder before snapshotting its descendants 
 });
 
 test('update.sh ends a failed download or extract with an ERROR line and err:download', () => {
-  assert.ok(sh.includes('download_and_extract() {'));
-  const fn = sh.split('download_and_extract() {')[1].split('\n}\n')[0];
-  assert.ok(/curl -fsSL[^\n]* \|\| return 1 ;;/.test(fn), 'curl failure returns, not set -e exit');
-  assert.ok(fn.includes('tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" || return 1'), 'tar failure returns too');
-  assert.ok(sh.includes('if ! download_and_extract; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
+  assert.ok(sh.includes('download_asset() {') && sh.includes('extract_archive() {'));
+  const fn = sh.split('download_asset() {')[1].split('\n}\n')[0];
+  assert.ok(fn.includes('fetch_source "$ASSET_SOURCE" "$ARCHIVE" || return 1'), 'a failed fetch returns, not set -e exit');
+  assert.ok(/curl -fsSL[^\n]*"\$1" -o "\$2"/.test(sh.split('fetch_url() {')[1].split('\n}\n')[0]), 'curl is in fetch_url');
+  assert.ok(sh.split('extract_archive() {')[1].split('\n}\n')[0].includes('tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR" || return 1'), 'tar failure returns too');
+  assert.ok(sh.includes('if ! download_asset; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! extract_archive; then\n  echo "ERROR: download or extract failed"\n  result_line "err:download"\n  exit 1\nfi'));
   assert.ok(sh.includes('err:dev-install, err:lock, err:download'), 'the contract comment names the new code');
 });
 
@@ -614,7 +618,7 @@ const ps1Code = ps1.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const ps1Body = ps1.slice(ps1.indexOf('\ntry {\n'));
 
 test('update.ps1 names err:runtime in its contract and has no npm step or Node probe left', () => {
-  assert.ok(ps1.includes('err:download,\n#                           err:sync, err:runtime) after an ERROR line'), 'the contract comment names err:runtime instead of err:npm');
+  assert.ok(ps1.includes('err:download,\n#                           err:verify, err:version, err:sync, err:runtime) after an ERROR line'), 'the contract comment names err:runtime instead of err:npm');
   assert.ok(!/npm/i.test(ps1Code), 'a code line still mentions npm: ' + (ps1Code.split('\n').find((l) => /npm/i.test(l)) || '').trim());
   assert.ok(!ps1.includes('err:npm'), 'err:npm is gone');
   for (const probe of ['\\nodejs', 'NVM_SYMLINK', 'Get-Command node', '$env:Path = ']) {
@@ -800,7 +804,7 @@ test('update.ps1 takes -Repair and hands -Force to the archive\'s fetch-runtime.
 
 test('the Windows runtime harness has a repair case', () => {
   const t6 = readFileSync(fileURLToPath(new URL('./windows-tests/test-6-runtime-update.ps1', import.meta.url)), 'utf8');
-  for (const c of ['Case 5a: repair re-provisions a current runtime', 'Case 5b: a damaged runtime at the same version', 'Case 5c: a repair whose download fails']) {
+  for (const c of ['Case 5a: repair re-provisions a current runtime', 'Case 5b: a damaged runtime, plain update of an older install', 'Case 5c: a repair whose download fails']) {
     assert.ok(t6.includes(c), 'missing ' + c);
   }
   assert.ok(t6.includes('"-Repair"'), 'the harness never runs update.ps1 -Repair');
@@ -945,14 +949,21 @@ test('update.sh swap_runtime failing mid-swap really ends the run with err:runti
 // panel keeps waiting for the updater that took over a stuck run).
 
 // The codes each updater may print, as documented in its header contract.
-const ERR_CODES = ['dev-install', 'lock', 'download', 'archive', 'runtime', 'runtime-swap', 'sync', 'internal'];
+const ERR_CODES = ['dev-install', 'lock', 'download', 'verify', 'version', 'archive', 'runtime', 'runtime-swap', 'sync', 'internal'];
 
 // Runs the real update.sh from a scratch install (no git repo above it, so
 // no dev-install refusal) against a local asset built by `build` (a bash
 // snippet that writes "$ASSET" from "$SRC", or anything else). Every case
 // fails before the daemon would be stopped, so no lsof/kill ever runs; PATH
 // gets a no-op lsof anyway. Returns { status, last, log }.
-function runUpdateSh(build, { env = {}, during } = {}) {
+//
+// Options: asset (a Buffer written as the asset instead of running `build`),
+// sums ('good' | 'wrong' | 'other-name' | 'duplicate' | 'upper' | 'crlf' |
+// 'bad-hash' | undefined for no sums file), installed (the installed version,
+// null for no version.json), unverified (default true: the harness switch
+// GAFFER_UPDATE_TEST_UNVERIFIED lets a local asset without a sums file
+// through; the verification cases turn it off).
+function runUpdateSh(build, { env = {}, during, asset: assetBuf, sums, installed = '0.12.0', unverified = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'gaffer-errcode-'));
   try {
     const panel = join(root, 'Application Support', 'com.gaffer.panel');
@@ -963,13 +974,31 @@ function runUpdateSh(build, { env = {}, during } = {}) {
     mkdirSync(shim);
     writeFileSync(join(shim, 'lsof'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     copyFileSync(fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url)), join(panel, 'daemon', 'update.sh'));
-    writeFileSync(join(panel, 'version.json'), '{"version":"0.12.0","commit":"x"}\n');
+    if (installed !== null) writeFileSync(join(panel, 'version.json'), '{"version":"' + installed + '","commit":"x"}\n');
     const asset = join(root, 'asset.tar.gz');
-    const b = spawnSync('/bin/bash', ['-c', 'set -euo pipefail\nSRC="$1"; ASSET="$2"; mkdir -p "$SRC/daemon"\n' + build, 'build', join(root, 'src'), asset], { encoding: 'utf8' });
-    assert.equal(b.status, 0, 'building the asset failed: ' + b.stderr);
-    const before = readFileSync(join(panel, 'version.json'), 'utf8');
+    if (assetBuf) {
+      writeFileSync(asset, assetBuf);
+    } else {
+      const b = spawnSync('/bin/bash', ['-c', 'set -euo pipefail\nSRC="$1"; ASSET="$2"; mkdir -p "$SRC/daemon"\n' + build, 'build', join(root, 'src'), asset], { encoding: 'utf8' });
+      assert.equal(b.status, 0, 'building the asset failed: ' + b.stderr);
+    }
+    if (sums && existsSync(asset)) {
+      const hash = createHash('sha256').update(readFileSync(asset)).digest('hex');
+      const other = createHash('sha256').update('something else').digest('hex');
+      const lines = {
+        good: [hash + '  asset.tar.gz', other + '  gaffer-update-win.zip'],
+        wrong: [other + '  asset.tar.gz'],
+        'other-name': [hash + '  gaffer-update-win.zip'],
+        duplicate: [hash + '  asset.tar.gz', other + '  asset.tar.gz'],
+        upper: [hash.toUpperCase() + '  asset.tar.gz'],
+        crlf: [hash + '  asset.tar.gz\r'],
+        'bad-hash': ['zz' + hash.slice(2) + '  asset.tar.gz'],
+      }[sums];
+      writeFileSync(join(root, 'SHA256SUMS.txt'), lines.join('\n') + '\n');
+    }
+    const before = installed === null ? null : readFileSync(join(panel, 'version.json'), 'utf8');
     const args = [join(panel, 'daemon', 'update.sh'), ...(env.REPAIR ? ['--repair'] : [])];
-    const fullEnv = { PATH: shim + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmp, GAFFER_UPDATE_ASSET: asset, ...env };
+    const fullEnv = { PATH: shim + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmp, GAFFER_UPDATE_ASSET: asset, ...(unverified ? { GAFFER_UPDATE_TEST_UNVERIFIED: '1' } : {}), ...env };
     let r;
     if (during) {
       r = during(args, fullEnv, tmp);
@@ -978,7 +1007,8 @@ function runUpdateSh(build, { env = {}, during } = {}) {
     }
     const log = readFileSync(join(tmp, 'gaffer-update.log'), 'utf8');
     const lines = log.split('\n').filter((l) => l !== '');
-    assert.equal(readFileSync(join(panel, 'version.json'), 'utf8'), before, 'the install was left as it was');
+    if (before === null) assert.ok(!existsSync(join(panel, 'version.json')), 'the install was left as it was');
+    else assert.equal(readFileSync(join(panel, 'version.json'), 'utf8'), before, 'the install was left as it was');
     assert.ok(!existsSync(join(tmp, 'gaffer-update.lock')), 'the lock was released');
     return { status: r.status, signal: r.signal, last: lines[lines.length - 1], log };
   } finally {
@@ -1204,4 +1234,355 @@ test('dev installers create panel/.debug for checkouts only; the copy-mode exclu
   assert.match(installWin, /Port=""13870""|Port="13870"/);
   assert.match(installWin, /if \(\$installKind -eq "symlink"\)/);
   assert.ok(installWin.includes('/XF package-lock.json .debug'), 'a copy install never carries it');
+});
+
+// ---- the downloaded update is verified before the install is touched ----
+// A minimal ustar writer, so a test can build archives tar itself would
+// refuse to create (absolute names, .. segments, links, devices).
+function tarBuf(entries) {
+  const blocks = [];
+  for (const e of entries) {
+    const type = e.type || '0';
+    const data = e.data === undefined ? Buffer.alloc(0) : Buffer.from(e.data);
+    const h = Buffer.alloc(512);
+    h.write(e.name, 0, 100, 'utf8');
+    h.write((e.mode === undefined ? (type === '5' ? 0o755 : 0o644) : e.mode).toString(8).padStart(7, '0') + '\0', 100);
+    h.write('0000000\0', 108);
+    h.write('0000000\0', 116);
+    h.write((type === '0' ? data.length : 0).toString(8).padStart(11, '0') + '\0', 124);
+    h.write('00000000000\0', 136);
+    h.write('        ', 148);
+    h.write(type, 156);
+    if (e.link) h.write(e.link, 157, 100, 'utf8');
+    h.write('ustar\0', 257);
+    h.write('00', 263);
+    let sum = 0;
+    for (const b of h) sum += b;
+    h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
+    blocks.push(h);
+    if (type === '0' && data.length) {
+      blocks.push(data);
+      if (data.length % 512) blocks.push(Buffer.alloc(512 - (data.length % 512)));
+    }
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
+}
+const goodEntries = (version = '9.9.9') => [
+  { name: 'version.json', data: '{"version":"' + version + '","commit":"abc"}\n' },
+  { name: 'daemon/', type: '5' },
+  { name: 'daemon/daemon.mjs', data: '// bundle\n' },
+];
+const verifyRun = (entries, opts = {}) => runUpdateSh(null, { asset: tarBuf(entries), sums: 'good', unverified: false, ...opts });
+// A run that passed every check ends at the first step after them: the
+// archive of these tests has no fetch-runtime.sh, so the runtime step fails.
+const PASSED = 'err:runtime';
+
+test('update.sh refuses a download without a sums file, with a wrong hash, or with no line for it (err:verify, install untouched, nothing unpacked)', () => {
+  const cases = [
+    ['no SHA256SUMS.txt next to the asset', undefined],
+    ['wrong hash', 'wrong'],
+    ['sums list another file only', 'other-name'],
+    ['two lines for the asset', 'duplicate'],
+    ['a hash that is not hex', 'bad-hash'],
+  ];
+  for (const [name, sums] of cases) {
+    for (const repair of [false, true]) {
+      const r = verifyRun(goodEntries(), { sums, env: repair ? { REPAIR: '1' } : {} });
+      const label = name + (repair ? ' (--repair)' : '');
+      assert.equal(r.status, 1, label + '\n' + r.log);
+      assert.equal(r.last, 'err:verify', label + '\n' + r.log);
+      assert.match(r.log, /\nERROR: [^\n]+\nerr:verify\n$/, label);
+      assert.doesNotMatch(r.log, /^Release: v/m, label + ': nothing was unpacked or read');
+      assert.doesNotMatch(r.log, /^Stopping daemon/m, label);
+    }
+  }
+});
+
+test('update.sh accepts a download whose hash is listed for it (upper case and CRLF sums included) and goes on to the next step', () => {
+  for (const sums of ['good', 'upper', 'crlf']) {
+    const r = verifyRun(goodEntries(), { sums });
+    assert.equal(r.last, PASSED, sums + '\n' + r.log);
+    assert.match(r.log, /^Download verified: sha256 [0-9a-f]{64}$/m, sums);
+  }
+});
+
+test('update.sh: a local test asset without a sums file passes only with the harness switch, and a sums file that is there is still checked', () => {
+  const noSums = runUpdateSh(null, { asset: tarBuf(goodEntries()), unverified: true });
+  assert.equal(noSums.last, PASSED, noSums.log);
+  assert.match(noSums.log, /not verified \(test asset/, 'the log says so');
+  const wrong = runUpdateSh(null, { asset: tarBuf(goodEntries()), sums: 'wrong', unverified: true });
+  assert.equal(wrong.last, 'err:verify', wrong.log);
+  const off = runUpdateSh(null, { asset: tarBuf(goodEntries()), unverified: false });
+  assert.equal(off.last, 'err:verify', off.log);
+});
+
+test('update.sh refuses a release that is not strictly newer than the installed version (Repair may reinstall the same one, never an older one)', () => {
+  const run = (installed, archive, repair) => verifyRun(goodEntries(archive), { installed, env: repair ? { REPAIR: '1' } : {} }).last;
+  assert.equal(run('0.12.0', '0.12.1'), PASSED);
+  assert.equal(run('0.12.0', '0.12.0'), 'err:version', 'equal');
+  assert.equal(run('0.12.0', '0.11.9'), 'err:version', 'older');
+  assert.equal(run('0.12.0', '0.9.99'), 'err:version', 'older, numeric not text order');
+  assert.equal(run('0.12.0', '0.12.0-beta.1'), 'err:version', 'a prerelease of the installed version is older');
+  assert.equal(run('0.12.0', '0.12.1-beta.1'), PASSED, 'a prerelease of a newer version is newer');
+  assert.equal(run('0.12.0-beta.1', '0.12.0'), PASSED, 'the final release is newer than its prerelease');
+  assert.equal(run('0.12.0-beta.2', '0.12.0-beta.10'), PASSED, 'prerelease numbers compare as numbers');
+  assert.equal(run('0.12.0', '0.12.0', true), PASSED, 'Repair: equal is allowed');
+  assert.equal(run('0.12.0', '0.11.9', true), 'err:version', 'Repair: older is not');
+  assert.equal(run('0.12.0', '0.12.0-beta.1', true), 'err:version', 'Repair: an older prerelease is not');
+  assert.equal(run('0.12.0', 'banana'), 'err:archive', 'a version that is not semver is not a release');
+  assert.equal(run('0.12.0', '1.2'), 'err:archive');
+  assert.equal(run(null, '0.12.1'), PASSED, 'an install whose version cannot be read is not compared');
+  assert.equal(run('garbage', '0.12.1'), PASSED);
+  const refused = verifyRun(goodEntries('0.11.9'), { installed: '0.12.0' });
+  assert.match(refused.log, /Refusing release v0\.11\.9: it is not newer than the installed v0\.12\.0/);
+});
+
+test('update.sh version_cmp agrees with the release gate on prerelease ordering (run under bash)', async () => {
+  const { compareVersions } = await import('./release-gate.mjs');
+  const versions = ['0.12.0', '0.12.1', '0.11.9', '0.9.99', '1.0.0', '0.12.0-beta.1', '0.12.0-beta.2', '0.12.0-beta.10', '0.12.0-rc.1', '0.12.0-alpha', '0.12.1-beta.1', '10.0.0', '0.0.0'];
+  const pairs = [];
+  for (const a of versions) for (const b of versions) pairs.push([a, b]);
+  const body = pairs.map(([a, b]) => 'echo "$(version_cmp ' + a + ' ' + b + ')"').join('\n');
+  const snip = sh.slice(sh.indexOf('num_cmp() {'), sh.indexOf('# An update must install a strictly newer'));
+  const run = (b) => { const x = spawnSync('bash', ['-c', 'set -euo pipefail\n' + snip + '\n' + b], { env: { PATH: process.env.PATH }, encoding: 'utf8' }); return { status: x.status, stdout: x.stdout.trim(), stderr: x.stderr.trim() }; };
+  const r = run(body);
+  assert.equal(r.status, 0, r.stderr);
+  const got = r.stdout.split('\n');
+  pairs.forEach(([a, b], i) => assert.equal(Number(got[i]), compareVersions(a, b), a + ' vs ' + b));
+  const bad = run('version_cmp 1.2 1.2.3 && echo ok || echo fail');
+  assert.equal(bad.stdout, 'fail', 'a non-semver argument is an error, not an order');
+});
+
+test('update.sh rejects archives with absolute paths, .. segments, symlinks, hardlinks and devices before anything is unpacked (run under bash, real script)', (t) => {
+  const hostile = [
+    ['a .. segment', { name: 'daemon/../../escape.txt', data: 'x' }],
+    ['a leading ../', { name: '../escape.txt', data: 'x' }],
+    ['a symlink', { name: 'daemon/link', type: '2', link: '/etc' }],
+    ['a symlink to a relative target', { name: 'link', type: '2', link: 'daemon/daemon.mjs' }],
+    ['a hardlink', { name: 'daemon/hard', type: '1', link: 'daemon/daemon.mjs' }],
+    ['a character device', { name: 'daemon/dev', type: '3' }],
+    ['a block device', { name: 'daemon/blk', type: '4' }],
+    ['a fifo', { name: 'daemon/fifo', type: '6' }],
+    ['a backslash in a name', { name: 'daemon\\x', data: 'x' }],
+  ];
+  for (const [name, entry] of hostile) {
+    for (const repair of [false, true]) {
+      const r = verifyRun([...goodEntries(), entry], { env: repair ? { REPAIR: '1' } : {} });
+      const label = name + (repair ? ' (--repair)' : '');
+      assert.equal(r.last, 'err:archive', label + '\n' + r.log);
+      assert.match(r.log, /\nERROR: [^\n]+\nerr:archive\n$/, label);
+      assert.doesNotMatch(r.log, /^Release: v/m, label + ': nothing was read from it');
+    }
+  }
+  // An absolute name: only when this tar lists the name as stored (GNU tar
+  // may strip the slash on its own, which is harmless and not testable here).
+  const abs = tarBuf([...goodEntries(), { name: '/tmp/gaffer-abs-entry.txt', data: 'x' }]);
+  const dir = mkdtempSync(join(tmpdir(), 'gaffer-abs-'));
+  try {
+    writeFileSync(join(dir, 'a.tgz'), abs);
+    const listing = spawnSync('tar', ['-tzf', join(dir, 'a.tgz')], { encoding: 'utf8' }).stdout;
+    if (!/^\/tmp\/gaffer-abs-entry\.txt$/m.test(listing)) { t.skip('this tar strips the leading slash when listing'); return; }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const r = verifyRun([...goodEntries(), { name: '/tmp/gaffer-abs-entry.txt', data: 'x' }]);
+  assert.equal(r.last, 'err:archive', r.log);
+  assert.ok(!existsSync('/tmp/gaffer-abs-entry.txt'));
+});
+
+test('update.sh accepts the folder entries and plain files a real release has (leading ./, nested folders, 0755 scripts)', () => {
+  const entries = [
+    { name: './', type: '5' },
+    { name: './version.json', data: '{"version":"9.9.9","commit":"abc"}\n' },
+    { name: './daemon/', type: '5' },
+    { name: './daemon/daemon.mjs', data: '// bundle\n' },
+    { name: './daemon/update.sh', data: '#!/bin/bash\n', mode: 0o755 },
+    { name: './lib/', type: '5' },
+    { name: './lib/CSInterface.js', data: '//\n' },
+  ];
+  const r = verifyRun(entries);
+  assert.equal(r.last, PASSED, r.log);
+});
+
+test('update.sh check_extracted_tree backstops the listing: a symlink, a hardlinked file or a newline in a name left in the unpacked tree is refused (run under bash)', () => {
+  const run = (setup) => runShSnippet(sh, 'check_extracted_tree() {', '\n}\n',
+    'T="$(mktemp -d)"; trap \'rm -rf "$T"\' EXIT; EXTRACT_DIR="$T/x"; mkdir -p "$EXTRACT_DIR/daemon"; echo a > "$EXTRACT_DIR/daemon/a"\n' + setup + '\nif check_extracted_tree; then echo clean; else echo refused; fi', {});
+  assert.equal(run('true').stdout, 'clean');
+  assert.equal(run('ln -s a "$EXTRACT_DIR/daemon/s"').stdout.split('\n').pop(), 'refused');
+  assert.equal(run('ln "$EXTRACT_DIR/daemon/a" "$EXTRACT_DIR/daemon/h"').stdout.split('\n').pop(), 'refused');
+  assert.equal(run('echo b > "$EXTRACT_DIR/daemon/$(printf \'x\\ny\')"').stdout.split('\n').pop(), 'refused');
+  assert.equal(run('mkfifo "$EXTRACT_DIR/daemon/f"').stdout.split('\n').pop(), 'refused');
+});
+
+test('update.sh orders the checks: download, sums, hash, listing, unpack, tree scan, shape, version rule, then the archive\'s own fetch-runtime.sh', () => {
+  const main = sh.slice(sh.indexOf(RT_LAST));
+  const at = (s) => { const i = main.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  assert.ok(at('if ! download_asset; then') < at('if ! verify_download; then'));
+  assert.ok(at('if ! verify_download; then') < at('if ! inspect_archive; then'), 'the hash is checked before the archive is even listed');
+  assert.ok(at('if ! inspect_archive; then') < at('if ! extract_archive; then'), 'the listing is checked before anything is unpacked');
+  assert.ok(at('if ! extract_archive; then') < at('if ! check_extracted_tree; then'));
+  assert.ok(at('if ! check_extracted_tree; then') < at('if [ ! -f "$EXTRACT_DIR/version.json" ]'));
+  assert.ok(at('if [ ! -f "$EXTRACT_DIR/version.json" ]') < at('if ! check_version_rule; then'));
+  assert.ok(at('if ! check_version_rule; then') < at('if ! stage_runtime; then'), 'the archive\'s fetch-runtime.sh runs only after every check');
+  assert.ok(at('if ! verify_download; then') < at('stop_daemon\n'));
+  for (const code of ['verify', 'version', 'archive']) assert.ok(sh.slice(0, sh.indexOf('REPAIR=""')).includes('err:' + code), 'the header names err:' + code);
+  assert.ok(sh.includes('if ! verify_download; then\n  echo "ERROR: the downloaded update could not be verified, nothing was changed"\n  result_line "err:verify"\n  exit 1\nfi'));
+  assert.ok(sh.includes('if ! check_version_rule; then\n  echo "ERROR: the downloaded update is not a newer release, nothing was changed"\n  result_line "err:version"\n  exit 1\nfi'), 'not newer is its own code, not a verification failure');
+});
+
+test('update.sh fetches over https only: every curl carries --proto and --proto-redir, an http URL is refused, and no other fetch tool is used', () => {
+  const curls = shCode.split('\n').filter((l) => /\bcurl\b/.test(l));
+  assert.ok(curls.length >= 1);
+  for (const l of curls) {
+    assert.ok(l.includes("--proto '=https'") && l.includes("--proto-redir '=https'"), 'curl without the https-only flags: ' + l.trim());
+  }
+  assert.ok(!/\b(wget|nc|ftp)\b/.test(shCode));
+  const fn = sh.split('fetch_url() {')[1].split('\n}\n')[0];
+  assert.ok(/http:\/\/\*\)[^\n]*return 1/.test(fn) || fn.includes('http://*) echo'), 'a plain http URL is refused');
+  // The sums are fetched from the same folder as the asset, the same way.
+  assert.ok(sh.includes('SUMS_SOURCE="${ASSET_SOURCE%/*}/SHA256SUMS.txt"'));
+});
+
+test('update.sh documents what the checksum does and does not protect against', () => {
+  const prose = sh.replace(/\n#\s*/g, ' ');
+  assert.match(prose, /same release/i);
+  assert.match(prose, /truncated or partly uploaded/i);
+  assert.match(prose, /does not protect against a compromised publisher/i);
+  assert.ok(!/[–—]/.test(sh.split('\n').filter((l) => /ERROR|echo/.test(l)).join('\n')), 'no dashes in log copy');
+});
+
+// ---- update.ps1: the same rules (the Windows end-to-end run is test-5, owner-run) ----
+test('update.ps1 verifies the download against SHA256SUMS.txt before it unpacks anything, and err:verify is documented', () => {
+  const at = (s) => { const i = ps1.indexOf(s); assert.ok(i !== -1, 'missing: ' + s); return i; };
+  assert.ok(ps1.includes('SHA256SUMS.txt'));
+  assert.ok(ps1.includes('Get-FileHash -LiteralPath $zipPath -Algorithm SHA256'), 'hashes with Get-FileHash');
+  assert.ok(at('Test-DownloadHash $zipPath') < at('Test-ZipEntries $zipPath'), 'hash first, then the entry listing');
+  assert.ok(at('Test-ZipEntries $zipPath') < at('Expand-Archive -Path $zipPath'), 'entries checked before anything is unpacked');
+  assert.ok(at('Expand-Archive -Path $zipPath') < at('Test-VersionRule $latestVersion'), 'version rule after the version.json is readable');
+  assert.ok(at('Test-VersionRule $latestVersion') < at('$fetchScript = '), 'before the archive\'s fetch-runtime.ps1 is considered');
+  assert.ok(at('$fetchScript = ') < at('-File $fetchScript'), 'and so before it runs');
+  const header = ps1.slice(0, ps1.indexOf('$lockPath = '));
+  assert.ok(header.includes('err:verify'), 'the contract names err:verify');
+  assert.match(ps1, /Exit-Update "[^"]*could not be verified[^"]*" "verify"/);
+  assert.match(ps1, /Exit-Update "[^"]*not a newer release[^"]*" "version"/, 'not newer is its own code');
+  const callAt = ps1.indexOf('$verifyProblem = Test-DownloadHash');
+  assert.ok(callAt !== -1 && /try \{\s*\$verifyProblem = Test-DownloadHash[^\n]*\n\s*\} catch \{\s*\$verifyProblem = "[^"]*"/.test(ps1.slice(callAt - 20, callAt + 300)), 'an error while hashing or reading the sums becomes a verify problem, not err:internal');
+  assert.ok(ps1.includes('GAFFER_UPDATE_TEST_UNVERIFIED'), 'the same harness switch as update.sh');
+  const prose = ps1.replace(/\n#\s*/g, ' ');
+  assert.match(prose, /same release/i);
+  assert.match(prose, /truncated or partly uploaded/i);
+  assert.match(prose, /does not protect against a compromised publisher/i);
+});
+
+test('update.ps1 refuses an archive that is not strictly newer (Repair: equal allowed), with the release gate\'s prerelease rules', () => {
+  const fn = ps1.slice(ps1.indexOf('function Test-VersionRule'), ps1.indexOf('\n}\n', ps1.indexOf('function Test-VersionRule')) + 2);
+  assert.ok(fn.length > 100, 'Test-VersionRule exists');
+  assert.ok(fn.includes('$Repair'), 'Repair is the only mode that may reinstall the same version');
+  const cmp = ps1.slice(ps1.indexOf('function Compare-GafferVersion'), ps1.indexOf('\n}\n', ps1.indexOf('function Compare-GafferVersion')) + 2);
+  assert.ok(cmp.length > 100, 'Compare-GafferVersion exists');
+  assert.ok(cmp.includes("'^([0-9]{1,9})\\.([0-9]{1,9})\\.([0-9]{1,9})(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?\\z'"), 'release-gate.mjs grammar, ASCII digits only, anchored at the very end (no trailing newline)');
+  assert.ok(cmp.includes("'[0-9]+|[^0-9]+'"), 'prerelease compared in digit and text runs, ASCII digits, like the release gate');
+  assert.ok(!/\\d|\\D/.test(cmp), 'no .NET Unicode digit classes in the comparison');
+  assert.ok(ps1.includes('Exit-Update "release version.json has no version" "archive"') || ps1.includes('"archive"'));
+  assert.match(fn, /not newer than the installed/);
+});
+
+test('update.ps1 inspects zip entries (absolute, .., drive and stream names, backslash roots, symlinks) with System.IO.Compression before Expand-Archive', () => {
+  const fn = ps1.slice(ps1.indexOf('function Test-ZipEntries'), ps1.indexOf('\n}\n', ps1.indexOf('function Test-ZipEntries')) + 2);
+  assert.ok(fn.length > 200, 'Test-ZipEntries exists');
+  assert.ok(fn.includes('System.IO.Compression.FileSystem') && fn.includes('[System.IO.Compression.ZipFile]::OpenRead'));
+  assert.ok(fn.includes('.Entries') && fn.includes('.FullName'));
+  assert.ok(/StartsWith\("\/"\)|-match '\^\[\/\\\\\]'/.test(fn), 'absolute names');
+  assert.ok(fn.includes("'..'") || fn.includes('"..'), 'a .. segment');
+  assert.ok(fn.includes('-split'), 'segments split on both slashes');
+  assert.ok(fn.includes(':'), 'drive letters and alternate streams');
+  assert.ok(fn.includes('ExternalAttributes') && fn.includes('0xA000'), 'unix symlink entries');
+  assert.ok(fn.includes('Dispose()') || fn.includes('finally'), 'the archive handle is released');
+});
+
+test('update.ps1 fetches over https only: curl.exe with --proto and --proto-redir, and the .NET fallback rejects a non-https URL and a non-https final address', () => {
+  assert.match(ps1, /"--proto", "=https", "--proto-redir", "=https"|--proto =https --proto-redir =https/, 'curl.exe args');
+  const fn = ps1.slice(ps1.indexOf('function Get-ReleaseAssetViaSystemProxy'), ps1.indexOf('\n}\n', ps1.indexOf('function Get-ReleaseAssetViaSystemProxy')) + 2);
+  assert.ok(fn.includes('$uri.StartsWith("https://")'), 'the request URL must be https');
+  assert.ok(fn.includes('$resp.ResponseUri.Scheme -ne "https"'), 'the final address after redirects must be https');
+  assert.ok(fn.indexOf('ResponseUri.Scheme') < fn.indexOf('GetResponseStream()'), 'checked before the body is read');
+  const front = ps1.slice(ps1.indexOf('function Get-ReleaseAsset('), ps1.indexOf('function Get-ReleaseAssetViaSystemProxy'));
+  assert.ok(front.includes('$uri.StartsWith("https://")') || front.includes("refusing a non-https"), 'curl.exe path refuses non-https too');
+});
+
+test('both updaters keep the .debug removal and the git-checkout refusal in front of everything new', () => {
+  assert.ok(sh.indexOf('panel dir is inside a git repo (dev install)') < sh.indexOf('if ! download_asset; then'));
+  assert.ok(ps1.indexOf('inside a git repo (dev install)') < ps1.indexOf('Test-DownloadHash $zipPath'));
+  assert.ok(sh.includes('remove_debug_file() {') && ps1.includes('"$panelDir\\.debug"'));
+});
+
+test('the harnesses verify their assets for real and use GAFFER_UPDATE_TEST_UNVERIFIED only for an asset with no sums file', () => {
+  const shHarness = read('./test-update-sh.sh');
+  assert.ok(!/^export GAFFER_UPDATE_TEST_UNVERIFIED/m.test(shHarness), 'never exported for every case');
+  assert.ok(shHarness.includes('sums_add() {') && shHarness.includes('sums_add "$ASSET"; sums_add "$ASSET_V2"; sums_add "$ASSET_NO_BUNDLE"'), 'repacked assets get their own sums lines');
+  assert.ok(shHarness.includes('Case V: the download is verified against SHA256SUMS.txt'));
+  const winHarness = read('./windows-tests/test-5-update-ps1.ps1');
+  assert.ok(winHarness.includes('$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"'));
+  assert.ok(winHarness.includes('SHA256SUMS.txt beside -ReleaseZip'), 'the zip must sit beside its sums');
+  assert.ok(!/built without a SHA256SUMS\.txt/.test(winHarness));
+  assert.ok(read('./windows-tests/test-6-runtime-update.ps1').includes('$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"'));
+  // update.sh honours the switch only for a local file, never a URL.
+  const fn = sh.split('verify_download() {')[1].split('\n}\n')[0];
+  assert.ok(fn.includes('GAFFER_UPDATE_TEST_UNVERIFIED'));
+  assert.match(fn, /http:\/\/\*\|https:\/\/\*\)/);
+});
+
+// The harness layout that broke the first version: assets repacked into the
+// folder package-release.sh wrote SHA256SUMS.txt to, which lists only the real
+// assets. Without a line for the repacked file the update ends err:verify; with
+// the harness's own sums_add line it passes every check (and stops at the
+// runtime step, since this archive has no fetch-runtime.sh).
+test('the harness\'s sums_add lets a repacked asset beside package-release\'s SHA256SUMS.txt pass real verification (run under bash)', () => {
+  const shHarness = read('./test-update-sh.sh');
+  const fn = shHarness.slice(shHarness.indexOf('sums_add() {'), shHarness.indexOf('\n}\n', shHarness.indexOf('sums_add() {')) + 3);
+  const dir = mkdtempSync(join(tmpdir(), 'gaffer-sumsadd-'));
+  try {
+    const real = tarBuf(goodEntries());
+    writeFileSync(join(dir, 'gaffer-update-mac.tar.gz'), real);
+    writeFileSync(join(dir, 'gaffer-update-v1.tar.gz'), tarBuf(goodEntries('9.9.8')));
+    writeFileSync(join(dir, 'SHA256SUMS.txt'), createHash('sha256').update(real).digest('hex') + '  gaffer-update-mac.tar.gz\n');
+    const before = runUpdateSh(null, { asset: readFileSync(join(dir, 'gaffer-update-v1.tar.gz')), unverified: true, sums: 'other-name' });
+    assert.equal(before.last, 'err:verify', 'the layout the first harness had: sums beside it with no line for it');
+    const r = spawnSync('bash', ['-c', 'set -euo pipefail\n' + fn + '\nsums_add "$1"\nsums_add "$1"\ncat "$2"', 'x', join(dir, 'gaffer-update-v1.tar.gz'), join(dir, 'SHA256SUMS.txt')], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const lines = r.stdout.trim().split('\n');
+    assert.equal(lines.length, 2, 'the real asset\'s line is kept, the repacked one added once (a second call replaces it)');
+    assert.ok(lines.some((l) => l.endsWith('  gaffer-update-mac.tar.gz')) && lines.some((l) => l.endsWith('  gaffer-update-v1.tar.gz')));
+    const hashLine = lines.find((l) => l.endsWith('  gaffer-update-v1.tar.gz'));
+    assert.equal(hashLine.split(/\s+/)[0], createHash('sha256').update(readFileSync(join(dir, 'gaffer-update-v1.tar.gz'))).digest('hex'));
+    const after = runUpdateSh(null, { asset: readFileSync(join(dir, 'gaffer-update-v1.tar.gz')), unverified: false, sums: 'good' });
+    assert.equal(after.last, PASSED, after.log);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('update.sh makes its temp folder with mktemp -d (private, unpredictable name) and leaves none behind (run under bash, real script)', () => {
+  assert.ok(sh.includes('mktemp -d "${TMPDIR:-/tmp}/gaffer-update.XXXXXX"'));
+  assert.ok(!sh.includes('gaffer-update-$$'), 'no predictable name');
+  const left = (() => {
+    // The run ends at the runtime step (no fetch-runtime.sh in the archive); the trap must remove the folder.
+    const t = mkdtempSync(join(tmpdir(), 'gaffer-tmpcheck-'));
+    try {
+      const src = fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url));
+      const panel = join(t, 'p', 'com.gaffer.panel');
+      mkdirSync(join(panel, 'daemon'), { recursive: true });
+      mkdirSync(join(t, 'tmp'));
+      mkdirSync(join(t, 'shim'));
+      writeFileSync(join(t, 'shim', 'lsof'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      copyFileSync(src, join(panel, 'daemon', 'update.sh'));
+      writeFileSync(join(panel, 'version.json'), '{"version":"0.12.0"}\n');
+      writeFileSync(join(t, 'asset.tar.gz'), tarBuf(goodEntries()));
+      spawnSync('/bin/bash', [join(panel, 'daemon', 'update.sh')], { encoding: 'utf8', env: { PATH: join(t, 'shim') + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: join(t, 'tmp'), GAFFER_UPDATE_ASSET: join(t, 'asset.tar.gz'), GAFFER_UPDATE_TEST_UNVERIFIED: '1' } });
+      return readdirSync(join(t, 'tmp')).filter((n) => /^gaffer-update\.[A-Za-z0-9]{6}$/.test(n));
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  })();
+  assert.deepEqual(left, [], 'no temp folder left after a run');
+});
+
+test('package-release.sh fails the build when the staged package holds a symlink', () => {
+  const pr = read('./package-release.sh');
+  assert.ok(pr.includes('[ -z "$(find "$STAGE" -type l -print -quit)" ] || fail "symlink present'));
 });

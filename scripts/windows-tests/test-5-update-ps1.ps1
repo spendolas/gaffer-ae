@@ -112,6 +112,15 @@ if (-not $NodeExe -or -not (Test-Path -LiteralPath $NodeExe -PathType Leaf)) { W
 $scratch = Join-Path $env:TEMP ("gaffer-update-test-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path "$scratch\tmp" -Force | Out-Null
 $expected = Join-Path $scratch "expected"
+# The updater verifies -ReleaseZip against the SHA256SUMS.txt beside it, so a zip
+# renamed or copied away from package-release.sh's output folder cannot pass.
+$releaseSums = Join-Path (Split-Path -Parent $ReleaseZip) "SHA256SUMS.txt"
+if (-not (Test-Path -LiteralPath $releaseSums -PathType Leaf)) {
+    Write-Host "ABORT: no SHA256SUMS.txt beside -ReleaseZip (use the folder package-release.sh wrote it to)"; exit 2
+}
+if (-not (Select-String -LiteralPath $releaseSums -Pattern ([regex]::Escape((Split-Path -Leaf $ReleaseZip)) + '$') -Quiet)) {
+    Write-Host "ABORT: SHA256SUMS.txt has no line for $(Split-Path -Leaf $ReleaseZip); keep the zip's name from package-release.sh"; exit 2
+}
 Expand-Archive -Path $ReleaseZip -DestinationPath $expected -Force
 foreach ($need in @("daemon\daemon.mjs", "daemon\fetch-runtime.ps1", "daemon\runtime-pins.json")) {
     if (-not (Test-Path -LiteralPath (Join-Path $expected $need))) { Write-Host "ABORT: -ReleaseZip is not a zero-dependency build (no $need)"; exit 2 }
@@ -141,6 +150,12 @@ $fxPinsPath = Join-Path $fxDir "pins.json"
 [System.IO.File]::WriteAllText($fxPinsPath, ($fxPins | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
 $fxBase = ([System.Uri] ((Join-Path $fxDir "serve") + "\")).AbsoluteUri
 $env:GAFFER_FETCH_TEST = "1"
+# -ReleaseZip is verified for real: it must sit beside the SHA256SUMS.txt
+# package-release.sh wrote with it (checked at the top of this script). The
+# other local assets here (a text file posing as a zip, and so on) have no sums
+# file; this switch only lets an asset with NO sums file through, never one whose
+# sums file is there.
+$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"
 $env:GAFFER_FETCH_PINS = $fxPinsPath
 $env:GAFFER_FETCH_PLATFORM = "win-x64"
 $env:GAFFER_FETCH_BASE_OFFICIAL = $fxBase
@@ -995,7 +1010,7 @@ try {
     $env:TEMP = $realTemp
     Remove-Item Env:\GAFFER_UPDATE_ASSET -ErrorAction SilentlyContinue
     Remove-Item Env:\GAFFER_UPDATE_CURL -ErrorAction SilentlyContinue
-    foreach ($v in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN")) { Remove-Item "Env:\$v" -ErrorAction SilentlyContinue }
+    foreach ($v in @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN", "GAFFER_UPDATE_TEST_UNVERIFIED")) { Remove-Item "Env:\$v" -ErrorAction SilentlyContinue }
     foreach ($g in @("GAFFER_UPDATE_TEST_GATE", "GAFFER_UPDATE_TEST_MARKER_GATE", "GAFFER_UPDATE_TEST_HOLD_GATE", "GAFFER_UPDATE_TEST_STUCK_AFTER", "GAFFER_UPDATE_TEST_FAIL_LIST")) { Remove-Item "Env:\$g" -ErrorAction SilentlyContinue }
     Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 }

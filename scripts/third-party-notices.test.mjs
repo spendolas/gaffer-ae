@@ -99,10 +99,50 @@ for (const [label, bad] of [
   ['sk-ant-', 'var k = "sk-ant-api03-abc";'],
   ['ghp_', 'var k = "ghp_abc";'],
   ['-----BEGIN', 'var k = "-----BEGIN PRIVATE KEY-----";'],
+  ['AIza', 'var k = "AIzaSyExample";'],
+  ['xox', 'var k = "xoxb-123";'],
+  ['figd_', 'var k = "figd_abc";'],
+  ['npm_', 'var k = "npm_abc";'],
+  ['/Volumes/', 'var p = "/Volumes/Disk/x";'],
 ]) {
   test('hygiene: ' + label + ' fails the check', () => {
     const r = hygiene(bad);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /hygiene check failed/);
+  });
+}
+
+// Whole-stage scan: `--stage-hygiene-only <dir>` runs the secret and developer-path
+// patterns over every text file that would ship. /Users/ and sk-ant- are left out
+// of this list on purpose: the panel's own files carry harmless examples of both
+// (a sample path in a comment, a masked sample key in the settings mock-up), and
+// the daemon bundle is checked for them separately above.
+const stageHygiene = (files) => {
+  const dir = mkdtempSync(join(tmpdir(), 'gaffer-stage-hyg-'));
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(join(dir, name, '..'), { recursive: true });
+    writeFileSync(join(dir, name), content);
+  }
+  return spawnSync('bash', [bundleScript, '--stage-hygiene-only', dir], { encoding: 'utf8' });
+};
+
+test('stage hygiene: a clean stage passes, including the panel files\' harmless samples', () => {
+  const r = stageHygiene({ 'main.js': 'var s = { key: "sk-ant-\u20264f2a" };\n// "C:/Users/.." in a comment, /Users/ too\n', 'daemon/daemon.mjs': 'const a = 1;\n', 'THIRD-PARTY-NOTICES.txt': 'MIT License\n' });
+  assert.equal(r.status, 0, r.stderr);
+});
+for (const [label, bad] of [
+  ['a token prefix in a panel file', 'var k = "ghp_abc";'],
+  ['an owner volume path', 'var p = "/Volumes/Disk/x";'],
+  ['a Google key prefix', 'var k = "AIzaSyExample";'],
+  ['a Slack token prefix', 'var k = "xoxp-1";'],
+  ['a Figma token prefix', 'var k = "figd_abc";'],
+  ['an npm token prefix', 'var k = "npm_abc";'],
+  ['a private key header', '-----BEGIN RSA PRIVATE KEY-----'],
+]) {
+  test('stage hygiene: ' + label + ' in any shipped file fails', () => {
+    const r = stageHygiene({ 'daemon/daemon.mjs': 'const a = 1;\n', 'lib/other.js': bad });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /hygiene check failed/);
+    assert.match(r.stderr, /other\.js/, 'names the file');
   });
 }

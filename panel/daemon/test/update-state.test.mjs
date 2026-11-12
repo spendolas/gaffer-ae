@@ -326,6 +326,38 @@ test('updateFailureText err:archive: the download was not a Gaffer release, own 
   assert.equal(U.failureNeedsRepair('archive'), false, 'nothing was changed, no Repair needed');
 });
 
+test('updateFailureText err:verify: "Update could not be verified", the current version still works, no dashes, no Repair offered', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const u = plain(U.updateFailureText('update', 'verify', log));
+  assert.equal(u.banner, 'Update could not be verified');
+  assert.equal(u.notice, 'Update could not be verified. Your current version still works.');
+  const r = plain(U.updateFailureText('repair', 'verify', log));
+  assert.equal(r.banner, 'Repair could not be verified');
+  assert.equal(r.notice, 'Repair could not be verified. Your current version still works. The updater log has details: ' + log + '.');
+  assert.ok(!/[\u2013\u2014]/.test(u.notice + u.banner + r.notice + r.banner));
+  assert.equal(U.failureNeedsRepair('verify'), false, 'nothing was changed, no Repair needed');
+  assert.equal(plain(U.updateToast('fail', 'update', 'verify', log)).action, null, 'a plain dismiss, like err:archive');
+});
+
+test('updateFailureText err:version: this release is not newer than the installed one, says how to reinstall, no dashes, no Repair loop', () => {
+  const log = '/var/folders/x/T/gaffer-update.log';
+  const u = plain(U.updateFailureText('update', 'version', log));
+  assert.equal(u.banner, 'No newer version to install');
+  assert.equal(u.notice, 'The latest release is not newer than the version you have, so nothing was changed. Your current version still works.');
+  const r = plain(U.updateFailureText('repair', 'version', log));
+  assert.equal(r.banner, 'Repair could not reinstall');
+  assert.equal(r.notice, 'Repair could not reinstall: the latest release is older than the version you have installed, so nothing was changed. To reinstall Gaffer, follow the install steps in the README.');
+  assert.ok(!/[\u2013\u2014]/.test(u.notice + u.banner + r.notice + r.banner));
+  assert.ok(!/could not be verified/.test(u.notice + r.notice), 'it is not a verification failure');
+  assert.equal(U.failureNeedsRepair('version'), false);
+  assert.equal(plain(U.updateWaitStep({ mode: 'repair', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:version\n', exited: false })).code, 'version');
+});
+
+test('updateWaitStep: err:verify fails at once with its code', () => {
+  assert.deepEqual(plain(U.updateWaitStep({ mode: 'update', startVersion: '0.12.0', diskJson: '{"version":"0.12.0"}', logText: 'ERROR: x\nerr:verify\n', exited: false })),
+    { action: 'fail', code: 'verify' });
+});
+
 test('updateFailureText err:internal (the updaters\' catch-all) gets the generic text naming the log', () => {
   const log = '/var/folders/x/T/gaffer-update.log';
   assert.deepEqual(plain(U.updateFailureText('update', 'internal', log)), { banner: 'Update did not complete', notice: 'Update did not complete. The updater log has details: ' + log + '.' });

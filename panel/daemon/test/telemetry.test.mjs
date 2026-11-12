@@ -266,6 +266,110 @@ test('flush() re-sanitizes cliVersion and cliSource per bucket, so a hand-edited
   assert.equal(PATH_LIKE.test(server.lastBody), false, 'no path-like string anywhere in the payload: ' + server.lastBody);
 });
 
+test('flush() re-sanitizes byModel keys to the endpoint pattern and keeps at most ten models', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  var big = {};
+  for (var i = 0; i < 14; i++) big['m' + i + '::m' + i] = { turns: i + 1 };
+  big['Claude-Opus-4-8[1m]::claude-opus-4-8'] = { turns: 100 };
+  big['=HYPERLINK("http://example.test")::a'] = { turns: 50 };
+  big['__proto__'] = { turns: 1 };
+  writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: big }));
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  var keys = Object.keys(payload.byModel);
+  assert.ok(keys.length <= 10, 'at most ten models: ' + keys.length);
+  keys.forEach(function (k) {
+    assert.match(k, /^[a-z0-9.\-]{1,40}(::[a-z0-9.\-]{1,40})?$/, 'key matches the endpoint pattern: ' + k);
+  });
+  assert.ok('claude-opus-4-8-1m::claude-opus-4-8' in payload.byModel, 'a model name with brackets is normalised, not dropped');
+  assert.ok('hyperlink-http-example.test::a' in payload.byModel, 'a formula-looking key is reduced to its safe characters');
+  assert.equal(payload.byModel['claude-opus-4-8-1m::claude-opus-4-8'].turns, 100, 'the busiest models are the ones kept');
+  assert.equal(keys.some(function (k) { return k.indexOf('proto') !== -1 && Object.prototype.hasOwnProperty.call(payload.byModel, '__proto__'); }), false);
+});
+
+test('flush() sends only the known bucket fields, cleans aeVersion and the counters, and replaces a bad date', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  writeFileSync(BUFFER_PATH, JSON.stringify({
+    date: '=1+1',
+    byModel: {
+      'a::a': { turns: 3, inputTokens: 5, outputTokens: -4, cacheReadTokens: '7', cacheCreationTokens: 1e30, costUsd: 0.25, aeVersion: '26.0.1.12345678901', note: '=HYPERLINK("x")', path: '/Users/me/x' },
+      'b::b': { turns: 1, aeVersion: '25.0' },
+      'c::c': { turns: 1, aeVersion: '=1+1' },
+      'd::d': { turns: 1, aeVersion: 'unknown' },
+    },
+  }));
+  server.lastBody = null;
+
+  var sent = await telemetry.flush();
+
+  assert.equal(sent, true);
+  var payload = JSON.parse(server.lastBody);
+  assert.match(payload.date, /^\d{4}-\d{2}-\d{2}$/, 'a bad buffer date is replaced, not sent');
+  var a = payload.byModel['a::a'];
+  assert.deepEqual(Object.keys(a).sort(), ['aeVersion', 'cacheCreationTokens', 'cacheReadTokens', 'cliSource', 'cliVersion', 'costUsd', 'inputTokens', 'outputTokens', 'turns']);
+  assert.equal(a.aeVersion, 'unknown', 'too long for the endpoint');
+  assert.equal(a.outputTokens, 0, 'negative reads as 0');
+  assert.equal(a.cacheReadTokens, 0, 'a string is not a count');
+  assert.ok(a.cacheCreationTokens <= 1e10, 'clamped to the endpoint bound');
+  assert.equal(a.turns, 3);
+  assert.equal(payload.byModel['b::b'].aeVersion, '25.0');
+  assert.equal(payload.byModel['c::c'].aeVersion, 'unknown');
+  assert.equal(payload.byModel['d::d'].aeVersion, 'unknown');
+  assert.ok(!/HYPERLINK|\/Users\//.test(server.lastBody), 'unknown fields are not sent');
+});
+
+test('flush() folds the models past the ten-model cap into one other bucket, so the day\'s totals stay right', async () => {
+  writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
+  var big = {};
+  var total = 0;
+  for (var i = 0; i < 14; i++) { big['m' + i + '::m' + i] = { turns: i + 1, inputTokens: 10 * (i + 1) }; total += i + 1; }
+  writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: big }));
+  server.lastBody = null;
+
+  await telemetry.flush();
+
+  var payload = JSON.parse(server.lastBody);
+  var keys = Object.keys(payload.byModel);
+  assert.equal(keys.length, 10);
+  assert.ok(keys.indexOf('other::other') !== -1, 'an other bucket exists');
+  var sumTurns = 0, sumInput = 0;
+  keys.forEach(function (k) { sumTurns += payload.byModel[k].turns; sumInput += payload.byModel[k].inputTokens; });
+  assert.equal(sumTurns, total, 'turns add up to the day');
+  assert.equal(sumInput, total * 10, 'tokens add up to the day');
+  assert.ok('m13::m13' in payload.byModel && !('m0::m0' in payload.byModel), 'the busiest stay, the least busy are folded');
+  keys.forEach(function (k) { assert.match(k, /^[a-z0-9.\-]{1,40}(::[a-z0-9.\-]{1,40})?$/); });
+});
+
+test('sanitizeModelKey: lower case, safe characters only, 40 per half, merged when two keys collapse to one', () => {
+  assert.equal(telemetry.sanitizeModelKey('claude-sonnet-5::claude-opus-4-8'), 'claude-sonnet-5::claude-opus-4-8');
+  assert.equal(telemetry.sanitizeModelKey('Claude Opus 4.8'), 'claude-opus-4.8');
+  assert.equal(telemetry.sanitizeModelKey('a'.repeat(60) + '::' + 'b'.repeat(60)), 'a'.repeat(40) + '::' + 'b'.repeat(40));
+  assert.equal(telemetry.sanitizeModelKey('::'), 'unknown::unknown');
+  assert.equal(telemetry.sanitizeModelKey(''), 'unknown');
+  assert.equal(telemetry.sanitizeModelKey('x::y::z'), 'x::y-z');
+  assert.equal(telemetry.sanitizeModelKey(null), null);
+  assert.equal(telemetry.sanitizeModelKey(5), null);
+  assert.equal(telemetry.sanitizeModelKey('-=x-'), 'x');
+});
+
+test('resolveTelemetryUrl: the endpoint override is honoured for a loopback address only', () => {
+  var real = telemetry.DEFAULT_TELEMETRY_URL;
+  assert.match(real, /^https:\/\/script\.google\.com\//);
+  assert.equal(telemetry.resolveTelemetryUrl(undefined), real);
+  assert.equal(telemetry.resolveTelemetryUrl(''), real);
+  assert.equal(telemetry.resolveTelemetryUrl('http://127.0.0.1:9/'), 'http://127.0.0.1:9/');
+  assert.equal(telemetry.resolveTelemetryUrl('http://localhost:8080/x'), 'http://localhost:8080/x');
+  assert.equal(telemetry.resolveTelemetryUrl('http://[::1]:7/'), 'http://[::1]:7/');
+  assert.equal(telemetry.resolveTelemetryUrl('https://127.0.0.1:7/'), 'https://127.0.0.1:7/');
+  for (var bad of ['https://example.test/collect', 'http://evil.example/', 'http://127.0.0.1.evil.example/', 'http://localhost.evil.example/', 'ftp://127.0.0.1/', 'not a url', 'http://user@evil.example@127.0.0.1/']) {
+    assert.equal(telemetry.resolveTelemetryUrl(bad), real, 'ignored: ' + bad);
+  }
+});
+
 test('day rollover: a flush of yesterday does not delete the new day already written to the buffer', async () => {
   writeFileSync(CONFIG_PATH, JSON.stringify({ installId: TEST_INSTALL_ID, shareUsageStats: true }));
   writeFileSync(BUFFER_PATH, JSON.stringify({ date: '2020-01-01', byModel: { 'a::a': { turns: 1 } } }));

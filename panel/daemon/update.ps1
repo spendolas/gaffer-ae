@@ -27,7 +27,10 @@ $extractDir = Join-Path $tmpDir "extract"
 $assetName = "gaffer-update-win.zip"
 # GAFFER_UPDATE_ASSET overrides the download source with another URL or a
 # local file path. Only scripts\windows-tests\test-5-update-ps1.ps1 and
-# pre-release checks set it.
+# pre-release checks set it. A local asset is checked against a
+# SHA256SUMS.txt in the same folder like a downloaded one;
+# GAFFER_UPDATE_TEST_UNVERIFIED=1 only lets a local asset WITHOUT such a file
+# through (the harness builds unsigned assets). A URL is always verified.
 $assetSource = "https://github.com/spendolas/gaffer-ae/releases/latest/download/$assetName"
 if ($env:GAFFER_UPDATE_ASSET) { $assetSource = $env:GAFFER_UPDATE_ASSET }
 $logPath = Join-Path $env:TEMP "gaffer-update.log"
@@ -50,13 +53,19 @@ if ($Repair) { Write-Host "Repair mode: the runtime is downloaded again even if 
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed (err:dev-install, err:lock, err:download,
-#                           err:sync, err:runtime) after an ERROR line
+#                           err:verify, err:version, err:sync, err:runtime) after an ERROR line
+#                           (err:verify: the download could not be verified
+#                           against SHA256SUMS.txt; nothing was unpacked or
+#                           changed; err:version: verified but not newer than
+#                           the installed release (Repair may reinstall the same
+#                           version, never an older one), the install is untouched;
 #                           (err:runtime before the swap: install untouched;
 #                           err:runtime-swap: moving the new runtime into
 #                           place failed, or restoring an interrupted
 #                           swap's runtime.old failed, the install may be
 #                           unfinished; err:archive: the download unpacked
-#                           but is not a Gaffer release (no version.json,
+#                           but is not a Gaffer release (a link, an absolute or
+#                           .. entry, no version.json,
 #                           no daemon\daemon.mjs, or no valid version in
 #                           version.json), the install is untouched;
 #                           err:sync also covers restoring the user data
@@ -671,6 +680,9 @@ if (-not $env:GAFFER_UPDATE_ASSET) {
 # GAFFER_UPDATE_CURL replaces the curl.exe path (a failing stand-in exercises
 # the fallback). Only scripts\windows-tests\test-5-update-ps1.ps1 sets it.
 function Get-ReleaseAsset([string] $uri, [string] $outFile) {
+    # https only, also after redirects: curl.exe gets --proto and
+    # --proto-redir, and the .NET fallback checks the final address itself.
+    if (-not $uri.StartsWith("https://")) { throw "refusing a non-https URL" }
     $curl = Join-Path $env:SystemRoot "System32\curl.exe"
     if ($env:GAFFER_UPDATE_CURL) { $curl = $env:GAFFER_UPDATE_CURL }
     if (Test-Path -LiteralPath $curl -PathType Leaf) {
@@ -682,7 +694,7 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
             # script's $ErrorActionPreference = "Stop"; this assignment is
             # local to the function.
             $ErrorActionPreference = "Continue"
-            $output = & $curl -f -L -sS --ssl-no-revoke --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 -o $outFile $uri 2>&1
+            $output = & $curl -f -L -sS --proto =https --proto-redir =https --ssl-no-revoke --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 -o $outFile $uri 2>&1
             $code = $LASTEXITCODE
             $ErrorActionPreference = "Stop"
             if ($code -eq 0) { return }
@@ -712,6 +724,7 @@ function Get-ReleaseAsset([string] $uri, [string] $outFile) {
 # 20s stall and only started while 20s of the 150s budget remain, 4xx final,
 # otherwise up to 3 attempts as long as a retry can start within 110s.
 function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
+    if (-not $uri.StartsWith("https://")) { throw "refusing a non-https URL" }
     try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch {}
     try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials } catch {}
     $started = Get-Date
@@ -726,6 +739,7 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
             $req.UserAgent = "gaffer-update"
             $resp = $req.GetResponse()
             try {
+                if ($resp.ResponseUri.Scheme -ne "https") { throw "redirected to a non-https URL" }
                 $in = $resp.GetResponseStream()
                 $out = [System.IO.File]::Create($outFile)
                 try {
@@ -746,6 +760,8 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
             return
         } catch {
             Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+            # A redirect to a non-https address is final, never retried.
+            if ($_.Exception.Message -like "redirected to a non-https*") { throw $_.Exception.Message }
             # A .NET method's WebException arrives wrapped in a
             # MethodInvocationException; look at both levels for the status.
             $status = 0
@@ -760,6 +776,124 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
             Start-Sleep -Seconds 2
         }
     }
+}
+
+# What the hash check does and does not do: SHA256SUMS.txt comes from the same
+# release as the archive, so a match proves the archive is the complete file
+# the release lists. That protects against a truncated or partly uploaded
+# file and a CDN or mirror that served the wrong object. It does not protect
+# against a compromised publisher, who can replace both files; a signed
+# manifest is the planned answer to that. Nothing is listed, unpacked or run
+# before this passes. Returns "" when the archive is verified, else a plain
+# reason.
+function Test-DownloadHash([string] $zipPath, [string] $sumsSource) {
+    $isLocal = Test-Path -LiteralPath $assetSource -PathType Leaf
+    if ($isLocal -and -not (Test-Path -LiteralPath $sumsSource -PathType Leaf) -and $env:GAFFER_UPDATE_TEST_UNVERIFIED) {
+        Write-Host "Download not verified (test asset without a sums file, GAFFER_UPDATE_TEST_UNVERIFIED is set)"
+        return ""
+    }
+    $sumsPath = Join-Path $tmpDir "SHA256SUMS.txt"
+    try {
+        if ($isLocal) { Copy-Item -LiteralPath $sumsSource -Destination $sumsPath } else { Get-ReleaseAsset $sumsSource $sumsPath }
+    } catch {
+        return "SHA256SUMS.txt could not be fetched from $sumsSource"
+    }
+    $assetFile = $assetSource.Substring($assetSource.LastIndexOfAny(@([char] 47, [char] 92)) + 1)
+    $count = 0
+    $wanted = ""
+    foreach ($line in (Get-Content -LiteralPath $sumsPath)) {
+        $parts = ("$line").Trim() -split '\s+'
+        if ($parts.Count -ge 2 -and $parts[1].TrimStart('*') -ceq $assetFile) {
+            $count++
+            $wanted = $parts[0].ToLowerInvariant()
+        }
+    }
+    if ($count -ne 1) { return "SHA256SUMS.txt has $count line(s) for $assetFile, expected exactly one" }
+    if ($wanted -notmatch '^[0-9a-f]{64}$') { return "the SHA256SUMS.txt line for $assetFile has no valid SHA-256" }
+    $have = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($have -ne $wanted) { return "its SHA-256 ($have) is not the one in SHA256SUMS.txt ($wanted)" }
+    Write-Host "Download verified: sha256 $have"
+    return ""
+}
+
+# Reads the entry list of the verified zip before anything is unpacked.
+# Allowed: plain files and folders whose names stay inside the folder they
+# are unpacked into. Refused: an absolute name, a .. segment, a drive letter
+# or stream marker (:), a control character, a symbolic link. Returns "" when
+# every entry is fine, else a plain reason.
+function Test-ZipEntries([string] $path) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $name = $entry.FullName
+            if ($name -match '[\x00-\x1f]') { return "an entry name has a control character" }
+            if ($name.StartsWith("/") -or $name.StartsWith("\")) { return "an entry has an absolute path" }
+            if ($name.Contains(":")) { return "an entry name has a drive letter or stream marker" }
+            foreach ($segment in ($name -split '[\\/]')) {
+                if ($segment -eq '..') { return "an entry path leaves its folder" }
+            }
+            if ((($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { return "an entry is a symbolic link" }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+    return ""
+}
+
+# Semantic versions, major.minor.patch with an optional -prerelease, ordered
+# like scripts/release-gate.mjs: the numbers first, then a final release is
+# greater than any prerelease of it, and prereleases compare in runs of digits
+# (as numbers) and text. Returns -1, 0 or 1, or $null when an argument is not
+# a version.
+function Compare-GafferVersion([string] $a, [string] $b) {
+    $re = '^([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?\z'
+    $ma = [regex]::Match($a, $re)
+    $mb = [regex]::Match($b, $re)
+    if (-not $ma.Success -or -not $mb.Success) { return $null }
+    for ($i = 1; $i -le 3; $i++) {
+        $x = [int64] $ma.Groups[$i].Value
+        $y = [int64] $mb.Groups[$i].Value
+        if ($x -ne $y) { if ($x -lt $y) { return -1 } else { return 1 } }
+    }
+    $pa = $ma.Groups[4].Value
+    $pb = $mb.Groups[4].Value
+    if ($pa -ceq $pb) { return 0 }
+    if (-not $pa) { return 1 }
+    if (-not $pb) { return -1 }
+    $ca = [regex]::Matches($pa, '[0-9]+|[^0-9]+')
+    $cb = [regex]::Matches($pb, '[0-9]+|[^0-9]+')
+    $n = [Math]::Min($ca.Count, $cb.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = $ca[$i].Value
+        $y = $cb[$i].Value
+        if ($x -match '^[0-9]' -and $y -match '^[0-9]') {
+            $x = $x.TrimStart('0')
+            $y = $y.TrimStart('0')
+            if ($x.Length -ne $y.Length) { if ($x.Length -lt $y.Length) { return -1 } else { return 1 } }
+        }
+        $c = [string]::CompareOrdinal($x, $y)
+        if ($c -ne 0) { if ($c -lt 0) { return -1 } else { return 1 } }
+    }
+    if ($ca.Count -eq $cb.Count) { return 0 }
+    if ($ca.Count -lt $cb.Count) { return -1 }
+    return 1
+}
+
+# An update must install a strictly newer release than the one installed; a
+# Repair may reinstall the same one, never an older one. An installed version
+# that cannot be read (no version.json, or not a version) is not compared.
+# Returns "" when the release may be installed, else a plain reason.
+function Test-VersionRule([string] $newVersion) {
+    $installed = ""
+    try { $installed = [string] ((Get-Content -LiteralPath "$panelDir\version.json" -Raw | ConvertFrom-Json).version) } catch { $installed = "" }
+    $order = Compare-GafferVersion $newVersion $installed
+    if ($null -eq $order) {
+        Write-Host "The installed version cannot be compared, installing v$newVersion"
+        return ""
+    }
+    if ($order -gt 0 -or ($Repair -and $order -eq 0)) { return "" }
+    return "Refusing release v$newVersion: it is not newer than the installed v$installed"
 }
 
     # Never overwrite a development checkout - a dev install points the panel
@@ -798,6 +932,11 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         Exit-Update "could not create the temporary folder $extractDir (disk full or read-only?): $($_.Exception.Message)" "internal"
     }
     $zipPath = Join-Path $tmpDir $assetName
+    if (Test-Path -LiteralPath $assetSource -PathType Leaf) {
+        $sumsSource = Join-Path (Split-Path -Parent $assetSource) "SHA256SUMS.txt"
+    } else {
+        $sumsSource = $assetSource.Substring(0, $assetSource.LastIndexOf("/") + 1) + "SHA256SUMS.txt"
+    }
     Write-Host "Downloading $assetSource"
     try {
         if (Test-Path -LiteralPath $assetSource -PathType Leaf) {
@@ -805,6 +944,29 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
         } else {
             Get-ReleaseAsset $assetSource $zipPath
         }
+    } catch {
+        Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
+    }
+    # Verified before it is listed or unpacked (the order is part of the rule).
+    try {
+        $verifyProblem = Test-DownloadHash $zipPath $sumsSource
+    } catch {
+        $verifyProblem = "the check itself failed: $($_.Exception.Message)"
+    }
+    if ($verifyProblem) {
+        Write-Host "Cannot verify the download: $verifyProblem"
+        Exit-Update "the downloaded update could not be verified, nothing was changed" "verify"
+    }
+    try {
+        $entryProblem = Test-ZipEntries $zipPath
+    } catch {
+        Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
+    }
+    if ($entryProblem) {
+        Write-Host "The archive has an entry a Gaffer release never has: $entryProblem"
+        Exit-Update "the downloaded archive has entries a Gaffer release never has, nothing was changed" "archive"
+    }
+    try {
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
     } catch {
         Exit-Update "download or extract failed: $($_.Exception.Message)" "download"
@@ -815,11 +977,6 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     if (-not (Test-Path -LiteralPath "$extractDir\version.json" -PathType Leaf) -or -not (Test-Path -LiteralPath "$extractDir\daemon\daemon.mjs" -PathType Leaf)) {
         Exit-Update "downloaded archive is not a Gaffer release (missing version.json or daemon\daemon.mjs)" "archive"
     }
-    $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"
-    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $extractDir "daemon\runtime-pins.json") -PathType Leaf)) {
-        Exit-Update "the release has no runtime provisioning (missing daemon\fetch-runtime.ps1 or daemon\runtime-pins.json)" "runtime"
-    }
-
     # Version and commit come from the archive's own version.json, which the
     # release workflow stamps. Nothing is read from raw.githubusercontent.com.
     try {
@@ -827,10 +984,21 @@ function Get-ReleaseAssetViaSystemProxy([string] $uri, [string] $outFile) {
     } catch {
         Exit-Update "release version.json is not valid JSON" "archive"
     }
-    $latestVersion = $release.version
+    $latestVersion = [string] $release.version
     $latestCommit = $release.commit
     if (-not $latestVersion) { Exit-Update "release version.json has no version" "archive" }
     Write-Host "Release: v$latestVersion ($latestCommit)"
+    if ($null -eq (Compare-GafferVersion $latestVersion "0.0.0")) { Exit-Update "release version.json has no valid version (it is not major.minor.patch)" "archive" }
+    $versionProblem = Test-VersionRule $latestVersion
+    if ($versionProblem) {
+        Write-Host $versionProblem
+        Exit-Update "the downloaded update is not a newer release, nothing was changed" "version"
+    }
+
+    $fetchScript = Join-Path $extractDir "daemon\fetch-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $fetchScript -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $extractDir "daemon\runtime-pins.json") -PathType Leaf)) {
+        Exit-Update "the release has no runtime provisioning (missing daemon\fetch-runtime.ps1 or daemon\runtime-pins.json)" "runtime"
+    }
 
     # Backup chat history - legacy single file plus per-AE-version files
     # (chat-history-<aeVersion>.json, e.g. chat-history-26.0.json) - and

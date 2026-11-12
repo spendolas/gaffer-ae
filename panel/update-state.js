@@ -218,8 +218,9 @@
   // Banner and chat-notice text for a failed update or repair. err:runtime
   // has its own text (spec Failure modes, "Both sources unreachable /
   // update"), and so does err:runtime-swap (the install may be unfinished),
-  // and err:archive (the download unpacked but is not a Gaffer release, the
-  // install is untouched); every other code (err:internal, the updaters'
+  // err:verify (the download could not be verified; nothing was changed),
+  // err:version (the release is not newer than the installed one; nothing was changed) and err:archive (the download unpacked but is not a
+  // Gaffer release, the install is untouched); every other code (err:internal, the updaters'
   // catch-all, and err:stopped, included), or none, gets the generic text naming the updater
   // log (logPath when known, else both platforms' usual place).
   function updateFailureText(mode, code, logPath) {
@@ -232,6 +233,16 @@
       return repair
         ? { banner: 'Repair failed', notice: "Repair failed: could not download Gaffer's runtime. Check your network and try again." }
         : { banner: 'Update failed', notice: "Update failed: could not download Gaffer's runtime. Your current version still works." };
+    }
+    if (code === 'version') {
+      return repair
+        ? { banner: 'Repair could not reinstall', notice: 'Repair could not reinstall: the latest release is older than the version you have installed, so nothing was changed. To reinstall Gaffer, follow the install steps in the README.' }
+        : { banner: 'No newer version to install', notice: 'The latest release is not newer than the version you have, so nothing was changed. Your current version still works.' };
+    }
+    if (code === 'verify') {
+      return repair
+        ? { banner: 'Repair could not be verified', notice: 'Repair could not be verified. Your current version still works. The updater log has details: ' + (logPath ? logPath : '%TEMP%\\gaffer-update.log (Windows) / /tmp/gaffer-update.log (macOS)') + '.' }
+        : { banner: 'Update could not be verified', notice: 'Update could not be verified. Your current version still works.' };
     }
     if (code === 'archive') {
       return repair
