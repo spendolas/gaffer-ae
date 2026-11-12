@@ -1,6 +1,7 @@
 import { wrapSlice } from '../safety.js';
 import { runChunkLoop } from '../chunk-driver.js';
 import { preflight } from '../instrument.js';
+import { jsJson } from './jsx-literal.js';
 
 // Approved defaults (see docs/superpowers/specs/2026-09-01-portioned-jsx-execution-design.md).
 var DEFAULT_SLICE_MS = 300;      // per-slice time budget in AE
@@ -74,7 +75,7 @@ export function register(server, queue, z, ctx) {
         // Each slice: JSON-inject the current cursor, wrap it, and run it through
         // the SAME serialized queue/bridge path runJSX uses (aeVersion routes it).
         var runSlice = function (cursor, part) {
-          var cursorJSON = JSON.stringify(typeof cursor === 'undefined' ? null : cursor);
+          var cursorJSON = jsJson(typeof cursor === 'undefined' ? null : cursor);
           var wrapped = wrapSlice(effStep, cursorJSON, label, effSliceMs, part);
           return queue.enqueuePreWrapped(wrapped, aeVersion);
         };

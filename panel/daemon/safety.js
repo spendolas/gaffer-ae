@@ -14,13 +14,7 @@
  * mid-turn" symptom this was added to close off.
  */
 
-function escapeForJSX(str) {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r');
-}
+import { jsStr, jsNum } from './tools/jsx-literal.js';
 
 // Strip nested app.beginUndoGroup/endUndoGroup calls — AE doesn't support
 // nesting and unmatched pairs leak into the undo stack, causing "undo
@@ -50,7 +44,7 @@ var RUNJSX_ABORT_MSG =
 // Amortized: the timer is sampled every 256 ticks so hot loops aren't slowed.
 function guardPrelude(guardMs) {
   return (
-    '  var __gEl = 0, __gc = 0, __gGuardMs = ' + guardMs + ';\n' +
+    '  var __gEl = 0, __gc = 0, __gGuardMs = ' + jsNum(guardMs) + ';\n' +
     '  function __gafferTick(){ if ((++__gc & 255) === 0) { __gEl += $.hiresTimer; ' +
     'if (__gEl / 1000 > __gGuardMs) throw { __gafferBudget: true, ms: __gEl / 1000 }; } }\n' +
     '  $.hiresTimer;\n'
@@ -62,7 +56,7 @@ function guardPrelude(guardMs) {
 function budgetCatchBranch() {
   return (
     '    if (e && e.__gafferBudget) { return JSON.stringify({ ok: false, error: ' +
-    JSON.stringify(RUNJSX_ABORT_MSG) + ' + " (~" + Math.round(e.ms) + "ms)", line: null, budgetAbort: true }); }\n'
+    jsStr(RUNJSX_ABORT_MSG) + ' + " (~" + Math.round(e.ms) + "ms)", line: null, budgetAbort: true }); }\n'
   );
 }
 
@@ -140,7 +134,7 @@ export function wrapInSafety(code, undoLabel, readOnly, opts) {
     return `(function() {
 ${jsonPolyfillPrelude()}${dialogShadowPrelude()}  app.beginSuppressDialogs();
 ${pre}  try {
-    var __result = eval(${JSON.stringify(code)});
+    var __result = eval(${jsStr(code)});
     return JSON.stringify({ ok: true, result: String(__result != null ? __result : "undefined") });
   } catch (e) {
 ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null });
@@ -153,9 +147,9 @@ ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line |
   var label = undoLabel || stripped.substring(0, 40).replace(/[\r\n]/g, ' ');
   return `(function() {
 ${jsonPolyfillPrelude()}${dialogShadowPrelude()}  app.beginSuppressDialogs();
-  app.beginUndoGroup("Gaffer: ${escapeForJSX(label)}");
+  app.beginUndoGroup(${jsStr('Gaffer: ' + label)});
 ${pre}  try {
-    var __result = eval(${JSON.stringify(stripped)});
+    var __result = eval(${jsStr(stripped)});
     return JSON.stringify({ ok: true, result: String(__result != null ? __result : "undefined") });
   } catch (e) {
 ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line || null });
@@ -188,9 +182,9 @@ ${cat}    return JSON.stringify({ ok: false, error: e.toString(), line: e.line |
  */
 export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
   var stripped = stripNestedUndoGroups(String(stepBody));
-  var safeLabel = escapeForJSX(String(label == null ? '' : label));
   var budget = Number(sliceMs) > 0 ? Number(sliceMs) : 300;
   var partNum = Number(part) > 0 ? Math.floor(Number(part)) : 1;
+  var undoName = jsStr('Gaffer: ' + String(label == null ? '' : label) + ' (part ' + partNum + ')');
   // Freeze ceiling for ONE step call. Above the per-slice budget so a healthy
   // multi-step slice (which the do/while stops at `budget`) never trips; only a
   // single step that blows past this (a fat inner loop) throws the budget signal.
@@ -199,12 +193,12 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
     jsonPolyfillPrelude() +
     dialogShadowPrelude() +
     '  app.beginSuppressDialogs();\n' +
-    '  app.beginUndoGroup("Gaffer: ' + safeLabel + ' (part ' + partNum + ')");\n' +
+    '  app.beginUndoGroup(' + undoName + ');\n' +
     '  var cursor = ' + cursorJSON + ';\n' +
     // Shared microsecond accumulator: fed both by the do/while (between steps)
     // and by __gafferTick (inside an instrumented step). One reader of
     // $.hiresTimer per site keeps the "since last access" deltas coherent.
-    '  var __gEl = 0, __gc = 0, __gGuardMs = ' + guardMs + ';\n' +
+    '  var __gEl = 0, __gc = 0, __gGuardMs = ' + jsNum(guardMs) + ';\n' +
     '  function __gafferTick(){ if ((++__gc & 255) === 0) { __gEl += $.hiresTimer; ' +
     'if (__gEl / 1000 > __gGuardMs) throw { __gafferBudget: true, ms: __gEl / 1000 }; } }\n' +
     '  var processed = 0;\n' +                       // declared outside try so the catch can report partial progress
@@ -219,7 +213,7 @@ export function wrapSlice(stepBody, cursorJSON, label, sliceMs, part) {
     '      processed++;\n' +
     '      if (out && typeof out.result !== "undefined") { hasResult = true; results.push(out.result); }\n' +
     '      __gEl += $.hiresTimer;\n' +              // += microseconds since last access
-    '    } while (!done && (__gEl / 1000) < ' + budget + ');\n' +
+    '    } while (!done && (__gEl / 1000) < ' + jsNum(budget) + ');\n' +
     '    var payload = { ok: true, cursor: cursor, done: done, processed: processed, elapsedMs: __gEl / 1000 };\n' +
     '    if (hasResult) { payload.result = results; }\n' +
     '    return JSON.stringify(payload);\n' +

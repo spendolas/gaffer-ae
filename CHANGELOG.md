@@ -17,6 +17,8 @@
 - Optional usage statistics are cleaned before they are sent: only the known fields go out, model names are reduced to plain lower case letters, digits, dots and dashes, and at most ten models go in one report (the least used are combined into one "other" entry, so totals stay right). The address statistics are sent to can only be redirected to your own computer, for testing.
 - The service that receives usage statistics now validates every field it gets before storing it, limits how often one install and all installs together can post, and stops growing at a fixed size. Nothing changes for you; it takes effect once the service is updated.
 - When an update is not newer than the version you already have, the panel now says so ("No newer version to install") instead of reporting a failed check, and tells a Repair how to reinstall.
+- Importing from Figma now treats layer names, text and fonts strictly as text, so names with line breaks or unusual characters come through unchanged.
+- Gaffer's other tools write file paths, names and numbers into After Effects scripts the same careful way, so a path with backslashes or quotes stays exactly as given.
 
 ## v0.12.1 - 2026-10-26
 
