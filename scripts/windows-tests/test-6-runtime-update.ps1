@@ -366,6 +366,13 @@ try {
     Start-Sleep -Milliseconds 500
     $fp = Get-RuntimeFingerprint $c2b
     Set-FetchEnv $unreachable $goodPins
+    # The install is now AT the archive's version, and the updater refuses a
+    # release that is not newer. A real next update is a newer release, so make
+    # the install look one release behind (the runtime stays as it is).
+    $vjPath = Join-Path $c2b "version.json"
+    $vj = Get-Content -LiteralPath $vjPath -Raw | ConvertFrom-Json
+    $vj.version = "0.0.1"
+    [System.IO.File]::WriteAllText($vjPath, ($vj | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
     $code = Invoke-Update $c2b $asset
     if ($code -eq 0 -and (Get-LastLogLine) -eq $wantOk) { Pass "2b: the next update (runtime current) ends $wantOk" } else { Fail "2b: next update exit $code, last line $(Get-LastLogLine)" }
     if (Test-Path -LiteralPath (Join-Path $c2b "daemon\runtime.old")) { Fail "2b: runtime.old still there after the next update" } else { Pass "2b: the next update removed the leftover runtime.old" }
