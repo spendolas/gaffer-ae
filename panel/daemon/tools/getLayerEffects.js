@@ -1,3 +1,5 @@
+import { jsNum } from './jsx-literal.js';
+
 export const JSX_CODE = `(function() {
   var layerIndex = __LAYER_INDEX__;
   var comp = app.project.activeItem;
@@ -62,7 +64,7 @@ export function register(server, queue, z) {
     },
     async ({ layerIndex, aeVersion } = {}) => {
       try {
-        var code = JSX_CODE.replace('__LAYER_INDEX__', String(Math.floor(layerIndex)));
+        var code = JSX_CODE.replace('__LAYER_INDEX__', jsNum(Math.floor(layerIndex)));
         var raw = await queue.enqueue(code, 'getLayerEffects', true, aeVersion);
         var parsed = JSON.parse(raw);
         var inner = parsed.ok && parsed.result ? JSON.parse(parsed.result) : parsed;

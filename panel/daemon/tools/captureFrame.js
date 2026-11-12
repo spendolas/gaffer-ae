@@ -4,6 +4,7 @@
  */
 import { tmpdir } from 'node:os';
 import { captureContent } from '../capture-image.js';
+import { jsStr, jsNum } from './jsx-literal.js';
 
 var MAX_CAPTURES = 10;
 var CAPTURE_DIR = tmpdir();
@@ -11,15 +12,15 @@ var CAPTURE_PREFIX = 'gaffer-frame-';
 
 function buildJSX(outputPath, time, compId) {
   var compResolve = (compId !== null && compId !== undefined)
-    ? `var comp = app.project.itemByID(${compId}); if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No comp with id ${compId}" });`
+    ? `var comp = app.project.itemByID(${jsNum(compId)}); if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No comp with id ${jsNum(compId)}" });`
     : `var comp = app.project.activeItem; if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No active composition" });`;
-  var t = (time === null || time === undefined) ? 'comp.time' : Number(time);
+  var t = (time === null || time === undefined) ? 'comp.time' : jsNum(Number(time));
   return `(function() {
   ${compResolve}
   var t = ${t};
   if (t < 0) t = 0;
   if (t > comp.duration - comp.frameDuration) t = comp.duration - comp.frameDuration;
-  var f = new File("${outputPath}");
+  var f = new File(${jsStr(outputPath)});
   try {
     comp.saveFrameToPng(t, f).wait();
   } catch (e) {

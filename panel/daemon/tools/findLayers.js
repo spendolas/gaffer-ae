@@ -1,7 +1,9 @@
+import { jsStr } from './jsx-literal.js';
+
 function buildJSX(query, scope, hasEffect, hasExpr) {
-  var qJSON = JSON.stringify(query);
-  var hasFxJSON = JSON.stringify(hasEffect || null);
-  var hasExprJSON = JSON.stringify(hasExpr || null);
+  var qJSON = jsStr(query);
+  var hasFxJSON = hasEffect ? jsStr(hasEffect) : 'null';
+  var hasExprJSON = hasExpr ? jsStr(hasExpr) : 'null';
   return `(function() {
   var query = ${qJSON};
   var hasEffect = ${hasFxJSON};

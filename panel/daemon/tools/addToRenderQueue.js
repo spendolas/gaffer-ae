@@ -1,9 +1,11 @@
+import { jsStr, jsNum } from './jsx-literal.js';
+
 function buildJSX(compId, outputPath, templateName) {
   var compResolve = compId
-    ? `var comp = app.project.itemByID(${compId}); if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No comp with id ${compId}" });`
+    ? `var comp = app.project.itemByID(${jsNum(compId)}); if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No comp with id ${jsNum(compId)}" });`
     : `var comp = app.project.activeItem; if (!(comp instanceof CompItem)) return JSON.stringify({ error: "No active composition" });`;
-  var pathJSON = JSON.stringify(outputPath);
-  var tplJSON = JSON.stringify(templateName || null);
+  var pathJSON = jsStr(outputPath);
+  var tplJSON = templateName ? jsStr(templateName) : 'null';
   return `(function() {
   ${compResolve}
   var rq = app.project.renderQueue;

@@ -1,14 +1,17 @@
+import { jsNum, jsJson } from './jsx-literal.js';
+
 function buildJSX(layerIndex, propPath) {
-  var pathJSON = JSON.stringify(propPath);
+  var pathJSON = jsJson(propPath);
+  var idx = jsNum(layerIndex);
   return `(function() {
   var comp = app.project.activeItem;
   if (!(comp instanceof CompItem)) {
     return JSON.stringify({ error: "No active composition" });
   }
-  if (${layerIndex} < 1 || ${layerIndex} > comp.numLayers) {
+  if (${idx} < 1 || ${idx} > comp.numLayers) {
     return JSON.stringify({ error: "layerIndex out of range" });
   }
-  var l = comp.layer(${layerIndex});
+  var l = comp.layer(${idx});
   var path = ${pathJSON};
   var prop = l;
   for (var i = 0; i < path.length; i++) {

@@ -1,8 +1,11 @@
+import { jsStr, jsNum } from './jsx-literal.js';
+
 function buildJSX(itemId, newPath) {
-  var pathJSON = JSON.stringify(newPath);
+  var pathJSON = jsStr(newPath);
+  var id = jsNum(itemId);
   return `(function() {
-  var item = app.project.itemByID(${itemId});
-  if (!item) return JSON.stringify({ error: "No item with id ${itemId}" });
+  var item = app.project.itemByID(${id});
+  if (!item) return JSON.stringify({ error: "No item with id ${id}" });
   if (!(item instanceof FootageItem)) return JSON.stringify({ error: "Item is not FootageItem (was: " + item.typeName + ")" });
   var f = new File(${pathJSON});
   if (!f.exists) return JSON.stringify({ error: "File not found: " + f.fsName });
