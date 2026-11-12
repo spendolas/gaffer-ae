@@ -893,7 +893,7 @@ function Test-VersionRule([string] $newVersion) {
         return ""
     }
     if ($order -gt 0 -or ($Repair -and $order -eq 0)) { return "" }
-    return "Refusing release v$newVersion: it is not newer than the installed v$installed"
+    return "Refusing release v${newVersion}: it is not newer than the installed v${installed}"
 }
 
     # Never overwrite a development checkout - a dev install points the panel
