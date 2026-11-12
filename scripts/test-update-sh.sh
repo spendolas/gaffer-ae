@@ -1191,11 +1191,14 @@ if git -C "$REPO_ROOT" rev-parse -q --verify "$OLD_UPDATER_REF^{commit}" >/dev/n
   if [ "$(cat "$MIG_INSTALL/daemon/index.js" 2>/dev/null)" = "import './daemon.mjs';" ] && [ -f "$MIG_INSTALL/daemon/daemon.mjs" ]; then pass "v0.11.3 updater: index.js shim and daemon.mjs in place"; else fail "v0.11.3 updater: shim or bundle missing"; fi
   if [ ! -e "$MIG_INSTALL/daemon/runtime" ]; then pass "v0.11.3 updater: no runtime yet (system node until the next update)"; else fail "v0.11.3 updater: a runtime appeared"; fi
   if [ -z "$(find "$MIG_INSTALL/daemon/node_modules" -name package.json 2>/dev/null | head -1)" ]; then pass "v0.11.3 updater: npm pruned the old dependency tree"; else echo "NOTE: v0.11.3 updater left node_modules in place (acceptance case A9 decides; the next new-updater sync removes it)"; fi
-  # ... and the next update, now with the new updater, provisions the runtime
-  # and removes whatever is left of node_modules.
+  # ... and the next run with the new updater provisions the runtime and
+  # removes whatever is left of node_modules. The install is now AT 9.9.9 and the
+  # new updater refuses a release that is not newer, so this run is a Repair
+  # (the panel's Repair button, update.sh --repair), which may reinstall the
+  # same version; a real next release would be newer and need no flag.
   cp "$REPO_ROOT/panel/daemon/update.sh" "$MIG_INSTALL/daemon/update.sh"
   : > "$LOG"
-  if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$MIG_INSTALL/daemon/update.sh" \
+  if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$MIG_INSTALL/daemon/update.sh" --repair \
      && [ "$(cat "$MIG_INSTALL/daemon/runtime/VERSION" 2>/dev/null)" = "$RT_V1 $FAKE_PLAT" ] && [ ! -e "$MIG_INSTALL/daemon/node_modules" ]; then
     pass "after v0.11.3: the new updater provisioned the runtime and removed node_modules"
   else
