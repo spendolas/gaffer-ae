@@ -2,7 +2,13 @@
  * figma-translator.js — Deterministic Figma→AE ExtendScript generator.
  * Pure function: translateToJSX(layers, artboard) → ExtendScript string.
  * No MCP, no queue, no side effects.
+ *
+ * Every value that comes from the Figma data is written into the script as a
+ * literal made by jsx-literal.js (jsStr / jsNum), never concatenated raw and
+ * never placed in a comment.
  */
+
+import { jsStr, jsNum } from './jsx-literal.js';
 
 // ── Blend mode mapping ──
 
@@ -127,21 +133,34 @@ function generateRoundedRectPath(w, h, radii) {
 
 // ── ExtendScript generators ──
 
-function jsxEsc(str) {
-  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+// Table lookups only see the table's own keys, so a key such as "constructor"
+// is an unknown name, never a function from the object prototype.
+function lookup(table, key) {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+// A number that is written into the script: a plain number, or a fixed-decimals
+// number, always checked to be finite.
+function num(n) {
+  return jsNum(n);
+}
+
+function fixed1(n) {
+  jsNum(n);
+  return n.toFixed(1);
 }
 
 function jsxColor(c) {
-  return '[' + (c.r || 0) + ',' + (c.g || 0) + ',' + (c.b || 0) + ']';
+  return '[' + num(c.r || 0) + ',' + num(c.g || 0) + ',' + num(c.b || 0) + ']';
 }
 
 function jsxColor4(c) {
-  return '[' + (c.r || 0) + ',' + (c.g || 0) + ',' + (c.b || 0) + ',' + (c.a !== undefined ? c.a : 1) + ']';
+  return '[' + num(c.r || 0) + ',' + num(c.g || 0) + ',' + num(c.b || 0) + ',' + num(c.a !== undefined ? c.a : 1) + ']';
 }
 
 function jsxArr(arr) {
   return '[' + arr.map(function (v) {
-    return Array.isArray(v) ? '[' + v.join(',') + ']' : v;
+    return Array.isArray(v) ? '[' + v.map(num).join(',') + ']' : num(v);
   }).join(',') + ']';
 }
 
@@ -165,7 +184,7 @@ function generateFills(layer, groupVar) {
       lines.push('var fill = ' + groupVar + '.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");');
       lines.push('fill.property("ADBE Vector Fill Color").setValue(' + jsxColor(fill.color) + ');');
       if (fill.opacity !== undefined) {
-        lines.push('fill.property("ADBE Vector Fill Opacity").setValue(' + (fill.opacity * 100) + ');');
+        lines.push('fill.property("ADBE Vector Fill Opacity").setValue(' + num(fill.opacity * 100) + ');');
       }
     } else if (fill.type === 'GRADIENT_LINEAR' || fill.type === 'GRADIENT_RADIAL') {
       // Gradient limitation: can't set gradient colors via ExtendScript
@@ -175,7 +194,7 @@ function generateFills(layer, groupVar) {
         lines.push('var fill = ' + groupVar + '.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");');
         lines.push('fill.property("ADBE Vector Fill Color").setValue(' + jsxColor(fill.stops[0].color) + ');');
         if (fill.stops[0].opacity !== undefined) {
-          lines.push('fill.property("ADBE Vector Fill Opacity").setValue(' + (fill.stops[0].opacity * 100) + ');');
+          lines.push('fill.property("ADBE Vector Fill Opacity").setValue(' + num(fill.stops[0].opacity * 100) + ');');
         }
       }
     }
@@ -193,20 +212,20 @@ function generateStrokes(layer, groupVar) {
     if (stroke.color) {
       lines.push('stroke.property("ADBE Vector Stroke Color").setValue(' + jsxColor(stroke.color) + ');');
     }
-    lines.push('stroke.property("ADBE Vector Stroke Width").setValue(' + (stroke.width || 1) + ');');
+    lines.push('stroke.property("ADBE Vector Stroke Width").setValue(' + num(stroke.width || 1) + ');');
     if (stroke.opacity !== undefined) {
-      lines.push('stroke.property("ADBE Vector Stroke Opacity").setValue(' + (stroke.opacity * 100) + ');');
+      lines.push('stroke.property("ADBE Vector Stroke Opacity").setValue(' + num(stroke.opacity * 100) + ');');
     }
     if (stroke.cap) {
-      lines.push('stroke.property("ADBE Vector Stroke Line Cap").setValue(' + (STROKE_CAP[stroke.cap] || 1) + ');');
+      lines.push('stroke.property("ADBE Vector Stroke Line Cap").setValue(' + (lookup(STROKE_CAP, stroke.cap) || 1) + ');');
     }
     if (stroke.join) {
-      lines.push('stroke.property("ADBE Vector Stroke Line Join").setValue(' + (STROKE_JOIN[stroke.join] || 1) + ');');
+      lines.push('stroke.property("ADBE Vector Stroke Line Join").setValue(' + (lookup(STROKE_JOIN, stroke.join) || 1) + ');');
     }
     if (stroke.dashes && stroke.dashes.length > 0) {
       for (var d = 0; d < stroke.dashes.length && d < 6; d++) {
         var propName = d % 2 === 0 ? 'ADBE Vector Stroke Dash ' + (Math.floor(d / 2) + 1) : 'ADBE Vector Stroke Gap ' + (Math.floor(d / 2) + 1);
-        lines.push('stroke.property("' + propName + '").setValue(' + stroke.dashes[d] + ');');
+        lines.push('stroke.property("' + propName + '").setValue(' + num(stroke.dashes[d]) + ');');
       }
     }
   }
@@ -227,12 +246,12 @@ function generateEffects(layer, layerVar) {
       if (fx.offset) {
         var dist = Math.sqrt(fx.offset.x * fx.offset.x + fx.offset.y * fx.offset.y);
         var dir = Math.atan2(fx.offset.y, fx.offset.x) * 180 / Math.PI + 180;
-        lines.push('shadow.property("ADBE Drop Shadow-0003").setValue(' + dir.toFixed(1) + ');');
-        lines.push('shadow.property("ADBE Drop Shadow-0004").setValue(' + dist.toFixed(1) + ');');
+        lines.push('shadow.property("ADBE Drop Shadow-0003").setValue(' + fixed1(dir) + ');');
+        lines.push('shadow.property("ADBE Drop Shadow-0004").setValue(' + fixed1(dist) + ');');
       }
-      lines.push('shadow.property("ADBE Drop Shadow-0005").setValue(' + (fx.radius || 0) + ');');
+      lines.push('shadow.property("ADBE Drop Shadow-0005").setValue(' + num(fx.radius || 0) + ');');
       if (fx.spread !== undefined) {
-        lines.push('shadow.property("ADBE Drop Shadow-0006").setValue(' + fx.spread + ');');
+        lines.push('shadow.property("ADBE Drop Shadow-0006").setValue(' + num(fx.spread) + ');');
       }
       if (fx.type === 'INNER_SHADOW') {
         // Shadow Only = off, then invert would need a workaround
@@ -241,7 +260,7 @@ function generateEffects(layer, layerVar) {
       }
     } else if (fx.type === 'LAYER_BLUR') {
       lines.push('var blur = ' + layerVar + '.property("Effects").addProperty("ADBE Gaussian Blur 2");');
-      lines.push('blur.property("ADBE Gaussian Blur 2-0001").setValue(' + (fx.radius || 0) + ');');
+      lines.push('blur.property("ADBE Gaussian Blur 2-0001").setValue(' + num(fx.radius || 0) + ');');
     }
   }
   return lines;
@@ -252,16 +271,16 @@ function generateTransform(layer, layerVar) {
   var x = (layer.x || 0) + (layer.width || 0) / 2;
   var y = (layer.y || 0) + (layer.height || 0) / 2;
 
-  lines.push(layerVar + '.property("Transform").property("Position").setValue([' + x + ',' + y + ']);');
+  lines.push(layerVar + '.property("Transform").property("Position").setValue([' + num(x) + ',' + num(y) + ']);');
 
   if (layer.rotation) {
-    lines.push(layerVar + '.property("Transform").property("Rotation").setValue(' + layer.rotation + ');');
+    lines.push(layerVar + '.property("Transform").property("Rotation").setValue(' + num(layer.rotation) + ');');
   }
   if (layer.opacity !== undefined && layer.opacity !== 1) {
-    lines.push(layerVar + '.property("Transform").property("Opacity").setValue(' + (layer.opacity * 100) + ');');
+    lines.push(layerVar + '.property("Transform").property("Opacity").setValue(' + num(layer.opacity * 100) + ');');
   }
   if (layer.blendMode && layer.blendMode !== 'NORMAL') {
-    var bm = BLEND_MODES[layer.blendMode];
+    var bm = lookup(BLEND_MODES, layer.blendMode);
     if (bm) {
       lines.push(layerVar + '.blendingMode = ' + bm + ';');
     }
@@ -281,7 +300,7 @@ function generateRectangle(layer, compVar) {
   var usePerCorner = Array.isArray(layer.cornerRadius);
 
   lines.push('var shapeLayer = ' + compVar + '.layers.addShape();');
-  lines.push('shapeLayer.name = "' + jsxEsc(layer.name || 'Rectangle') + '";');
+  lines.push('shapeLayer.name = ' + jsStr(layer.name || 'Rectangle') + ';');
   lines.push('var grp = shapeLayer.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");');
 
   if (useSquircle) {
@@ -297,9 +316,9 @@ function generateRectangle(layer, compVar) {
     lines.push('pathProp.property("ADBE Vector Shape").setValue(s);');
   } else {
     lines.push('var rect = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Rect");');
-    lines.push('rect.property("ADBE Vector Rect Size").setValue([' + layer.width + ',' + layer.height + ']);');
+    lines.push('rect.property("ADBE Vector Rect Size").setValue([' + num(layer.width) + ',' + num(layer.height) + ']);');
     if (layer.cornerRadius && typeof layer.cornerRadius === 'number') {
-      lines.push('rect.property("ADBE Vector Rect Roundness").setValue(' + layer.cornerRadius + ');');
+      lines.push('rect.property("ADBE Vector Rect Roundness").setValue(' + num(layer.cornerRadius) + ');');
     }
   }
 
@@ -314,10 +333,10 @@ function generateRectangle(layer, compVar) {
 function generateEllipse(layer, compVar) {
   var lines = [];
   lines.push('var shapeLayer = ' + compVar + '.layers.addShape();');
-  lines.push('shapeLayer.name = "' + jsxEsc(layer.name || 'Ellipse') + '";');
+  lines.push('shapeLayer.name = ' + jsStr(layer.name || 'Ellipse') + ';');
   lines.push('var grp = shapeLayer.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");');
   lines.push('var ellipse = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Ellipse");');
-  lines.push('ellipse.property("ADBE Vector Ellipse Size").setValue([' + layer.width + ',' + layer.height + ']);');
+  lines.push('ellipse.property("ADBE Vector Ellipse Size").setValue([' + num(layer.width) + ',' + num(layer.height) + ']);');
 
   lines = lines.concat(generateFills(layer, 'grp'));
   lines = lines.concat(generateStrokes(layer, 'grp'));
@@ -332,7 +351,7 @@ function generatePath(layer, compVar) {
   if (!layer.path) return lines;
 
   lines.push('var shapeLayer = ' + compVar + '.layers.addShape();');
-  lines.push('shapeLayer.name = "' + jsxEsc(layer.name || 'Path') + '";');
+  lines.push('shapeLayer.name = ' + jsStr(layer.name || 'Path') + ';');
   lines.push('var grp = shapeLayer.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");');
   lines.push(generateShapePath(layer.path));
   lines.push('var pathProp = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Group");');
@@ -350,29 +369,28 @@ function generateText(layer, compVar) {
   var lines = [];
   if (!layer.text) return lines;
 
-  var content = jsxEsc(layer.text.content || '');
-  lines.push('var textLayer = ' + compVar + '.layers.addText("' + content + '");');
-  lines.push('textLayer.name = "' + jsxEsc(layer.name || 'Text') + '";');
+  lines.push('var textLayer = ' + compVar + '.layers.addText(' + jsStr(layer.text.content || '') + ');');
+  lines.push('textLayer.name = ' + jsStr(layer.name || 'Text') + ';');
 
   lines.push('var td = textLayer.property("Source Text").value;');
   if (layer.text.font && layer.text.font.family) {
-    lines.push('td.font = "' + jsxEsc(layer.text.font.family) + '";');
+    lines.push('td.font = ' + jsStr(layer.text.font.family) + ';');
   }
   if (layer.text.fontSize) {
-    lines.push('td.fontSize = ' + layer.text.fontSize + ';');
+    lines.push('td.fontSize = ' + num(layer.text.fontSize) + ';');
   }
   if (layer.text.color) {
     lines.push('td.fillColor = ' + jsxColor(layer.text.color) + ';');
   }
   if (layer.text.justification) {
-    var j = JUSTIFICATION[layer.text.justification] || JUSTIFICATION.LEFT;
+    var j = lookup(JUSTIFICATION, layer.text.justification) || JUSTIFICATION.LEFT;
     lines.push('td.justification = ' + j + ';');
   }
   if (layer.text.letterSpacing) {
-    lines.push('td.tracking = ' + layer.text.letterSpacing + ';');
+    lines.push('td.tracking = ' + num(layer.text.letterSpacing) + ';');
   }
   if (layer.text.lineHeight) {
-    lines.push('td.leading = ' + layer.text.lineHeight + ';');
+    lines.push('td.leading = ' + num(layer.text.lineHeight) + ';');
   }
   lines.push('td.applyFill = true;');
   lines.push('textLayer.property("Source Text").setValue(td);');
@@ -387,7 +405,7 @@ function generateGroup(layer, compVar, depth) {
   var lines = [];
   // Create null parent
   lines.push('var nullLayer = ' + compVar + '.layers.addNull();');
-  lines.push('nullLayer.name = "' + jsxEsc(layer.name || 'Group') + '";');
+  lines.push('nullLayer.name = ' + jsStr(layer.name || 'Group') + ';');
   lines = lines.concat(generateTransform(layer, 'nullLayer'));
 
   // Create children, parent them
@@ -409,8 +427,8 @@ function generateFrame(layer, compVar, depth) {
 
   if (layer.frameMode === 'precomp') {
     // Create a new comp and add children into it
-    var name = jsxEsc(layer.name || 'Frame');
-    lines.push('var frameComp = app.project.items.addComp("' + name + '", ' + layer.width + ', ' + layer.height + ', 1, ' + compVar + '.duration, ' + compVar + '.frameRate);');
+    var name = jsStr(layer.name || 'Frame');
+    lines.push('var frameComp = app.project.items.addComp(' + name + ', ' + num(layer.width) + ', ' + num(layer.height) + ', 1, ' + compVar + '.duration, ' + compVar + '.frameRate);');
 
     if (layer.children && layer.children.length) {
       for (var i = 0; i < layer.children.length; i++) {
@@ -421,7 +439,7 @@ function generateFrame(layer, compVar, depth) {
 
     // Add precomp as layer in parent comp
     lines.push('var precompLayer = ' + compVar + '.layers.add(frameComp);');
-    lines.push('precompLayer.name = "' + name + '";');
+    lines.push('precompLayer.name = ' + name + ';');
     lines = lines.concat(generateTransform(layer, 'precompLayer'));
   } else {
     // Default: null parent (same as group)
@@ -443,7 +461,8 @@ function generateLayer(layer, compVar, depth) {
     case 'GROUP': return generateGroup(layer, compVar, depth);
     case 'FRAME': return generateFrame(layer, compVar, depth);
     default:
-      return ['// Unsupported layer type: ' + (layer.type || 'unknown') + ' (' + (layer.name || '') + ')'];
+      // Nothing from the layer data goes into a comment.
+      return ['// Unsupported layer type, skipped'];
   }
 }
 
@@ -461,7 +480,7 @@ export function translateToJSX(layers, artboard) {
   // Process layers in reverse order (Figma top = AE bottom)
   for (var i = layers.length - 1; i >= 0; i--) {
     lines.push('');
-    lines.push('// --- Layer: ' + (layers[i].name || 'unnamed') + ' ---');
+    lines.push('// --- Layer ' + (layers.length - i) + ' of ' + layers.length + ' ---');
     var layerLines = generateLayer(layers[i], 'comp', 0);
     lines = lines.concat(layerLines);
     lines.push('created++;');
