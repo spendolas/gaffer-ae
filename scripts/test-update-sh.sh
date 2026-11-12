@@ -264,6 +264,9 @@ export GAFFER_FETCH_PLATFORM="$FAKE_PLAT"
 export GAFFER_FETCH_SKIP_CODESIGN=1
 export GAFFER_FETCH_BASE_OFFICIAL="file://$SRV/"
 export GAFFER_FETCH_BASE_MIRROR="file://$SRV/"
+# The assets below are built here without a SHA256SUMS.txt. A downloaded
+# update is always verified; this switch only lets such a local asset through.
+export GAFFER_UPDATE_TEST_UNVERIFIED=1
 # Nothing from npm (the v0.11.3 updater case) lands in the home directory.
 export npm_config_cache="$SCRATCH/npm-cache"
 export npm_config_userconfig="$SCRATCH/npm-cache/no-userconfig"
@@ -554,20 +557,22 @@ fi
 if [ "$(file_sha "$RT_REPAIR/version.json")" = "$VER_BEFORE" ]; then pass "repair: version.json content unchanged (same release)"; else fail "repair: version.json changed"; fi
 if [ -e "$LOCK_DIR" ]; then fail "repair: lock left behind"; else pass "repair: lock released"; fi
 
-# ---------- Case R7: a damaged runtime at the same version, plain update ----------
+# ---------- Case R7: a damaged runtime, plain update of an older install ----------
 # No --repair: the stamp check alone (size against VERIFIED) re-provisions it.
+# The install is older than the asset: a plain update that is not strictly
+# newer is refused (only --repair may reinstall the same version).
 RT_TRUNC="$SCRATCH/Application Support/rt-trunc/com.gaffer.panel"
 new_install "$RT_TRUNC"
 seed_runtime "$RT_TRUNC" "$RT_V1"
-cp "$SCRATCH/version.json" "$RT_TRUNC/version.json"
+printf '{"version":"0.0.1","commit":"old"}\n' > "$RT_TRUNC/version.json"
 printf '#!/bin/sh\n' > "$RT_TRUNC/daemon/runtime/node"   # truncated
 : > "$LOG"
 if PATH="$UPDATE_PATH" GAFFER_UPDATE_ASSET="$ASSET" bash "$RT_TRUNC/daemon/update.sh" && [ "$(tail -n1 "$LOG")" = "ok:9.9.9" ]; then
-  pass "damaged runtime, same version: plain update ends ok:9.9.9"
+  pass "damaged runtime, older install: plain update ends ok:9.9.9"
 else
-  fail "damaged runtime, same version: last log line: $(tail -n1 "$LOG")"
+  fail "damaged runtime, older install: last log line: $(tail -n1 "$LOG")"
 fi
-if [ "$("$RT_TRUNC/daemon/runtime/node" --version 2>/dev/null)" = "$RT_V1" ]; then pass "damaged runtime, same version: the stamp check re-provisioned it"; else fail "damaged runtime, same version: runtime still damaged"; fi
+if [ "$("$RT_TRUNC/daemon/runtime/node" --version 2>/dev/null)" = "$RT_V1" ]; then pass "damaged runtime, older install: the stamp check re-provisioned it"; else fail "damaged runtime, older install: runtime still damaged"; fi
 
 # ---------- Case R8: a repair whose download fails leaves the install untouched ----------
 RT_REPFAIL="$SCRATCH/Application Support/rt-repfail/com.gaffer.panel"

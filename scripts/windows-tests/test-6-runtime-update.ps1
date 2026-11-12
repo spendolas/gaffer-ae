@@ -116,6 +116,10 @@ New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 $logPath = Join-Path $tmp "gaffer-update.log"
 $lockPath = Join-Path $tmp "gaffer-update.lock"
 $unreachable = "http://127.0.0.1:9/"
+# The assets here are built without a SHA256SUMS.txt. A downloaded update is
+# always verified; this switch only lets such a local asset through. It is not
+# in $fetchVars, which Clear-FetchEnv resets between cases.
+$env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"
 $fetchVars = @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN")
 
 function Get-Sha([string] $path) { return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -475,9 +479,10 @@ try {
     Test-UserData $c5 $users "5a"
     Test-Clean $c5 "5a"
 
-    # ---------- Case 5b: a damaged runtime at the same version, plain update ----------
+    # ---------- Case 5b: a damaged runtime, plain update of an older install ----------
+    # The install keeps New-TestInstall's older version.json: a plain update
+    # that is not strictly newer is refused (only -Repair may reinstall the same version).
     $c5b = New-TestInstall "case5b" $currentLine
-    Copy-Item -LiteralPath (Join-Path $expected "version.json") -Destination (Join-Path $c5b "version.json") -Force
     Write-Ascii (Join-Path $c5b "daemon\runtime\node.exe") "truncated"
     Set-FetchEnv $goodBase $goodPins
     $code = Invoke-Update $c5b $asset

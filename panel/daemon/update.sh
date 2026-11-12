@@ -12,7 +12,10 @@ ASSET_NAME="gaffer-update-mac.tar.gz"
 # GAFFER_UPDATE_ASSET overrides the download source with another URL or a
 # local file path. Only scripts/test-update-sh.sh and pre-release checks set it.
 # It also enables the test seams below: GAFFER_UPDATE_TEST_* and the
-# GAFFER_FETCH_* variables passed on to fetch-runtime.sh.
+# GAFFER_FETCH_* variables passed on to fetch-runtime.sh. A local asset is
+# checked against a SHA256SUMS.txt in the same folder like a downloaded one;
+# GAFFER_UPDATE_TEST_UNVERIFIED=1 only lets a local asset WITHOUT such a file
+# through (the harness builds unsigned assets). A URL is always verified.
 ASSET_SOURCE="${GAFFER_UPDATE_ASSET:-https://github.com/spendolas/gaffer-ae/releases/latest/download/$ASSET_NAME}"
 
 LOG="${TMPDIR:-/tmp}/gaffer-update.log"
@@ -22,12 +25,16 @@ echo "=== Update started: $(date) ==="
 # Last log line contract (the only channel back to a human or a tool):
 #   ok:<version>            installed
 #   err:<code>              failed, always right after an ERROR line. Codes:
-#                           err:dev-install, err:lock, err:download, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal, err:stopped
+#                           err:dev-install, err:lock, err:download, err:verify, err:runtime, err:sync, err:runtime-swap, err:archive, err:internal, err:stopped
 #                           err:dev-install: the panel is a git checkout, refused
 #                           err:lock: the update lock could not be created or taken
 #                           err:download: the asset could not be fetched or unpacked
-#                           err:archive: it unpacked, but is not a Gaffer release (no version.json,
-#                           no daemon/daemon.mjs, or no version in version.json); the install is untouched
+#                           err:verify: the download could not be verified (no SHA256SUMS.txt, no line
+#                           or a different hash for the asset) or is not a newer release than the
+#                           installed one; nothing was unpacked or changed
+#                           err:archive: it is not a Gaffer release (an entry that is a link, a device
+#                           or leaves its folder, no version.json, no daemon/daemon.mjs, or no valid
+#                           version in version.json); the install is untouched
 #                           err:runtime: the runtime could not be staged, the install is untouched
 #                           err:runtime-swap: recovering or swapping the runtime failed after the
 #                           daemon was stopped (or an earlier run left it half done): the install may be unfinished
@@ -610,8 +617,9 @@ if ! recover_runtime; then
   exit 1
 fi
 
-# Download the release asset and extract it into a SUBFOLDER of TMP_DIR, so
-# the downloaded archive itself is never synced into the panel dir.
+# Download the release asset and SHA256SUMS.txt from the same release, verify
+# the archive, check its entries, and only then extract it into a SUBFOLDER of
+# TMP_DIR, so the downloaded archive itself is never synced into the panel dir.
 # Download budget: the asset is a few MB. An attempt is abandoned when the
 # connection takes over 15s or the speed stays under 2 KB/s for 20s (a hung
 # proxy, a dropped link), and --max-time caps each attempt at 150s, which
@@ -634,20 +642,160 @@ if ! mkdir -p "$EXTRACT_DIR"; then
   result_line "err:internal"
   exit 1
 fi
-echo "Downloading $ASSET_SOURCE"
-# Wrapped so a curl or tar failure (which under set -e would end the script
+ARCHIVE="$TMP_DIR/$ASSET_NAME"
+case "$ASSET_SOURCE" in
+  http://*|https://*) SUMS_SOURCE="${ASSET_SOURCE%/*}/SHA256SUMS.txt" ;;
+  *) SUMS_SOURCE="$(dirname "$ASSET_SOURCE")/SHA256SUMS.txt" ;;
+esac
+
+# Every network fetch goes through here: https only, also after redirects. A
+# plain http URL is refused, never fetched.
+fetch_url() {
+  case "$1" in
+    http://*) echo "Refusing a plain http URL: $1"; return 1 ;;
+    https://*) curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 "$1" -o "$2" ;;
+    *) return 1 ;;
+  esac
+}
+# A URL is fetched, anything else is a local file (the test seam) and copied.
+fetch_source() {
+  case "$1" in
+    http://*|https://*) fetch_url "$1" "$2" ;;
+    *) cp "$1" "$2" ;;
+  esac
+}
+# Wrapped so a curl or cp failure (which under set -e would end the script
 # with curl's own message as the last log line) still ends the log with an
 # ERROR line and err:download, the contract the panel and a reader rely on.
-download_and_extract() {
-  case "$ASSET_SOURCE" in
-    http://*|https://*) curl -fsSL --connect-timeout 15 --speed-limit 2048 --speed-time 20 --max-time 150 --retry 2 --retry-max-time 120 "$ASSET_SOURCE" -o "$TMP_DIR/$ASSET_NAME" || return 1 ;;
-    *) cp "$ASSET_SOURCE" "$TMP_DIR/$ASSET_NAME" || return 1 ;;
-  esac
-  tar -xzf "$TMP_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" || return 1
+download_asset() {
+  echo "Downloading $ASSET_SOURCE"
+  fetch_source "$ASSET_SOURCE" "$ARCHIVE" || return 1
 }
-if ! download_and_extract; then
+if ! download_asset; then
   echo "ERROR: download or extract failed"
   result_line "err:download"
+  exit 1
+fi
+
+# SHA-256 of a file as 64 lower-case hex digits, from shasum (macOS, most
+# Linux) or sha256sum.
+sha256_of() {
+  local out
+  if command -v shasum >/dev/null 2>&1; then
+    out="$(shasum -a 256 "$1" 2>/dev/null)" || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    out="$(sha256sum "$1" 2>/dev/null)" || return 1
+  else
+    return 1
+  fi
+  out="${out%% *}"
+  case "$out" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+  [ "${#out}" = 64 ] || return 1
+  printf '%s' "$out" | tr 'A-F' 'a-f'
+}
+# What this check does and does not do: SHA256SUMS.txt comes from the same
+# release as the archive, so a match proves the archive is the complete file
+# the release lists. That protects against a truncated or partly uploaded
+# file and a CDN or mirror that served the wrong object. It does not protect
+# against a compromised publisher, who can replace both files; a signed
+# manifest is the planned answer to that. Nothing is unpacked, listed or run
+# before this passes. Prints a plain reason and returns 1 on any doubt.
+verify_download() {
+  local sums="$TMP_DIR/SHA256SUMS.txt" want_name="${ASSET_SOURCE##*/}" count want have
+  case "$ASSET_SOURCE" in
+    http://*|https://*) ;;
+    *)
+      if [ ! -f "$SUMS_SOURCE" ] && [ -n "${GAFFER_UPDATE_TEST_UNVERIFIED:-}" ]; then
+        echo "Download not verified (test asset without a sums file, GAFFER_UPDATE_TEST_UNVERIFIED is set)"
+        return 0
+      fi ;;
+  esac
+  if ! fetch_source "$SUMS_SOURCE" "$sums"; then
+    echo "Cannot verify the download: SHA256SUMS.txt could not be fetched from $SUMS_SOURCE"
+    return 1
+  fi
+  count="$(tr -d '\r' < "$sums" | awk -v name="$want_name" 'NF >= 2 { f = $2; sub(/^\*/, "", f); if (f == name) c++ } END { print c + 0 }')"
+  if [ "$count" != 1 ]; then
+    echo "Cannot verify the download: SHA256SUMS.txt has $count line(s) for $want_name, expected exactly one"
+    return 1
+  fi
+  want="$(tr -d '\r' < "$sums" | awk -v name="$want_name" 'NF >= 2 { f = $2; sub(/^\*/, "", f); if (f == name) print tolower($1) }')"
+  case "$want" in *[!0-9a-f]*) want="" ;; esac
+  if [ "${#want}" != 64 ]; then
+    echo "Cannot verify the download: the SHA256SUMS.txt line for $want_name has no valid SHA-256"
+    return 1
+  fi
+  if ! have="$(sha256_of "$ARCHIVE")"; then
+    echo "Cannot verify the download: no SHA-256 tool (shasum or sha256sum) could read it"
+    return 1
+  fi
+  if [ "$have" != "$want" ]; then
+    echo "Cannot verify the download: its SHA-256 ($have) is not the one in SHA256SUMS.txt ($want)"
+    return 1
+  fi
+  echo "Download verified: sha256 $have"
+}
+if ! verify_download; then
+  echo "ERROR: the downloaded update could not be verified, nothing was changed"
+  result_line "err:verify"
+  exit 1
+fi
+
+# Reads the listing of the verified archive, before anything is unpacked.
+# Allowed: plain files and folders, with names that stay inside the folder
+# they are unpacked into. Refused: a link (symbolic or hard), a device or a
+# pipe, an absolute name, a .. segment, a backslash, a control character.
+# A tar that cannot list the archive at all sets ARCHIVE_UNREADABLE.
+ARCHIVE_UNREADABLE=""
+inspect_archive() {
+  local names="$TMP_DIR/archive-names.txt" verbose="$TMP_DIR/archive-listing.txt"
+  if ! tar -tzf "$ARCHIVE" > "$names" 2>/dev/null || ! tar -tvzf "$ARCHIVE" > "$verbose" 2>/dev/null; then
+    ARCHIVE_UNREADABLE=1
+    return 1
+  fi
+  if awk 'substr($0, 1, 1) !~ /^[-d]$/ { bad = 1 } END { exit bad ? 0 : 1 }' "$verbose"; then
+    echo "The archive holds an entry that is a link, a device or a pipe"
+    return 1
+  fi
+  if awk '/^\// || /(^|\/)\.\.(\/|$)/ || /[[:cntrl:]]/ || /\\/ { bad = 1 } END { exit bad ? 0 : 1 }' "$names"; then
+    echo "The archive holds a path that is absolute or leaves its folder"
+    return 1
+  fi
+}
+if ! inspect_archive; then
+  if [ -n "$ARCHIVE_UNREADABLE" ]; then
+    echo "ERROR: download or extract failed"
+    result_line "err:download"
+    exit 1
+  fi
+  echo "ERROR: the downloaded archive has entries a Gaffer release never has, nothing was changed"
+  result_line "err:archive"
+  exit 1
+fi
+extract_archive() {
+  tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR" || return 1
+}
+if ! extract_archive; then
+  echo "ERROR: download or extract failed"
+  result_line "err:download"
+  exit 1
+fi
+# A second look at what really landed on disk, in case a tar lists less than
+# it unpacks: only plain files and folders, no file with several links, no
+# newline in a name.
+check_extracted_tree() {
+  local bad NL=$'\n'
+  bad="$(find "$EXTRACT_DIR" ! -type f ! -type d 2>/dev/null | head -n 1 || true)"
+  if [ -z "$bad" ]; then bad="$(find "$EXTRACT_DIR" -type f -links +1 2>/dev/null | head -n 1 || true)"; fi
+  if [ -z "$bad" ]; then bad="$(find "$EXTRACT_DIR" -name "*${NL}*" 2>/dev/null | head -n 1 || true)"; fi
+  if [ -n "$bad" ]; then
+    echo "The unpacked update holds an entry a Gaffer release never has: ${bad#"$EXTRACT_DIR"/}"
+    return 1
+  fi
+}
+if ! check_extracted_tree; then
+  echo "ERROR: the downloaded archive has entries a Gaffer release never has, nothing was changed"
+  result_line "err:archive"
   exit 1
 fi
 # New archives always carry daemon/daemon.mjs (the bundle) and daemon/index.js
@@ -663,7 +811,7 @@ fi
 # Version and commit come from the archive's own version.json, which the
 # release workflow stamps. Nothing is read from raw.githubusercontent.com.
 json_field() {
-  grep -o "\"$1\": *\"[^\"]*\"" "$2" | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true
+  grep -o "\"$1\": *\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true
 }
 LATEST_VERSION="$(json_field version "$EXTRACT_DIR/version.json")"
 LATEST_COMMIT="$(json_field commit "$EXTRACT_DIR/version.json")"
@@ -673,6 +821,83 @@ if [ -z "$LATEST_VERSION" ]; then
   exit 1
 fi
 echo "Release: v$LATEST_VERSION ($LATEST_COMMIT)"
+
+# Semantic versions, major.minor.patch with an optional -prerelease, ordered
+# like scripts/release-gate.mjs: the numbers first, then a final release is
+# greater than any prerelease of it, and prereleases compare in runs of digits
+# (as numbers) and text. Prints -1, 0 or 1; returns 1 when an argument is not
+# a version. Numbers compare without arithmetic (no overflow, no octal).
+num_cmp() {
+  local x="${1#"${1%%[!0]*}"}" y="${2#"${2%%[!0]*}"}"
+  if [ "${#x}" -ne "${#y}" ]; then
+    if [ "${#x}" -lt "${#y}" ]; then echo -1; else echo 1; fi
+  elif [ "$x" = "$y" ]; then echo 0
+  elif [[ "$x" < "$y" ]]; then echo -1
+  else echo 1
+  fi
+}
+pre_cmp() {
+  local LC_COLLATE=C a="$1" b="$2" i=0 x y r
+  local ca=() cb=()
+  while IFS= read -r x; do ca[${#ca[@]}]="$x"; done <<< "$(printf '%s\n' "$a" | grep -oE '[0-9]+|[^0-9]+')"
+  while IFS= read -r x; do cb[${#cb[@]}]="$x"; done <<< "$(printf '%s\n' "$b" | grep -oE '[0-9]+|[^0-9]+')"
+  while [ "$i" -lt "${#ca[@]}" ] && [ "$i" -lt "${#cb[@]}" ]; do
+    x="${ca[$i]}"; y="${cb[$i]}"
+    if [[ "$x" =~ ^[0-9] ]] && [[ "$y" =~ ^[0-9] ]]; then
+      r="$(num_cmp "$x" "$y")"
+      [ "$r" = 0 ] || { echo "$r"; return 0; }
+    elif [ "$x" != "$y" ]; then
+      if [[ "$x" < "$y" ]]; then echo -1; else echo 1; fi
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  if [ "${#ca[@]}" -eq "${#cb[@]}" ]; then echo 0
+  elif [ "${#ca[@]}" -lt "${#cb[@]}" ]; then echo -1
+  else echo 1
+  fi
+}
+version_cmp() {
+  local re='^([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(-([0-9A-Za-z][0-9A-Za-z.-]*))?$'
+  local an am ap apre bn bm bp bpre r
+  [[ "$1" =~ $re ]] || return 1
+  an="${BASH_REMATCH[1]}"; am="${BASH_REMATCH[2]}"; ap="${BASH_REMATCH[3]}"; apre="${BASH_REMATCH[5]}"
+  [[ "$2" =~ $re ]] || return 1
+  bn="${BASH_REMATCH[1]}"; bm="${BASH_REMATCH[2]}"; bp="${BASH_REMATCH[3]}"; bpre="${BASH_REMATCH[5]}"
+  for r in "$(num_cmp "$an" "$bn")" "$(num_cmp "$am" "$bm")" "$(num_cmp "$ap" "$bp")"; do
+    [ "$r" = 0 ] || { echo "$r"; return 0; }
+  done
+  if [ "$apre" = "$bpre" ]; then echo 0
+  elif [ -z "$apre" ]; then echo 1
+  elif [ -z "$bpre" ]; then echo -1
+  else pre_cmp "$apre" "$bpre"
+  fi
+}
+# An update must install a strictly newer release than the one installed; a
+# Repair may reinstall the same one, never an older one. An installed version
+# that cannot be read (no version.json, or not a version) is not compared.
+check_version_rule() {
+  local installed order
+  installed="$(json_field version "$PANEL_DIR/version.json")"
+  if ! version_cmp "$LATEST_VERSION" "${installed:-x}" >/dev/null 2>&1; then
+    echo "The installed version (${installed:-unknown}) cannot be compared, installing v$LATEST_VERSION"
+    return 0
+  fi
+  order="$(version_cmp "$LATEST_VERSION" "$installed")"
+  if [ "$order" -gt 0 ] || { [ -n "$REPAIR" ] && [ "$order" -eq 0 ]; }; then return 0; fi
+  echo "Refusing release v$LATEST_VERSION: it is not newer than the installed v$installed"
+  return 1
+}
+if ! version_cmp "$LATEST_VERSION" 0.0.0 >/dev/null 2>&1; then
+  echo "ERROR: release version.json has no valid version (\"$LATEST_VERSION\" is not major.minor.patch)"
+  result_line "err:archive"
+  exit 1
+fi
+if ! check_version_rule; then
+  echo "ERROR: the downloaded update is not a newer release, nothing was changed"
+  result_line "err:verify"
+  exit 1
+fi
 
 # Before any file of the install is replaced, with the daemon still running.
 if ! stage_runtime; then
