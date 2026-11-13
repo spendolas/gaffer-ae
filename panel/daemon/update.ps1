@@ -31,6 +31,19 @@ $assetName = "gaffer-update-win.zip"
 # SHA256SUMS.txt in the same folder like a downloaded one;
 # GAFFER_UPDATE_TEST_UNVERIFIED=1 only lets a local asset WITHOUT such a file
 # through (the harness builds unsigned assets). A URL is always verified.
+#
+# None of that counts unless GAFFER_UPDATE_TEST=1 is set as well, the same
+# explicit switch fetch-runtime.ps1 asks for (GAFFER_FETCH_TEST). Without it
+# every override and test knob is dropped here, before anything reads them, so
+# a stray variable in a real environment can never redirect or weaken an update.
+# The panel sets none of them. GAFFER_UPDATE_CURL (a stand-in curl.exe) is one of them.
+if ($env:GAFFER_UPDATE_TEST -ne "1") {
+    # Every GAFFER_UPDATE_* variable except the switch itself, by prefix, so a
+    # knob added later is covered without touching this list.
+    foreach ($knob in @(Get-ChildItem Env: | Where-Object { $_.Name -like "GAFFER_UPDATE_*" -and $_.Name -ne "GAFFER_UPDATE_TEST" } | ForEach-Object { $_.Name })) {
+        Remove-Item -LiteralPath "Env:\$knob" -ErrorAction SilentlyContinue
+    }
+}
 $assetSource = "https://github.com/spendolas/gaffer-ae/releases/latest/download/$assetName"
 if ($env:GAFFER_UPDATE_ASSET) { $assetSource = $env:GAFFER_UPDATE_ASSET }
 $logPath = Join-Path $env:TEMP "gaffer-update.log"

@@ -18,6 +18,20 @@ ASSET_NAME="gaffer-update-mac.tar.gz"
 # checked against a SHA256SUMS.txt in the same folder like a downloaded one;
 # GAFFER_UPDATE_TEST_UNVERIFIED=1 only lets a local asset WITHOUT such a file
 # through (the harness builds unsigned assets). A URL is always verified.
+#
+# None of that counts unless GAFFER_UPDATE_TEST=1 is set as well, the same
+# explicit switch fetch-runtime.sh asks for (GAFFER_FETCH_TEST). Without it
+# every override and test knob is dropped here, before anything reads them, so
+# a stray variable in a real environment can never redirect or weaken an update.
+# The panel sets none of them.
+if [ "${GAFFER_UPDATE_TEST:-}" != "1" ]; then
+  # Every GAFFER_UPDATE_* variable (a switch that is not exactly 1 included),
+  # by prefix, so a knob added later is covered without touching a list.
+  for _knob in $(env | sed -n 's/^\(GAFFER_UPDATE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    unset "$_knob"
+  done
+  unset _knob
+fi
 ASSET_SOURCE="${GAFFER_UPDATE_ASSET:-https://github.com/spendolas/gaffer-ae/releases/latest/download/$ASSET_NAME}"
 
 LOG="${TMPDIR:-/tmp}/gaffer-update.log"

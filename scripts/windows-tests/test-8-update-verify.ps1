@@ -39,6 +39,7 @@ function Run-Update([string] $dir, [string] $asset, [string[]] $extra) {
     $tmp = Join-Path (Split-Path -Parent $dir) "tmp"
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
     Remove-Item (Join-Path $tmp "gaffer-update.log") -Force -ErrorAction SilentlyContinue
+    $env:GAFFER_UPDATE_TEST = "1"
     $env:GAFFER_UPDATE_ASSET = $asset
     $env:TEMP = $tmp
     Remove-Item Env:\GAFFER_UPDATE_TEST_UNVERIFIED -ErrorAction SilentlyContinue
