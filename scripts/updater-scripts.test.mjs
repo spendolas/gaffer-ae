@@ -229,6 +229,67 @@ test('update.sh drops the GAFFER_FETCH_* test seams unless the harness set GAFFE
   assert.equal(run({ ...seams, GAFFER_UPDATE_ASSET: '/x.tgz' }).stdout, '1 1 file:///x/', 'the harness keeps them');
 });
 
+const TEST_KNOBS = ['GAFFER_UPDATE_ASSET', 'GAFFER_UPDATE_TEST_UNVERIFIED', 'GAFFER_UPDATE_TEST_STUCK_AFTER', 'GAFFER_UPDATE_TEST_FAIL_LIST',
+  'GAFFER_UPDATE_TEST_GATE', 'GAFFER_UPDATE_TEST_MARKER_GATE', 'GAFFER_UPDATE_TEST_HOLD_GATE', 'GAFFER_UPDATE_TEST_SWAP_GATE',
+  'GAFFER_UPDATE_CURL', 'GAFFER_UPDATE_SOMETHING_ADDED_LATER'];
+
+test('update.sh drops every GAFFER_UPDATE_* variable except the switch unless GAFFER_UPDATE_TEST=1 (run under bash)', () => {
+  const first = 'if [ "${GAFFER_UPDATE_TEST:-}" != "1" ]; then\n';
+  assert.ok(sh.indexOf(first) !== -1 && sh.indexOf(first) < sh.indexOf('ASSET_SOURCE="${GAFFER_UPDATE_ASSET'), 'dropped before ASSET_SOURCE reads the override');
+  const body = 'echo "' + TEST_KNOBS.map((k) => '${' + k + ':-unset}').join(' ') + ' ${GAFFER_UPDATE_TEST:-unset} ${KEEP:-unset}"';
+  const run = (env) => runShSnippet(sh, first, '\nfi', body, { KEEP: 'k', ...env });
+  const knobs = Object.fromEntries(TEST_KNOBS.map((k) => [k, 'x']));
+  const gone = TEST_KNOBS.map(() => 'unset').join(' ');
+  assert.equal(run(knobs).stdout, gone + ' unset k', 'no switch: every GAFFER_UPDATE_* knob is dropped, other variables stay');
+  for (const v of ['0', 'true', '', 'yes']) assert.equal(run({ ...knobs, GAFFER_UPDATE_TEST: v }).stdout, gone + ' ' + (v === '' ? 'unset' : 'unset') + ' k', 'only the value 1 counts: ' + JSON.stringify(v));
+  assert.equal(run({ ...knobs, GAFFER_UPDATE_TEST: '1' }).stdout, TEST_KNOBS.map(() => 'x').join(' ') + ' 1 k', 'with the switch the harness keeps them');
+});
+
+test('update.ps1 drops every GAFFER_UPDATE_* variable except the switch unless GAFFER_UPDATE_TEST=1', () => {
+  const first = 'if ($env:GAFFER_UPDATE_TEST -ne "1") {';
+  const at = ps1.indexOf(first);
+  assert.ok(at !== -1 && at < ps1.indexOf('$assetSource = "https://github.com'), 'dropped before the asset source is chosen');
+  assert.ok(at < ps1.indexOf('Start-Transcript'), 'dropped first thing');
+  const block = ps1.slice(at, ps1.indexOf('$assetSource = "https://github.com'));
+  assert.ok(block.includes('$_.Name -like "GAFFER_UPDATE_*" -and $_.Name -ne "GAFFER_UPDATE_TEST"'), 'by prefix, sparing only the switch');
+  assert.ok(block.includes('Remove-Item -LiteralPath "Env:\\$knob" -ErrorAction SilentlyContinue'));
+});
+
+test('update.sh ignores a stray GAFFER_UPDATE_ASSET without GAFFER_UPDATE_TEST=1: it asks for the real release URL (run under bash, real script)', () => {
+  const t = mkdtempSync(join(tmpdir(), 'gaffer-noswitch-'));
+  try {
+    const src = fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url));
+    const panel = join(t, 'p', 'com.gaffer.panel');
+    mkdirSync(join(panel, 'daemon'), { recursive: true });
+    mkdirSync(join(t, 'tmp'));
+    mkdirSync(join(t, 'shim'));
+    writeFileSync(join(t, 'shim', 'lsof'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    // A curl stand-in that records what it was asked for and fails, so no network is touched.
+    writeFileSync(join(t, 'shim', 'curl'), '#!/bin/sh\necho "$@" >> "' + join(t, 'curl.args') + '"\nexit 22\n', { mode: 0o755 });
+    copyFileSync(src, join(panel, 'daemon', 'update.sh'));
+    writeFileSync(join(panel, 'version.json'), '{"version":"0.12.0"}\n');
+    const asset = join(t, 'asset.tar.gz');
+    writeFileSync(asset, tarBuf(goodEntries()));
+    const env = { PATH: join(t, 'shim') + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: join(t, 'tmp'), GAFFER_UPDATE_ASSET: asset, GAFFER_UPDATE_TEST_UNVERIFIED: '1' };
+    const r = spawnSync('/bin/bash', [join(panel, 'daemon', 'update.sh')], { encoding: 'utf8', env, timeout: 60000 });
+    const log = readFileSync(join(t, 'tmp', 'gaffer-update.log'), 'utf8');
+    assert.notEqual(r.status, 0, 'the stray override must not install anything');
+    assert.match(log, /Downloading https:\/\/github\.com\/spendolas\/gaffer-ae\/releases\/latest\/download\/gaffer-update-mac\.tar\.gz/, 'it asked for the real release');
+    assert.ok(!log.includes(asset), 'the local asset was never used');
+    assert.equal(log.trim().split('\n').pop(), 'err:download');
+    assert.ok(readFileSync(join(t, 'curl.args'), 'utf8').includes('https://github.com/spendolas/gaffer-ae/releases/latest/download/gaffer-update-mac.tar.gz'));
+    assert.equal(readFileSync(join(panel, 'version.json'), 'utf8'), '{"version":"0.12.0"}\n', 'the install is untouched');
+  } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+test('the updater harnesses set GAFFER_UPDATE_TEST=1 (the panel never does)', () => {
+  assert.ok(/^export GAFFER_UPDATE_TEST=1$/m.test(read('./test-update-sh.sh')));
+  for (const f of ['test-5-update-ps1.ps1', 'test-6-runtime-update.ps1', 'test-8-update-verify.ps1']) {
+    assert.ok(read('./windows-tests/' + f).includes('$env:GAFFER_UPDATE_TEST = "1"'), f + ' sets the switch');
+  }
+  assert.ok(!mainJs.includes('GAFFER_UPDATE_'), 'the panel sets no updater test variable');
+});
+
 test('update.ps1 still ends a failed download, robocopy or npm step with an ERROR line and its err: code', () => {
   assert.ok(ps1.includes('function Exit-Update([string] $message, [string] $code = "internal") {'));
   assert.ok(ps1.includes('Write-Host "ERROR: $message"\n    if (-not $code) { $code = "internal" }\n    Write-Result "err:$code"'), 'the code line follows the ERROR line');
@@ -998,7 +1059,7 @@ function runUpdateSh(build, { env = {}, during, asset: assetBuf, sums, installed
     }
     const before = installed === null ? null : readFileSync(join(panel, 'version.json'), 'utf8');
     const args = [join(panel, 'daemon', 'update.sh'), ...(env.REPAIR ? ['--repair'] : [])];
-    const fullEnv = { PATH: shim + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmp, GAFFER_UPDATE_ASSET: asset, ...(unverified ? { GAFFER_UPDATE_TEST_UNVERIFIED: '1' } : {}), ...env };
+    const fullEnv = { PATH: shim + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: tmp, GAFFER_UPDATE_TEST: '1', GAFFER_UPDATE_ASSET: asset, ...(unverified ? { GAFFER_UPDATE_TEST_UNVERIFIED: '1' } : {}), ...env };
     let r;
     if (during) {
       r = during(args, fullEnv, tmp);
@@ -1575,7 +1636,7 @@ test('update.sh makes its temp folder with mktemp -d (private, unpredictable nam
       copyFileSync(src, join(panel, 'daemon', 'update.sh'));
       writeFileSync(join(panel, 'version.json'), '{"version":"0.12.0"}\n');
       writeFileSync(join(t, 'asset.tar.gz'), tarBuf(goodEntries()));
-      spawnSync('/bin/bash', [join(panel, 'daemon', 'update.sh')], { encoding: 'utf8', env: { PATH: join(t, 'shim') + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: join(t, 'tmp'), GAFFER_UPDATE_ASSET: join(t, 'asset.tar.gz'), GAFFER_UPDATE_TEST_UNVERIFIED: '1' } });
+      spawnSync('/bin/bash', [join(panel, 'daemon', 'update.sh')], { encoding: 'utf8', env: { PATH: join(t, 'shim') + ':/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: join(t, 'tmp'), GAFFER_UPDATE_TEST: '1', GAFFER_UPDATE_ASSET: join(t, 'asset.tar.gz'), GAFFER_UPDATE_TEST_UNVERIFIED: '1' } });
       return readdirSync(join(t, 'tmp')).filter((n) => /^gaffer-update\.[A-Za-z0-9]{6}$/.test(n));
     } finally { rmSync(t, { recursive: true, force: true }); }
   })();

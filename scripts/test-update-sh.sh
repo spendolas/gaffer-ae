@@ -100,6 +100,9 @@ SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-update-test-XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH/tmp"
 mkdir -p "$TMPDIR"
+# update.sh drops GAFFER_UPDATE_ASSET and every GAFFER_UPDATE_TEST_* knob unless
+# this explicit switch is set (the panel never sets it).
+export GAFFER_UPDATE_TEST=1
 
 # Run update.sh with the PATH an end user's CEP-spawned update gets, not the
 # developer's: system dirs only, plus the directory of this machine's node so

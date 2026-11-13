@@ -119,6 +119,9 @@ $unreachable = "http://127.0.0.1:9/"
 # The assets here are built without a SHA256SUMS.txt. A downloaded update is
 # always verified; this switch only lets such a local asset through. It is not
 # in $fetchVars, which Clear-FetchEnv resets between cases.
+# update.ps1 drops the asset override and every GAFFER_UPDATE_TEST_* knob unless this
+# explicit switch is set (the panel never sets it).
+$env:GAFFER_UPDATE_TEST = "1"
 $env:GAFFER_UPDATE_TEST_UNVERIFIED = "1"
 $fetchVars = @("GAFFER_FETCH_TEST", "GAFFER_FETCH_PINS", "GAFFER_FETCH_PLATFORM", "GAFFER_FETCH_BASE_OFFICIAL", "GAFFER_FETCH_BASE_MIRROR", "GAFFER_FETCH_SKIP_CODESIGN")
 
