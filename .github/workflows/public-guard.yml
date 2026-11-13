@@ -1,0 +1,53 @@
+name: Public guard
+
+# Runs the moment this repository changes from private to public, and on
+# demand. It runs scripts/pre-public-check.mjs against what GitHub holds:
+# branches and tags that should not be public, commit addresses that are not
+# GitHub noreply addresses, key and token shapes anywhere in history, files
+# that must never be committed, and the private word list when one exists.
+#
+# GitHub offers no hook that stops a visibility change, so this is a tripwire,
+# not a lock. Run the same command by hand BEFORE flipping:
+#   node scripts/pre-public-check.mjs
+# If the check fails here and the repository secret PUBLIC_GUARD_PAT holds a
+# token that may change this repository's settings, the job flips it back to
+# private. Without the secret the job only fails (and the maintainer gets the
+# email); set it up deliberately, it can change repository visibility.
+#
+# The `public` event runs the workflow file on the default branch, so this
+# only protects once it is on main.
+on:
+  public: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check what is about to be, or just became, public
+        run: node scripts/pre-public-check.mjs
+
+      - name: Flip back to private after a failed check
+        if: ${{ failure() && github.event_name == 'public' }}
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_GUARD_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The check failed and PUBLIC_GUARD_PAT is not set, so the repository stays public. Make it private now: Settings, General, Danger Zone."
+            exit 1
+          fi
+          gh api --method PATCH "repos/$REPO" -f visibility=private --silent
+          echo "::error::The check failed, so the repository was set back to private. Fix the findings above, then flip it again."
