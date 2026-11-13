@@ -1,0 +1,7 @@
+[
+  {
+    "rule": "secrets",
+    "file": "scripts/third-party-notices.test.mjs",
+    "reason": "strings the detector test feeds to the hygiene check (a private-key header in a quoted fixture), not keys"
+  }
+]
