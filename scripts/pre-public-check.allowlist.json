@@ -8,5 +8,10 @@
     "rule": "terms",
     "file": "docs/2026-09-08-session-cost-part2-investigation.md",
     "reason": "reviewed 2026-11-13: commit e4b7fb83 (on main since v0.10.0, public at the time) names a private plan file in one sentence; no plan content. Rewriting history would break tags and the update check, so it is accepted."
+  },
+  {
+    "rule": "secrets",
+    "file": "scripts/pre-public-check.test.mjs",
+    "reason": "the checker's own test writes a private-key header into a scratch repo to prove the detector fires"
   }
 ]
