@@ -120,7 +120,8 @@ test('daemon/package.json is dependency free', () => {
 
 test('runtime-pins.json inside the archive is the committed one', () => {
   const pins = JSON.parse(macFile('daemon/runtime-pins.json'));
-  assert.equal(pins.node.version, 'v24.22.1');
+  const committed = JSON.parse(readFileSync(join(repoRoot, 'panel/daemon/runtime-pins.json'), 'utf8'));
+  assert.equal(pins.node.version, committed.node.version);
 });
 
 // The vendored shared modules (panel/daemon/vendor/<name>, tracked in git so
