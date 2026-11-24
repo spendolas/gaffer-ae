@@ -130,25 +130,25 @@ Before you begin, read these rules. They apply to every step below.
    If only the `SHA256SUMS.txt` download fails with HTTP 404 (curl prints `The requested URL returned error: 404`; its exit code can be 22 or 56), a new Gaffer release is still being published. This is the one failure in this step where you do not stop at once. Delete the download folder, wait 2 minutes (`sleep 120` on macOS, `Start-Sleep -Seconds 120` on Windows), then run this step again unchanged. Retry up to 5 times. Do not work around it: do not skip the checksum and do not take the package from another release. If it still fails after the 5th retry, stop and tell the user.
 
 <!-- runtime-pins:begin. Generated from panel/daemon/runtime-pins.json by scripts/readme-pins.mjs; edit the script, then run: node scripts/readme-pins.mjs --write -->
-5. **Download the Node.js runtime.** Gaffer runs on the official Node.js v24.22.1 from nodejs.org, kept as a single file inside Gaffer's own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed. The block creates a new download folder and prints its path; steps 6 and 7 need that path.
+5. **Download the Node.js runtime.** Gaffer runs on the official Node.js v24.22.3 from nodejs.org, kept as a single file inside Gaffer's own folder. Nothing is installed system-wide and nothing is added to PATH. Run only the block for the platform step 3 printed. The block creates a new download folder and prints its path; steps 6 and 7 need that path.
 
    **`darwin-arm64`** (macOS, Apple Silicon)
 
    ```bash
    DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-node.XXXXXX")" && echo "Download folder: $DL" \
-     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.3-darwin-arm64.tar.gz" https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-arm64.tar.gz
    ```
 
-   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-arm64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
+   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.3/node-v24.22.3-darwin-arm64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
 
    **`darwin-x64`** (macOS, Intel)
 
    ```bash
    DL="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-node.XXXXXX")" && echo "Download folder: $DL" \
-     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.1-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
+     && curl -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$DL/node-v24.22.3-darwin-x64.tar.gz" https://nodejs.org/dist/v24.22.3/node-v24.22.3-darwin-x64.tar.gz
    ```
 
-   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-darwin-x64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
+   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.3/node-v24.22.3-darwin-x64.tar.gz`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
 
    **`win-x64`** (Windows)
 
@@ -156,41 +156,41 @@ Before you begin, read these rules. They apply to every step below.
    $dl = Join-Path $env:TEMP ("gaffer-node-" + [guid]::NewGuid().ToString("N"))
    New-Item -ItemType Directory -Path $dl | Out-Null
    "Download folder: $dl"
-   curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\node-v24.22.1-win-x64.zip" https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip
+   curl.exe -fsSL --proto '=https' --connect-timeout 20 --speed-limit 10240 --speed-time 60 --max-time 1800 --retry-max-time 1800 --retry 3 --retry-delay 2 -o "$dl\node-v24.22.3-win-x64.zip" https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip
    if ($LASTEXITCODE -ne 0) { throw "Download failed (curl exit $LASTEXITCODE). From nodejs.org: use Gaffer's mirror as described below. From the mirror: stop." }
    ```
 
-   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.1/node-v24.22.1-win-x64.zip`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
+   If that download fails, for example because your network blocks nodejs.org, download the same file from Gaffer's mirror: `https://github.com/spendolas/gaffer-ae/releases/download/node-v24.22.3/node-v24.22.3-win-x64.zip`. The mirror is byte-identical: its SHA-256 equals the value in nodejs.org's SHASUMS256.txt for this file.
 
    For the mirror, run the same block with the mirror URL in place of the nodejs.org URL, and tell the user that you used the mirror. It creates a new download folder: delete the folder of the failed attempt, and use the folder printed by the download that succeeded in steps 6 and 7. If the mirror download fails too, stop and tell the user: "Could not download the Node runtime from nodejs.org or Gaffer's mirror. Check your network and try again."
 
 6. **Verify the SHA-256 of the Node.js download.** It must equal the value written here for your platform. Replace `<download folder step 5 printed>` with the folder step 5 printed.
 
-   **`darwin-arm64`** (macOS, Apple Silicon) expected SHA-256 `89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7`
+   **`darwin-arm64`** (macOS, Apple Silicon) expected SHA-256 `ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd`
 
    ```bash
    DL="<download folder step 5 printed>"
-   cd "$DL" && echo "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7  node-v24.22.1-darwin-arm64.tar.gz" | shasum -a 256 -c -
+   cd "$DL" && echo "ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd  node-v24.22.3-darwin-arm64.tar.gz" | shasum -a 256 -c -
    ```
 
-   It must print `node-v24.22.1-darwin-arm64.tar.gz: OK`.
+   It must print `node-v24.22.3-darwin-arm64.tar.gz: OK`.
 
-   **`darwin-x64`** (macOS, Intel) expected SHA-256 `d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035`
+   **`darwin-x64`** (macOS, Intel) expected SHA-256 `977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7`
 
    ```bash
    DL="<download folder step 5 printed>"
-   cd "$DL" && echo "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035  node-v24.22.1-darwin-x64.tar.gz" | shasum -a 256 -c -
+   cd "$DL" && echo "977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7  node-v24.22.3-darwin-x64.tar.gz" | shasum -a 256 -c -
    ```
 
-   It must print `node-v24.22.1-darwin-x64.tar.gz: OK`.
+   It must print `node-v24.22.3-darwin-x64.tar.gz: OK`.
 
-   **`win-x64`** (Windows) expected SHA-256 `d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5`
+   **`win-x64`** (Windows) expected SHA-256 `e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f`
 
    ```powershell
    $dl = "<download folder step 5 printed>"
-   if (-not (Test-Path -LiteralPath "$dl\node-v24.22.1-win-x64.zip")) { throw "No download at $dl\node-v24.22.1-win-x64.zip. Use the folder step 5 printed." }
-   $got = (Get-FileHash "$dl\node-v24.22.1-win-x64.zip" -Algorithm SHA256).Hash.ToLower()
-   if ($got -eq "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5") { "SHA-256 OK" } else { "SHA-256 MISMATCH: $got" }
+   if (-not (Test-Path -LiteralPath "$dl\node-v24.22.3-win-x64.zip")) { throw "No download at $dl\node-v24.22.3-win-x64.zip. Use the folder step 5 printed." }
+   $got = (Get-FileHash "$dl\node-v24.22.3-win-x64.zip" -Algorithm SHA256).Hash.ToLower()
+   if ($got -eq "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f") { "SHA-256 OK" } else { "SHA-256 MISMATCH: $got" }
    ```
 
    It must print `SHA-256 OK`.
@@ -204,7 +204,7 @@ Before you begin, read these rules. They apply to every step below.
    ```bash
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
    DL="<download folder step 5 printed>"
-   mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.1-darwin-arm64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.1-darwin-arm64/bin/node && rm -rf "$DL"
+   mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.3-darwin-arm64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.3-darwin-arm64/bin/node && rm -rf "$DL"
    ```
 
    **`darwin-x64`** (macOS, Intel)
@@ -212,7 +212,7 @@ Before you begin, read these rules. They apply to every step below.
    ```bash
    INSTALL_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel"
    DL="<download folder step 5 printed>"
-   mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.1-darwin-x64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.1-darwin-x64/bin/node && rm -rf "$DL"
+   mkdir -p "$INSTALL_DIR/daemon/runtime" && tar -xzf "$DL/node-v24.22.3-darwin-x64.tar.gz" -C "$INSTALL_DIR/daemon/runtime" --strip-components=2 node-v24.22.3-darwin-x64/bin/node && rm -rf "$DL"
    ```
 
    **`win-x64`** (Windows)
@@ -222,15 +222,15 @@ Before you begin, read these rules. They apply to every step below.
    $dl = "<download folder step 5 printed>"
    $rt = "$installDir\daemon\runtime"
    New-Item -ItemType Directory -Path $rt -Force | Out-Null
-   tar.exe -xf "$dl\node-v24.22.1-win-x64.zip" -C $rt node-v24.22.1-win-x64/node.exe
+   tar.exe -xf "$dl\node-v24.22.3-win-x64.zip" -C $rt node-v24.22.3-win-x64/node.exe
    if ($LASTEXITCODE -ne 0) { throw "Extract failed (tar exit $LASTEXITCODE)" }
-   Move-Item -Force "$rt\node-v24.22.1-win-x64\node.exe" "$rt\node.exe"
+   Move-Item -Force "$rt\node-v24.22.3-win-x64\node.exe" "$rt\node.exe"
    ```
 
    Then delete the folder the extract left behind and the download folder, each as its own command:
 
    ```powershell
-   $leftover = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel\daemon\runtime\node-v24.22.1-win-x64"
+   $leftover = "$env:APPDATA\Adobe\CEP\extensions\com.gaffer.panel\daemon\runtime\node-v24.22.3-win-x64"
    Remove-Item -LiteralPath $leftover -Recurse -Force
    ```
 
@@ -249,11 +249,11 @@ Before you begin, read these rules. They apply to every step below.
    RT="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel/daemon/runtime"
    codesign --verify --strict "$RT/node" \
      && codesign -dv "$RT/node" 2>&1 | grep -x "TeamIdentifier=HX7739G8FX" \
-     && "$RT/node" --version | grep -x "v24.22.1" \
-     && printf '%s\n' "v24.22.1 darwin-arm64" > "$RT/VERSION"
+     && "$RT/node" --version | grep -x "v24.22.3" \
+     && printf '%s\n' "v24.22.3 darwin-arm64" > "$RT/VERSION"
    ```
 
-   It must print `TeamIdentifier=HX7739G8FX` (the Node.js Foundation's Apple Developer ID) and then `v24.22.1`. The last command records the verified version only when every check passed.
+   It must print `TeamIdentifier=HX7739G8FX` (the Node.js Foundation's Apple Developer ID) and then `v24.22.3`. The last command records the verified version only when every check passed.
 
    **`darwin-x64`** (macOS, Intel)
 
@@ -261,11 +261,11 @@ Before you begin, read these rules. They apply to every step below.
    RT="$HOME/Library/Application Support/Adobe/CEP/extensions/com.gaffer.panel/daemon/runtime"
    codesign --verify --strict "$RT/node" \
      && codesign -dv "$RT/node" 2>&1 | grep -x "TeamIdentifier=HX7739G8FX" \
-     && "$RT/node" --version | grep -x "v24.22.1" \
-     && printf '%s\n' "v24.22.1 darwin-x64" > "$RT/VERSION"
+     && "$RT/node" --version | grep -x "v24.22.3" \
+     && printf '%s\n' "v24.22.3 darwin-x64" > "$RT/VERSION"
    ```
 
-   It must print `TeamIdentifier=HX7739G8FX` (the Node.js Foundation's Apple Developer ID) and then `v24.22.1`. The last command records the verified version only when every check passed.
+   It must print `TeamIdentifier=HX7739G8FX` (the Node.js Foundation's Apple Developer ID) and then `v24.22.3`. The last command records the verified version only when every check passed.
 
    **`win-x64`** (Windows)
 
@@ -276,11 +276,11 @@ Before you begin, read these rules. They apply to every step below.
    if ($sig.Status -eq "Valid" -and $sig.SignerCertificate.Subject -like "*OpenJS Foundation*") {
      $ver = & "$rt\node.exe" --version
      $ver
-     if ($ver -eq "v24.22.1") { Set-Content -LiteralPath "$rt\VERSION" -Value "v24.22.1 win-x64" -Encoding Ascii }
+     if ($ver -eq "v24.22.3") { Set-Content -LiteralPath "$rt\VERSION" -Value "v24.22.3 win-x64" -Encoding Ascii }
    }
    ```
 
-   The first line must start with `Valid` and name `OpenJS Foundation`, and the second must be `v24.22.1`. The first run can take several seconds while Windows Defender scans the new file; later runs are fast. The verified version is recorded only when every check passed.
+   The first line must start with `Valid` and name `OpenJS Foundation`, and the second must be `v24.22.3`. The first run can take several seconds while Windows Defender scans the new file; later runs are fast. The verified version is recorded only when every check passed.
 
    If the signature check or the version check fails, delete the `daemon/runtime` folder, stop and tell the user: "The Node runtime's signature could not be verified. The Gaffer folder was left without a runtime; nothing was installed anywhere else."
 <!-- runtime-pins:end -->
