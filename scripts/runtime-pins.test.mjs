@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const pins = JSON.parse(readFileSync(fileURLToPath(new URL('../panel/daemon/runtime-pins.json', import.meta.url)), 'utf8'));
-const V = 'v24.22.1';
+const V = 'v24.22.3';
 
 test('top level shape: only "node"', () => {
   assert.deepEqual(Object.keys(pins), ['node']);
@@ -26,25 +26,25 @@ test('signing identities', () => {
 
 const expected = {
   'darwin-x64': {
-    archive: 'node-v24.22.1-darwin-x64.tar.gz',
-    archiveSha256: 'd132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035',
-    member: 'node-v24.22.1-darwin-x64/bin/node',
-    binaryBytes: 125715808,
-    binarySha256: 'cc6f41f72e3eb4460154952e56a35afdd96b6995cea51cd25e637355a2955a51',
+    archive: 'node-v24.22.3-darwin-x64.tar.gz',
+    archiveSha256: '977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7',
+    member: 'node-v24.22.3-darwin-x64/bin/node',
+    binaryBytes: 125755312,
+    binarySha256: '796184b9a19ed300b1ba7cd0f7e49558fee9fc0f05080bb036025490a5a2edf3',
   },
   'darwin-arm64': {
-    archive: 'node-v24.22.1-darwin-arm64.tar.gz',
-    archiveSha256: '89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7',
-    member: 'node-v24.22.1-darwin-arm64/bin/node',
-    binaryBytes: 122545856,
-    binarySha256: '6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329',
+    archive: 'node-v24.22.3-darwin-arm64.tar.gz',
+    archiveSha256: 'ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd',
+    member: 'node-v24.22.3-darwin-arm64/bin/node',
+    binaryBytes: 122586000,
+    binarySha256: 'ba7073582822078d8c90bca3facacc46690bc5366fab4b815aeef9148cd6e854',
   },
   'win-x64': {
-    archive: 'node-v24.22.1-win-x64.zip',
-    archiveSha256: 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5',
-    member: 'node-v24.22.1-win-x64/node.exe',
-    binaryBytes: 93915464,
-    binarySha256: 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5',
+    archive: 'node-v24.22.3-win-x64.zip',
+    archiveSha256: 'e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f',
+    member: 'node-v24.22.3-win-x64/node.exe',
+    binaryBytes: 93944648,
+    binarySha256: '86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6',
   },
 };
 
@@ -61,7 +61,7 @@ for (const [plat, want] of Object.entries(expected)) {
 test('every real hash is 64 lowercase hex; the only placeholder is the arm64 binary hash', () => {
   for (const [plat, p] of Object.entries(pins.node.platforms)) {
     assert.match(p.archiveSha256, /^[0-9a-f]{64}$/, plat + ' archiveSha256');
-    if (p.binarySha256 === '6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329') assert.equal(plat, 'darwin-arm64');
+    if (p.binarySha256 === 'ba7073582822078d8c90bca3facacc46690bc5366fab4b815aeef9148cd6e854') assert.equal(plat, 'darwin-arm64');
     else assert.match(p.binarySha256, /^[0-9a-f]{64}$/, plat + ' binarySha256');
   }
 });
