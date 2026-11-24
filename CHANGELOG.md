@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.12.2 - 2026-11-24
 
+**Gaffer chat, the panel and updates are locked down: safer chat tools, safe rendering of replies, a checked connection between panel and service, verified updates, and the latest Node.js security release.**
+
+- Gaffer now runs on Node.js v24.22.3, the latest security release of the 24 line. The update downloads the new runtime once.
 - Chat replies, quoted text and saved chats are now shown as plain text and simple formatting only. Raw HTML in a reply is displayed as text instead of being interpreted, except for plain line breaks. Only web links are clickable, and they open in your browser. Email addresses are shown as text.
 - The panel now loads only its own files and only talks to Gaffer's background service and the update check. Images from the web in a reply are shown as links instead of being loaded, and dropping a link or page onto the panel does nothing.
 - Long replies update on screen a little less often while they stream, so the panel stays responsive. The finished reply is the same.
