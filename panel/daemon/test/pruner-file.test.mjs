@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pruneSessionFile, findTranscript } from '../session-pruner.js';
+import { tmpDir } from './tmp.mjs';
 
 function bigImageTranscript(sessionId, nImages) {
   var lines = [];
@@ -15,7 +16,7 @@ function bigImageTranscript(sessionId, nImages) {
 }
 
 test('rewrites a large file, writes .bak, result still valid JSONL', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-prune-'));
+  var dir = tmpDir('gaffer-prune-');
   var file = join(dir, 'sess.jsonl');
   writeFileSync(file, bigImageTranscript('sess', 12));
   var before = statSync(file).size;
@@ -29,7 +30,7 @@ test('rewrites a large file, writes .bak, result still valid JSONL', () => {
 });
 
 test('skips files under the floor', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-prune-'));
+  var dir = tmpDir('gaffer-prune-');
   var file = join(dir, 'small.jsonl');
   writeFileSync(file, JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } }) + '\n');
   assert.equal(pruneSessionFile('small', { file }), null);
@@ -37,7 +38,7 @@ test('skips files under the floor', () => {
 });
 
 test('no-op when there is nothing to stub (returns null, no write)', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-prune-'));
+  var dir = tmpDir('gaffer-prune-');
   var file = join(dir, 'notext.jsonl');
   writeFileSync(file, (JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(600 * 1024) }] } }) + '\n'));
   assert.equal(pruneSessionFile('notext', { file, keepRecent: 0 }), null);
@@ -49,7 +50,7 @@ test('missing file returns null, never throws', () => {
 });
 
 test('findTranscript scans project dirs incl. spaced paths', () => {
-  var home = mkdtempSync(join(tmpdir(), 'gaffer-home-'));
+  var home = tmpDir('gaffer-home-');
   var proj = join(home, '.claude', 'projects', '-Some-Path-With Space');
   mkdirSync(proj, { recursive: true });
   writeFileSync(join(proj, 'uuid-123.jsonl'), '{}\n');

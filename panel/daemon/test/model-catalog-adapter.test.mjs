@@ -17,12 +17,13 @@ import './isolate-env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalogToPanel, createGafferModelCatalog, scrubLogMessage, ChatHandler, modelCapability } from '../chat-handler.js';
 import { lockdownSupported } from './test-catalog.mjs';
 import { catalogFromModels } from '../vendor/claude-model-catalog/index.mjs';
+import { tmpDir } from './tmp.mjs';
 
 // Trimmed real /v1/models rows (2026-09-24 probe), deliberately out of order,
 // the same fixture the module's own tests use, plus a dated opus row that
@@ -228,7 +229,7 @@ const BEARER = { kind: 'bearer', token: 'oat-secret-token', expiresAt: NOW + 360
 const API_KEY = { kind: 'api-key', token: 'api-secret-key', expiresAt: 0 };
 
 function tmpCache() {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-catalog-'));
+  const dir = tmpDir('gaffer-catalog-');
   return { dir, file: join(dir, '.gaffer-model-cache.json'), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -412,7 +413,7 @@ test('a bare new ChatHandler({}) reads and writes the disk cache at GAFFER_MODEL
   // seed a fresh module-format cache for that account. A fresh same-account
   // cache is served BEFORE any credential read or fetch, so the test never
   // touches the Keychain or the network.
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-bare-handler-'));
+  const dir = tmpDir('gaffer-bare-handler-');
   const prevCfg = process.env.CLAUDE_CONFIG_DIR;
   const file = process.env.GAFFER_MODEL_CACHE_PATH;
   try {

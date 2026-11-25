@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
@@ -10,6 +10,7 @@ import { loadImageForModel, captureContent, imageSize, MAX_IMAGE_EDGE, MAX_UNSCA
 import { register as registerFrame } from '../tools/captureFrame.js';
 import { register as registerLayer } from '../tools/captureLayer.js';
 import { register as registerComp } from '../tools/captureActiveComp.js';
+import { tmpDir } from './tmp.mjs';
 
 function flat(w, h) {
   var px = new Uint8Array(w * h * 4);
@@ -18,14 +19,14 @@ function flat(w, h) {
 }
 
 async function pngFile(w, h) {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-cap-'));
+  var dir = tmpDir('gaffer-test-cap-');
   var p = join(dir, 'frame.png');
   writeFileSync(p, await encodePng(flat(w, h), w, h));
   return p;
 }
 
 function fileWith(bytes, name) {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-cap-'));
+  var dir = tmpDir('gaffer-test-cap-');
   var p = join(dir, name || 'x.bin');
   writeFileSync(p, bytes);
   return p;
@@ -131,7 +132,7 @@ function toolHandler(register, name, inner) {
   ['captureLayer', registerLayer, { layerIndex: 1 }],
   ['captureActiveComp', registerComp, {}],
 ].forEach(function (row) {
-  test(row[0] + ': returns the frame as MCP image content, read from the path the daemon chose', async () => {
+  test(row[0] + ': returns the frame as MCP image content, read from the path the daemon chose', async (t) => {
     // The frame is written where the daemon asked After Effects to write it
     // (the path inside the JSX it sent), not where the reply says.
     var handlers = {};
@@ -143,7 +144,10 @@ function toolHandler(register, name, inner) {
         seenJsx = jsx;
         // the path is one string literal (backslashes and quotes are escaped)
         var m = /new File\(("(?:[^"\\]|\\.)*")\)/.exec(jsx);
-        writeFileSync(JSON.parse(m[1]), png);
+        var outPath = JSON.parse(m[1]);
+        writeFileSync(outPath, png);
+        // the capture tools write into the real OS temp folder; leave nothing there
+        t.after(function () { rmSync(outPath, { force: true }); });
         // a reply pointing somewhere else entirely
         return JSON.stringify({ ok: true, result: JSON.stringify({ ok: true, path: '/etc/hosts', width: 2400, height: 1200 }) });
       },
@@ -161,7 +165,7 @@ function toolHandler(register, name, inner) {
   });
 
   test(row[0] + ': a reply that points at some other file does not make the daemon read it', async () => {
-    var inner = { ok: true, path: join(mkdtempSync(join(tmpdir(), 'gaffer-test-cap-')), 'other.png'), width: 10, height: 10 };
+    var inner = { ok: true, path: join(tmpDir('gaffer-test-cap-'), 'other.png'), width: 10, height: 10 };
     writeFileSync(inner.path, await encodePng(flat(10, 10), 10, 10));
     var res = await toolHandler(row[1], row[0], inner)(row[2]);
     assert.equal(res.content.filter(function (c) { return c.type === 'image'; }).length, 0);

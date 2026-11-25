@@ -1,7 +1,7 @@
 import './isolate-env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync, mkdtempSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
 } from '../chat-lockdown.js';
 import { assertLockdown, assertNoPositional, value, resumeId } from './lockdown-assert.mjs';
 import { lockdownMissingFlags, lockdownUnsupportedMessage, LOCKDOWN_FLAGS } from '../cli-contract.js';
+import { tmpDir } from './tmp.mjs';
 
 var FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'cli');
 function help(name) { return readFileSync(join(FIX, name), 'utf8'); }
@@ -190,23 +191,23 @@ test('buildMcpConfig: __proto__ and other odd keys are not special', () => {
 });
 
 test('readUserMcpServers: reads user-scope servers from .claude.json, honours CLAUDE_CONFIG_DIR', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-home-'));
+  var dir = tmpDir('gaffer-test-home-');
   writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers: { grip: { type: 'http', url: 'h' } }, projects: { '/p': { mcpServers: { local: { type: 'http', url: 'l' } } } } }));
   assert.deepEqual(Object.keys(readUserMcpServers({ env: {}, home: dir })), ['grip']);
-  var other = mkdtempSync(join(tmpdir(), 'gaffer-test-cfg-'));
+  var other = tmpDir('gaffer-test-cfg-');
   writeFileSync(join(other, '.claude.json'), JSON.stringify({ mcpServers: { z: { type: 'http', url: 'z' } } }));
   assert.deepEqual(Object.keys(readUserMcpServers({ env: { CLAUDE_CONFIG_DIR: other }, home: dir })), ['z']);
 });
 
 test('readUserMcpServers: missing or broken file is an empty set, never a throw', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-home-'));
+  var dir = tmpDir('gaffer-test-home-');
   assert.deepEqual(readUserMcpServers({ env: {}, home: dir }), {});
   writeFileSync(join(dir, '.claude.json'), '{not json');
   assert.deepEqual(readUserMcpServers({ env: {}, home: dir }), {});
 });
 
 test('writeMcpConfigFile: 0600 file in a 0700 dir, removed afterwards; secrets stay off argv', { skip: process.platform === 'win32' }, () => {
-  var dir = join(mkdtempSync(join(tmpdir(), 'gaffer-test-mcpdir-')), 'chat-mcp');
+  var dir = join(tmpDir('gaffer-test-mcpdir-'), 'chat-mcp');
   var cfg = { mcpServers: { s: { type: 'http', url: 'h', headers: { Authorization: 'Bearer abc' } } } };
   var p = writeMcpConfigFile(cfg, dir);
   assert.equal(statSync(p).mode & 0o777, 0o600);
@@ -222,7 +223,7 @@ test('writeMcpConfigFile: 0600 file in a 0700 dir, removed afterwards; secrets s
 // ---- Spawn cwd ----------------------------------------------------------
 
 test('ensureChatCwd: a dedicated dir under the Gaffer folder, 0700, with no instruction or settings files', { skip: process.platform === 'win32' }, () => {
-  var parent = mkdtempSync(join(tmpdir(), 'gaffer-test-base-'));
+  var parent = tmpDir('gaffer-test-base-');
   var old = process.env.GAFFER_CHAT_DIR;
   process.env.GAFFER_CHAT_DIR = parent;
   try {
@@ -320,7 +321,7 @@ test('detectLockdownSupport: a failed probe fails closed and is not cached', asy
 test('runHelpToFile: reads the whole help even when the CLI prints a lot and exits at once', { skip: process.platform === 'win32' }, async () => {
   // A pipe can drop everything past the OS buffer when the writer exits right
   // after printing; the probe reads from a file instead.
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-fakecli-'));
+  var dir = tmpDir('gaffer-test-fakecli-');
   var bin = join(dir, 'claude');
   var js = join(dir, 'fake-help.js');
   writeFileSync(js, 'process.stdout.write("x".repeat(200000) + "\\n  --tools <tools...>  end\\n"); process.exit(0);\n');
@@ -336,7 +337,7 @@ test('runHelpToFile: reads the whole help even when the CLI prints a lot and exi
 // ---- Pasted images ------------------------------------------------------
 
 test('extractPastedImages: peels the panel [image: path] lines off and reads only gaffer paste files in the temp dir', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-paste-'));
+  var dir = tmpDir('gaffer-test-paste-');
   var png = join(dir, 'gaffer-paste-1700000000000-12.png');
   writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
   var other = join(dir, 'secret.txt');
@@ -350,8 +351,8 @@ test('extractPastedImages: peels the panel [image: path] lines off and reads onl
 });
 
 test('extractPastedImages: a paste file in the panel temp folder is accepted even when the daemon temp folder differs', () => {
-  var daemonTmp = mkdtempSync(join(tmpdir(), 'gaffer-test-dtmp-'));
-  var panelTmp = mkdtempSync(join(tmpdir(), 'gaffer-test-ptmp-'));
+  var daemonTmp = tmpDir('gaffer-test-dtmp-');
+  var panelTmp = tmpDir('gaffer-test-ptmp-');
   var png = join(panelTmp, 'gaffer-paste-1700000000001-3.png');
   writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
   // panel temp folder named by the TMPDIR the daemon also sees: accepted
@@ -365,7 +366,7 @@ test('extractPastedImages: a paste file in the panel temp folder is accepted eve
 });
 
 test('extractPastedImages: a link named like a paste file, or a folder, is not read', { skip: process.platform === 'win32' }, () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-paste-'));
+  var dir = tmpDir('gaffer-test-paste-');
   var target = join(dir, 'secret.txt');
   writeFileSync(target, 'x');
   symlinkSync(target, join(dir, 'gaffer-paste-1-1.png'));
@@ -382,7 +383,7 @@ test('extractPastedImages: no image lines leaves the message untouched', () => {
 });
 
 test('extractPastedImages: a path that escapes through .. is rejected', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-test-paste-'));
+  var dir = tmpDir('gaffer-test-paste-');
   var r = extractPastedImages('[image: ' + dir + '/../gaffer-paste-1-1.png]\nx', { tmpDir: dir });
   assert.deepEqual(r.paths, []);
 });
@@ -496,12 +497,12 @@ test('userSettingsPassthrough: nothing to pass is null; a non-object env is drop
 });
 
 test('readUserSettings: reads settings.json from CLAUDE_CONFIG_DIR or ~/.claude, {} when missing or broken', () => {
-  var home = mkdtempSync(join(tmpdir(), 'gaffer-test-home-'));
+  var home = tmpDir('gaffer-test-home-');
   assert.deepEqual(readUserSettings({ env: {}, home: home }), {});
   mkdirSync(join(home, '.claude'));
   writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ env: { A: 'b' } }));
   assert.deepEqual(readUserSettings({ env: {}, home: home }), { env: { A: 'b' } });
-  var cfg = mkdtempSync(join(tmpdir(), 'gaffer-test-cfg-'));
+  var cfg = tmpDir('gaffer-test-cfg-');
   writeFileSync(join(cfg, 'settings.json'), '{broken');
   assert.deepEqual(readUserSettings({ env: { CLAUDE_CONFIG_DIR: cfg }, home: home }), {});
 });
@@ -519,7 +520,7 @@ test('buildChatArgs / buildCompactArgs: --settings is passed once, only when the
 // ---- Housekeeping -----------------------------------------------------------
 
 test('sweepChatTempFiles: removes leftover config and settings files, nothing else', { skip: process.platform === 'win32' }, () => {
-  var dir = join(mkdtempSync(join(tmpdir(), 'gaffer-test-sweep-')), 'chat-mcp');
+  var dir = join(tmpDir('gaffer-test-sweep-'), 'chat-mcp');
   var a = writeMcpConfigFile({ mcpServers: {} }, dir);
   writeFileSync(join(dir, 'settings-0123456789abcdef.json'), '{}');
   writeFileSync(join(dir, 'keep.txt'), 'x');
@@ -531,7 +532,7 @@ test('sweepChatTempFiles: removes leftover config and settings files, nothing el
 });
 
 test('writeMcpConfigFile: every call gets its own file name', { skip: process.platform === 'win32' }, () => {
-  var dir = join(mkdtempSync(join(tmpdir(), 'gaffer-test-wx-')), 'chat-mcp');
+  var dir = join(tmpDir('gaffer-test-wx-'), 'chat-mcp');
   var names = new Set();
   for (var i = 0; i < 20; i++) names.add(writeMcpConfigFile({ mcpServers: {} }, dir));
   assert.equal(names.size, 20);

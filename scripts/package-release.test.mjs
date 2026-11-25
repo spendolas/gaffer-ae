@@ -1,12 +1,13 @@
 // Run from the repo root: node --test scripts/package-release.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const stub = join(repoRoot, 'scripts/test-fixtures/stub-bundle.sh');
@@ -14,7 +15,7 @@ const build = (outDir, extraEnv = {}) =>
   execFileSync('bash', ['scripts/package-release.sh', '9.9.9', 'deadbeefcafe', outDir], {
     cwd: repoRoot, stdio: 'pipe', env: { ...process.env, GAFFER_BUNDLE_SCRIPT: stub, ...extraEnv },
   });
-const out = mkdtempSync(join(tmpdir(), 'gaffer-pkg-'));
+const out = tmpDir('gaffer-pkg-');
 build(out);
 const macList = () => execFileSync('tar', ['-tzf', join(out, 'gaffer-update-mac.tar.gz')], { encoding: 'utf8' }).split('\n').filter(Boolean);
 const winList = () => execFileSync('unzip', ['-Z1', join(out, 'gaffer-update-win.zip')], { encoding: 'utf8' }).split('\n').filter(Boolean);
@@ -157,7 +158,7 @@ for (const name of ['gaffer-install-win.zip', 'gaffer-update-win.zip']) {
 for (const extra of ['daemon/daemon.mjs.map', 'daemon/node_modules/x/index.js', 'daemon/package-lock.json', 'daemon/extra-module.js',
   'daemon/vendor/claude-model-catalog/LICENSE', 'daemon/tools/helper.cjs']) {
   test('assertion fires when the bundle step leaves ' + extra, () => {
-    const bad = mkdtempSync(join(tmpdir(), 'gaffer-pkg-bad-'));
+    const bad = tmpDir('gaffer-pkg-bad-');
     assert.throws(() => build(bad, { STUB_EXTRA: extra }));
     assert.ok(!readdirSync(bad).some((n) => n.startsWith('gaffer-install')), 'no archives written on failure');
   });

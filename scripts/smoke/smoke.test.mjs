@@ -3,7 +3,7 @@
 // itself runs against a real daemon in .github/workflows/release.yml (smoke).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
   parseTapCounts, compareParity, findNodeModules, PLACEHOLDER_PIN,
   nonLoopbackAddresses, listenAddrsFromLsof, listenersLoopbackOnly,
 } from './run-smoke.mjs';
+import { tmpDir } from '../../panel/daemon/test/tmp.mjs';
 
 const baseline = JSON.parse(readFileSync(fileURLToPath(new URL('./parity-baseline.json', import.meta.url)), 'utf8'));
 
@@ -195,7 +196,7 @@ test('run-smoke: listener rule over lsof / Get-NetTCPConnection output', () => {
 });
 
 test('run-smoke: node_modules found inside the tree and in parents', () => {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer-smoke-nm-'));
+  const root = tmpDir('gaffer-smoke-nm-');
   try {
     const ext = join(root, 'a b', 'com.gaffer.panel');
     mkdirSync(join(ext, 'daemon', 'runtime'), { recursive: true });

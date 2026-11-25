@@ -25,12 +25,13 @@ import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync,
+  mkdirSync, writeFileSync, readFileSync, existsSync, statSync,
   copyFileSync, chmodSync, symlinkSync, rmSync, realpathSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './tmp.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'start.sh');
@@ -83,7 +84,7 @@ function toolsDir(root) {
 // false), dev (default false)
 function sandbox(opts = {}) {
   const o = { runtime: true, bundle: true, index: true, stamp: null, pinSha: 'real', pinSize: 'match', sysNode: false, dev: false, ...opts };
-  const root = mkdtempSync(join(tmpdir(), 'gaffer start sh '));
+  const root = tmpDir('gaffer start sh ');
   roots.push(root);
   const repo = join(root, 'Applicätion Support');
   const ext = join(repo, 'com.gaffer.panel');

@@ -1,18 +1,19 @@
 // Run from the repo root: node --test scripts/third-party-notices.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const script = fileURLToPath(new URL('./third-party-notices.mjs', import.meta.url));
 
 // Builds a fixture: <root>/node_modules/<pkgs> plus a meta.json whose inputs
 // reference one file per package, the way esbuild's metafile does.
 function fixture(pkgs) {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer-notices-'));
+  const root = tmpDir('gaffer-notices-');
   const nm = join(root, 'node_modules');
   const inputs = { 'index.js': { bytes: 1, imports: [] } };
   for (const p of pkgs) {
@@ -83,7 +84,7 @@ test('usage error without arguments', () => {
 // bundle-daemon.sh hygiene seam: `--hygiene-only <file>` runs just the pattern check.
 const bundleScript = fileURLToPath(new URL('./bundle-daemon.sh', import.meta.url));
 const hygiene = (content) => {
-  const f = join(mkdtempSync(join(tmpdir(), 'gaffer-hyg-')), 'daemon.mjs');
+  const f = join(tmpDir('gaffer-hyg-'), 'daemon.mjs');
   writeFileSync(f, content);
   return spawnSync('bash', [bundleScript, '--hygiene-only', f], { encoding: 'utf8' });
 };
@@ -118,7 +119,7 @@ for (const [label, bad] of [
 // (a sample path in a comment, a masked sample key in the settings mock-up), and
 // the daemon bundle is checked for them separately above.
 const stageHygiene = (files) => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-stage-hyg-'));
+  const dir = tmpDir('gaffer-stage-hyg-');
   for (const [name, content] of Object.entries(files)) {
     mkdirSync(join(dir, name, '..'), { recursive: true });
     writeFileSync(join(dir, name), content);

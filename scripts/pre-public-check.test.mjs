@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { runChecks, format } from './pre-public-check.mjs';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./pre-public-check.mjs', import.meta.url));
 const NOREPLY = 'tester@users.noreply.github.com';
@@ -19,7 +20,7 @@ function sh(cwd, args, env = {}) {
 
 // A bare "origin" and a working clone with one clean commit on main.
 function makeRepo() {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer-public-check-'));
+  const root = tmpDir('gaffer-public-check-');
   const origin = join(root, 'origin.git');
   const work = join(root, 'work');
   mkdirSync(origin);

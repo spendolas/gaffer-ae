@@ -1,11 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startMcpServer, readGafferVersion } from '../mcp-server.js';
+import { tmpDir } from './tmp.mjs';
 
 // The MCP handshake must report the real Gaffer version (panel/version.json),
 // never a hardcoded placeholder. Ephemeral port, queue stub, no AE.
@@ -17,7 +18,7 @@ test('readGafferVersion reads panel/version.json next to the daemon folder', () 
 });
 
 test('readGafferVersion falls back to unknown on any read or parse problem', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-ver-'));
+  var dir = tmpDir('gaffer-ver-');
   assert.equal(readGafferVersion(join(dir, 'missing.json')), 'unknown');
   writeFileSync(join(dir, 'bad.json'), '{not json');
   assert.equal(readGafferVersion(join(dir, 'bad.json')), 'unknown');

@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { maxSourceMtime, readVersionSignature, isDevInstall, shouldReload } from '../dev-reload.js';
+import { tmpDir } from './tmp.mjs';
 
 function seconds(t) { return new Date(t * 1000); }
 
 test('maxSourceMtime: returns the newest .js mtime, recursing subdirs', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'devreload-'));
+  var dir = tmpDir('devreload-');
   writeFileSync(join(dir, 'a.js'), '1'); utimesSync(join(dir, 'a.js'), seconds(1000), seconds(1000));
   mkdirSync(join(dir, 'tools'));
   writeFileSync(join(dir, 'tools', 'b.js'), '2'); utimesSync(join(dir, 'tools', 'b.js'), seconds(5000), seconds(5000));
@@ -16,7 +17,7 @@ test('maxSourceMtime: returns the newest .js mtime, recursing subdirs', () => {
 });
 
 test('maxSourceMtime: ignores node_modules/test/dist and dotfiles and non-js', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'devreload-'));
+  var dir = tmpDir('devreload-');
   writeFileSync(join(dir, 'real.js'), '1'); utimesSync(join(dir, 'real.js'), seconds(1000), seconds(1000));
   for (var noise of ['node_modules', 'test', 'dist']) {
     mkdirSync(join(dir, noise));
@@ -28,7 +29,7 @@ test('maxSourceMtime: ignores node_modules/test/dist and dotfiles and non-js', (
 });
 
 test('maxSourceMtime: counts .mjs and .cjs sources (vendor, launch.cjs) but never the local daemon.mjs bundle', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'devreload-'));
+  var dir = tmpDir('devreload-');
   writeFileSync(join(dir, 'a.js'), '1'); utimesSync(join(dir, 'a.js'), seconds(1000), seconds(1000));
   mkdirSync(join(dir, 'vendor'));
   var v = join(dir, 'vendor', 'catalog.cjs'); writeFileSync(v, '2'); utimesSync(v, seconds(5000), seconds(5000));
@@ -40,17 +41,17 @@ test('maxSourceMtime: counts .mjs and .cjs sources (vendor, launch.cjs) but neve
 });
 
 test('isDevInstall: true when a .git sits at panelDir/.. or panelDir', () => {
-  var repo = mkdtempSync(join(tmpdir(), 'devreload-repo-'));
+  var repo = tmpDir('devreload-repo-');
   mkdirSync(join(repo, '.git'));
   var panel = join(repo, 'panel'); mkdirSync(panel);
   assert.equal(isDevInstall(panel), true);        // .git one level up
-  var flat = mkdtempSync(join(tmpdir(), 'devreload-flat-'));
+  var flat = tmpDir('devreload-flat-');
   mkdirSync(join(flat, '.git'));
   assert.equal(isDevInstall(flat), true);          // .git at the dir itself
 });
 
 test('isDevInstall: false for a plain install (no .git)', () => {
-  var plain = mkdtempSync(join(tmpdir(), 'devreload-plain-'));
+  var plain = tmpDir('devreload-plain-');
   mkdirSync(join(plain, 'panel'));
   assert.equal(isDevInstall(join(plain, 'panel')), false);
 });
@@ -72,7 +73,7 @@ test('shouldReload: honours an explicit changed flag (version-signature path)', 
 });
 
 test('readVersionSignature: returns file content, and "" when absent', () => {
-  var dir = mkdtempSync(join(tmpdir(), 'devreload-ver-'));
+  var dir = tmpDir('devreload-ver-');
   assert.equal(readVersionSignature(dir), '');                       // no file yet
   var body = '{\n  "version": "0.9.5",\n  "commit": "abc1234"\n}\n';
   writeFileSync(join(dir, 'version.json'), body);

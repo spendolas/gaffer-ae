@@ -38,11 +38,26 @@
 // macOS when this was written; the enforcement is what carries it forward.)
 
 import { execFile, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, closeSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { newTurnState, observe, classify, LAST_VERIFIED, versionStatus, LOCKDOWN_FLAGS } from '../panel/daemon/cli-contract.js';
+
+// Every throwaway folder this check makes (fresh config dir, HOME, cwd and
+// --help capture) is removed when the process exits, so a run leaves nothing
+// in the OS temp folder. A --config-dir the caller named is never touched.
+var scratchDirs = [];
+function scratchDir(prefix) {
+  var dir = mkdtempSync(join(tmpdir(), prefix));
+  if (!scratchDirs.length) {
+    process.on('exit', function () {
+      scratchDirs.forEach(function (d) { try { rmSync(d, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
+    });
+  }
+  scratchDirs.push(dir);
+  return dir;
+}
 
 // Environment that could sign the child in, point it at a paid backend or
 // route it through a cloud provider. Removed from the child env, always.
@@ -198,7 +213,7 @@ export function paidTurnProblems(events) {
 // credentials, and the run must not start.
 export function chooseConfigDir(flagDir, exists) {
   exists = exists || existsSync;
-  var dir = flagDir ? resolve(flagDir) : mkdtempSync(join(tmpdir(), 'gaffer-cli-contract-cfg-'));
+  var dir = flagDir ? resolve(flagDir) : scratchDir('gaffer-cli-contract-cfg-');
   var creds = join(dir, '.credentials.json');
   if (exists(creds)) {
     return { dir: dir, refusal: 'REFUSING to run: ' + creds + ' exists, so a -p probe would be a signed-in paid turn. Pass a config dir without credentials, or none.' };
@@ -262,7 +277,7 @@ function run(bin, args, opts) {
 function runToFile(bin, args, opts) {
   opts = opts || {};
   return new Promise(function (done) {
-    var outPath = join(mkdtempSync(join(tmpdir(), 'gaffer-cli-contract-out-')), 'stdout.txt');
+    var outPath = join(scratchDir('gaffer-cli-contract-out-'), 'stdout.txt');
     var fd;
     try { fd = openSync(outPath, 'w'); } catch (e) {
       return done({ code: null, signal: null, timedOut: false, spawnError: e.message, stdout: '', stderr: '' });
@@ -353,8 +368,8 @@ export async function main(argv) {
     return 1;
   }
   var configDir = chosen.dir;
-  var homeDir = mkdtempSync(join(tmpdir(), 'gaffer-cli-contract-home-'));
-  var cwd = mkdtempSync(join(tmpdir(), 'gaffer-cli-contract-cwd-'));
+  var homeDir = scratchDir('gaffer-cli-contract-home-');
+  var cwd = scratchDir('gaffer-cli-contract-cwd-');
   var env = childEnv(process.env, homeDir, configDir);
   if (opts.out) { try { mkdirSync(opts.out, { recursive: true }); } catch (e) { /* fine */ } }
 

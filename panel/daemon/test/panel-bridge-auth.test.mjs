@@ -5,6 +5,7 @@ import { WebSocket } from 'ws';
 import { PanelBridge } from '../panel-bridge.js';
 import { newBridgeToken, clientProof, serverProof } from '../bridge-token.js';
 import { IssuedSessions } from '../issued-sessions.js';
+import { tmpDir } from './tmp.mjs';
 
 // Every bridge here listens on an ephemeral loopback port with a throwaway
 // token, never on 9823, so the suite runs next to a live daemon.
@@ -352,10 +353,10 @@ test('sessions: an id the panel makes up is dropped; one the daemon issued in ch
 });
 
 test('IssuedSessions: bounded, UUID-only, survives a restart through its file (0600)', async () => {
-  var { mkdtempSync, rmSync, statSync } = await import('node:fs');
+  var { rmSync, statSync } = await import('node:fs');
   var { tmpdir } = await import('node:os');
   var { join } = await import('node:path');
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-issued-'));
+  var dir = tmpDir('gaffer-issued-');
   try {
     var f = join(dir, 'issued-sessions.json');
     var a = new IssuedSessions(f, 3);
@@ -488,10 +489,10 @@ test('a non-panel client never gets keyed, replaces a key, or reaches any contro
 });
 
 test('upgrade path: with no ledger file yet, the first session id each AE version presents is accepted once', async () => {
-  var { mkdtempSync, rmSync } = await import('node:fs');
+  var { rmSync } = await import('node:fs');
   var { tmpdir } = await import('node:os');
   var { join } = await import('node:path');
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-bootstrap-'));
+  var dir = tmpDir('gaffer-bootstrap-');
   try {
     var file = join(dir, 'issued-sessions.json');
     var chats = [];

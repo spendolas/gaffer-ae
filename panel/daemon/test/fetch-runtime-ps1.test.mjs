@@ -12,7 +12,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync,
+  readFileSync, writeFileSync, mkdirSync, rmSync, existsSync,
   copyFileSync, readdirSync, statSync, truncateSync, renameSync, utimesSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -21,6 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { tmpDir } from './tmp.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(here, '..', 'fetch-runtime.ps1');
@@ -250,7 +251,7 @@ describe('fetch-runtime.ps1 on Windows', { skip: skipReason }, () => {
     // The fixture and the served archives live under an ASCII path (curl
     // decodes file:// URLs in the ANSI code page); the daemon dir and TEMP
     // of every case carry spaces and an accent.
-    root = mkdtempSync(join(tmpdir(), 'gaffer-fetch-ps1-'));
+    root = tmpDir('gaffer-fetch-ps1-');
     srcDir = join(root, 'src');
     mkdirSync(join(srcDir, top), { recursive: true });
     copyFileSync(process.execPath, join(srcDir, top, 'node.exe'));

@@ -1,12 +1,13 @@
 // Run from the repo root: node --test scripts/release-gate.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { requiredAssets, decide, compareVersions, extractNotes, GateError, REQUIRED_ASSETS } from './release-gate.mjs';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const CHANGELOG = [
   '# Changelog',
@@ -188,7 +189,7 @@ test('notes extraction handles CRLF line endings', () => {
 });
 
 test('CLI writes action to GITHUB_OUTPUT and notes.md', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'release-gate-'));
+  const dir = tmpDir('release-gate-');
   writeFileSync(join(dir, 'tags.txt'), 'v0.10.0\n');
   writeFileSync(join(dir, 'release.json'), 'null\n');
   writeFileSync(join(dir, 'CHANGELOG.md'), CHANGELOG);
@@ -206,7 +207,7 @@ test('CLI writes action to GITHUB_OUTPUT and notes.md', () => {
 });
 
 test('CLI exits 1 with a readable message when the gate fails', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'release-gate-'));
+  const dir = tmpDir('release-gate-');
   writeFileSync(join(dir, 'tags.txt'), 'v0.12.0\n');
   writeFileSync(join(dir, 'release.json'), 'null\n');
   writeFileSync(join(dir, 'CHANGELOG.md'), CHANGELOG);

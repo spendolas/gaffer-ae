@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pruneSessionFile } from '../session-pruner.js';
+import { tmpDir } from './tmp.mjs';
 
 test('resumed transcript stays API-valid after prune: pairing intact, images gone', () => {
   var lines = [];
@@ -12,7 +13,7 @@ test('resumed transcript stays API-valid after prune: pairing intact, images gon
     lines.push(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'checking frame ' + i }, { type: 'tool_use', id: 'r' + i, name: 'Read', input: { file_path: '/tmp/frame' + i + '.png' } }] } }));
     lines.push(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ tool_use_id: 'r' + i, type: 'tool_result', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(80 * 1024) } }] }] } }));
   }
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-int-'));
+  var dir = tmpDir('gaffer-int-');
   var file = join(dir, 'sess.jsonl');
   writeFileSync(file, lines.join('\n') + '\n');
 

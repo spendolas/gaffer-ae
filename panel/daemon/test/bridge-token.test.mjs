@@ -1,13 +1,14 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { renameSync as realRename, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { renameSync as realRename, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { tmpDir } from './tmp.mjs';
 
 // The config directory is a scratch one: getConfigPath() honors this override
 // (read at first call), so nothing here can touch the real per-install config.
-var scratch = mkdtempSync(join(tmpdir(), 'gaffer-bridge-token-'));
+var scratch = tmpDir('gaffer-bridge-token-');
 process.env.GAFFER_CONFIG_PATH = join(scratch, 'cfg', 'config.json');
 after(() => rmSync(scratch, { recursive: true, force: true }));
 

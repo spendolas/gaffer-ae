@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   resolveOrder, resolveClaude, checkCandidate, healthCheckEnv, findClaudeBinary,
   resetClaudeLookupForTests, lastClaudeLookup, INSTALL_LINKS, formatNotFoundMessage,
 } from '../claude-binary.js';
+import { tmpDir } from './tmp.mjs';
 
 // The lookup order and the health check, driven by fake fs/exec so no real
 // Claude binary is needed. The order itself was decided by the owner: pin,
@@ -318,7 +319,7 @@ test('a failed lookup clears the in-flight slot so the next call tries again', a
 
 test('a cached desktop-app hit is dropped when a newer version folder appears (readdir only, no spawn until then)', async () => {
   resetClaudeLookupForTests();
-  var home = mkdtempSync(join(tmpdir(), 'gaffer-home-'));
+  var home = tmpDir('gaffer-home-');
   var base = join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
   var LEAF = ['claude.app', 'Contents', 'MacOS', 'claude'];
   var old = join.apply(null, [base, '2.1.288', 'h0'].concat(LEAF));

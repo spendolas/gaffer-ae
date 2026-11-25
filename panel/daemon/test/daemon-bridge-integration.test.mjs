@@ -8,15 +8,16 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, rmSync, statSync, readFileSync, existsSync } from 'node:fs';
+import { rmSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { clientProof, serverProof } from '../bridge-token.js';
+import { tmpDir } from './tmp.mjs';
 
-var scratch = mkdtempSync(join(tmpdir(), 'gaffer-daemon-it-'));
+var scratch = tmpDir('gaffer-daemon-it-');
 var tokenFile = join(scratch, 'cfg', 'bridge-token');
 var children = [];
 after(() => {

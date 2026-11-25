@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { defaultConfigDir, prepareConfigLocation, CONFIG_FILENAME } from '../config-path.js';
+import { tmpDir } from './tmp.mjs';
 
 // The per-install config must live OUTSIDE the CEP extension directory —
 // every install/update path rewrites that directory, and a config inside it
@@ -41,7 +42,7 @@ test('config dir is never inside the extension (panel) directory', () => {
 });
 
 test('prepareConfigLocation creates the directory and copies a legacy config forward once', () => {
-  var root = mkdtempSync(join(tmpdir(), 'gaffer-config-path-'));
+  var root = tmpDir('gaffer-config-path-');
   try {
     var legacy = join(root, 'panel', '.gaffer-config.json');
     var target = join(root, 'appdata', 'Gaffer', CONFIG_FILENAME);
@@ -65,7 +66,7 @@ test('prepareConfigLocation creates the directory and copies a legacy config for
 });
 
 test('prepareConfigLocation with no legacy file just ensures the directory', () => {
-  var root = mkdtempSync(join(tmpdir(), 'gaffer-config-path-'));
+  var root = tmpDir('gaffer-config-path-');
   try {
     var target = join(root, 'a', 'b', CONFIG_FILENAME);
     var migrated = prepareConfigLocation(target, join(root, 'nope', '.gaffer-config.json'));

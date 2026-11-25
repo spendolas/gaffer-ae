@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { desktopAppCandidates, macDesktopAppCandidates, formatNotFoundMessage } from '../claude-binary.js';
+import { tmpDir } from './tmp.mjs';
 
 // The Claude desktop app keeps its own copy of the CLI under
 // %APPDATA%\Claude\claude-code and rewrites that layout on its own schedule:
@@ -13,7 +14,7 @@ import { desktopAppCandidates, macDesktopAppCandidates, formatNotFoundMessage } 
 // not need real files) so the lookup is checked against the actual fs calls.
 
 function makeAppData(dirs) {
-  var appData = mkdtempSync(join(tmpdir(), 'gaffer-appdata-'));
+  var appData = tmpDir('gaffer-appdata-');
   var base = join(appData, 'Claude', 'claude-code');
   mkdirSync(base, { recursive: true });
   dirs.forEach(function (d) { mkdirSync(join(base, d), { recursive: true }); });
@@ -107,7 +108,7 @@ test('a runaway folder cannot blow up the candidate list (capped per level)', ()
 // ~/Library/Application Support/Claude/claude-code, with the binary inside a
 // claude.app bundle.
 function makeHome(dirs) {
-  var home = mkdtempSync(join(tmpdir(), 'gaffer-home-'));
+  var home = tmpDir('gaffer-home-');
   var base = join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
   mkdirSync(base, { recursive: true });
   dirs.forEach(function (d) { mkdirSync(join(base, d), { recursive: true }); });

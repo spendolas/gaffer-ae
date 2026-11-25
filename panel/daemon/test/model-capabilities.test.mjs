@@ -1,11 +1,12 @@
 import './isolate-env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { modelCapability, createGafferModelCatalog, ChatHandler } from '../chat-handler.js';
 import { MODEL_CACHE_TTL_MS } from '../vendor/claude-model-catalog/index.mjs';
+import { tmpDir } from './tmp.mjs';
 
 // The cache ladder (fresh disk cache, live fetch, stale same-account fallback,
 // fail closed) now lives in the vendored claude-model-catalog module. These
@@ -44,7 +45,7 @@ function fetcher(body, status) {
 // account identity, a credential that is valid for an hour from the clock,
 // and a controllable clock.
 function makeHandler(overrides = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-model-cache-'));
+  const dir = tmpDir('gaffer-model-cache-');
   const cacheFilePath = overrides.cacheFilePath || join(dir, '.gaffer-model-cache.json');
   const clock = overrides.clock || { t: T0 };
   const fetch = overrides.fetch || fetcher(LIVE_MODELS);
@@ -81,7 +82,7 @@ test('model discovery serves the cached catalog when a live fetch fails (stale c
 });
 
 test('an expiring token skips the fetch and serves the stale cache', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-model-cache-'));
+  const dir = tmpDir('gaffer-model-cache-');
   try {
     const file = join(dir, '.gaffer-model-cache.json');
     const clock = { t: T0 };
@@ -147,7 +148,7 @@ test('stale persisted cache (past TTL) triggers a live fetch and re-persists', a
 
 test('account mismatch ignores the cached catalog and fetches', async () => {
   // First handler (account A) writes a fresh cache to the shared file.
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-model-cache-'));
+  const dir = tmpDir('gaffer-model-cache-');
   const cacheFilePath = join(dir, '.gaffer-model-cache.json');
   const clock = { t: T0 };
   try {
@@ -171,7 +172,7 @@ test('account mismatch ignores the cached catalog and fetches', async () => {
 });
 
 test('an unknown account identity never matches a cache (always goes live)', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-model-cache-'));
+  const dir = tmpDir('gaffer-model-cache-');
   const cacheFilePath = join(dir, '.gaffer-model-cache.json');
   try {
     const h1 = makeHandler({ cacheFilePath, accountId: null });
@@ -183,7 +184,7 @@ test('an unknown account identity never matches a cache (always goes live)', asy
 });
 
 test('persistence round-trip: a fresh ChatHandler loads the on-disk cache without fetching', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-model-cache-'));
+  const dir = tmpDir('gaffer-model-cache-');
   const cacheFilePath = join(dir, '.gaffer-model-cache.json');
   try {
     // Instance 1 fetches and persists.

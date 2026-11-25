@@ -6,13 +6,14 @@
 // on the platform a developer is not running.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync, mkdirSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 // Runs a snippet of update.sh (a function or a case block, cut out by its
@@ -256,7 +257,7 @@ test('update.ps1 drops every GAFFER_UPDATE_* variable except the switch unless G
 });
 
 test('update.sh ignores a stray GAFFER_UPDATE_ASSET without GAFFER_UPDATE_TEST=1: it asks for the real release URL (run under bash, real script)', () => {
-  const t = mkdtempSync(join(tmpdir(), 'gaffer-noswitch-'));
+  const t = tmpDir('gaffer-noswitch-');
   try {
     const src = fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url));
     const panel = join(t, 'p', 'com.gaffer.panel');
@@ -888,7 +889,7 @@ test('the shipped v0.11.3 update.sh accepts the new archive and its npm install 
   }
   const oldSh = spawnSync('git', ['show', tag + ':panel/daemon/update.sh'], { cwd: repoRoot, encoding: 'utf8' }).stdout;
   assert.ok(oldSh.includes('[ ! -f "$EXTRACT_DIR/daemon/index.js" ]'), 'the v0.11.3 archive check is the one this test models');
-  const root = mkdtempSync(join(tmpdir(), 'gaffer migrate '));
+  const root = tmpDir('gaffer migrate ');
   try {
     const dist = join(root, 'dist');
     spawnSync('bash', ['scripts/package-release.sh', '9.9.9', 'deadbeefcafe', dist], {
@@ -1025,7 +1026,7 @@ const ERR_CODES = ['dev-install', 'lock', 'download', 'verify', 'version', 'arch
 // GAFFER_UPDATE_TEST_UNVERIFIED lets a local asset without a sums file
 // through; the verification cases turn it off).
 function runUpdateSh(build, { env = {}, during, asset: assetBuf, sums, installed = '0.12.0', unverified = true } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer-errcode-'));
+  const root = tmpDir('gaffer-errcode-');
   try {
     const panel = join(root, 'Application Support', 'com.gaffer.panel');
     const tmp = join(root, 'tmp');
@@ -1133,7 +1134,9 @@ kill -${sig.slice(3)} "$pid"; wait "$pid"; echo "rc=$?"`;
 const RES_FIRST = '# ---- result line and exit trap ----';
 const RES_LAST = '# ---- end result line and exit trap ----';
 function runResult(body) {
-  const pre = 'T="$(mktemp -d)"; TMP_DIR="$T/tmp"; mkdir -p "$TMP_DIR"\n';
+  // The section installs its own EXIT trap, so the folder comes from tmpDir
+  // (removed when this file finishes) rather than a trap of our own.
+  const pre = 'T="' + tmpDir('gaffer-result-') + '"; TMP_DIR="$T/tmp"; mkdir -p "$TMP_DIR"\n';
   return runShSnippet(sh, RES_FIRST, RES_LAST, pre + body, {});
 }
 
@@ -1439,7 +1442,7 @@ test('update.sh rejects archives with absolute paths, .. segments, symlinks, har
   // An absolute name: only when this tar lists the name as stored (GNU tar
   // may strip the slash on its own, which is harmless and not testable here).
   const abs = tarBuf([...goodEntries(), { name: '/tmp/gaffer-abs-entry.txt', data: 'x' }]);
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-abs-'));
+  const dir = tmpDir('gaffer-abs-');
   try {
     writeFileSync(join(dir, 'a.tgz'), abs);
     const listing = spawnSync('tar', ['-tzf', join(dir, 'a.tgz')], { encoding: 'utf8' }).stdout;
@@ -1600,7 +1603,7 @@ test('the harnesses verify their assets for real and use GAFFER_UPDATE_TEST_UNVE
 test('the harness\'s sums_add lets a repacked asset beside package-release\'s SHA256SUMS.txt pass real verification (run under bash)', () => {
   const shHarness = read('./test-update-sh.sh');
   const fn = shHarness.slice(shHarness.indexOf('sums_add() {'), shHarness.indexOf('\n}\n', shHarness.indexOf('sums_add() {')) + 3);
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-sumsadd-'));
+  const dir = tmpDir('gaffer-sumsadd-');
   try {
     const real = tarBuf(goodEntries());
     writeFileSync(join(dir, 'gaffer-update-mac.tar.gz'), real);
@@ -1625,7 +1628,7 @@ test('update.sh makes its temp folder with mktemp -d (private, unpredictable nam
   assert.ok(!sh.includes('gaffer-update-$$'), 'no predictable name');
   const left = (() => {
     // The run ends at the runtime step (no fetch-runtime.sh in the archive); the trap must remove the folder.
-    const t = mkdtempSync(join(tmpdir(), 'gaffer-tmpcheck-'));
+    const t = tmpDir('gaffer-tmpcheck-');
     try {
       const src = fileURLToPath(new URL('../panel/daemon/update.sh', import.meta.url));
       const panel = join(t, 'p', 'com.gaffer.panel');

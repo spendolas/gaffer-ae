@@ -11,12 +11,13 @@ import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync,
+  mkdirSync, writeFileSync, readFileSync, existsSync, statSync,
   readdirSync, rmSync, chmodSync, utimesSync, copyFileSync, renameSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './tmp.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'fetch-runtime.sh');
@@ -43,7 +44,7 @@ function sha256(buf) {
 //   <root>/tmp/            TMPDIR for the script
 //   <root>/pins.json
 function sandbox({ binBody, version = VERSION, binaryShaOverride } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer fetch rt '));
+  const root = tmpDir('gaffer fetch rt ');
   const build = join(root, 'build');
   const top = `node-${version}-${PLAT}`;
   mkdirSync(join(build, top, 'bin'), { recursive: true });

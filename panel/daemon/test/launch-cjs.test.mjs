@@ -13,13 +13,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, rmSync, realpathSync,
+  mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, rmSync, realpathSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
+import { tmpDir } from './tmp.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LAUNCH = join(HERE, '..', 'launch.cjs');
@@ -49,7 +50,7 @@ process.on('exit', () => {
 });
 
 function sandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'gaffer launch cjs '));
+  const root = tmpDir('gaffer launch cjs ');
   roots.push(root);
   const dir = join(root, 'Applicätion Support', 'com.gaffer.panel', 'daemon');
   mkdirSync(dir, { recursive: true });

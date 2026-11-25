@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -10,6 +10,7 @@ import {
   parseVersionLine, helpListsFlag, missingFlags, parseEffortChoices, missingEfforts,
   parseStreamLines, envelopeProblems, classifyCapture, paidTurnProblems, chooseConfigDir, childEnv,
 } from './cli-contract-check.mjs';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 // The pure helpers of the weekly CLI contract check, plus one end-to-end run
 // of the script against a fake `claude` (a small node program) in both its
@@ -224,7 +225,7 @@ function isProbe(call, flag) { return call.args.indexOf(flag) !== -1; }
 var canExecFake = process.platform !== 'win32';
 
 test('end to end: a conforming fake claude passes with exit 0 and prints the version', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var r = await runScript(writeFakeClaude(dir, 'ok'));
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /PASS --version prints x\.y\.z: 2\.1\.293/);
@@ -240,7 +241,7 @@ test('end to end: a conforming fake claude passes with exit 0 and prints the ver
   ['noauth', /classifies auth via structure: kind=api_error/],
 ].forEach(function (row) {
   test('end to end: fake claude with ' + row[0] + ' drift fails with exit 1 and names it', { skip: !canExecFake }, async () => {
-    var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+    var dir = tmpDir('gaffer-cc-fake-');
     var r = await runScript(writeFakeClaude(dir, row[0]));
     assert.equal(r.code, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /CLI CONTRACT CHECK FAILED/);
@@ -257,7 +258,7 @@ test('end to end: a missing binary fails with exit 1 and says it could not run',
 // ---- isolation: the child can never be a signed-in paid turn ----
 
 test('isolation: an exported CLAUDE_CONFIG_DIR, HOME, API keys and backend switches never reach the child', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var exportedCfg = join(dir, 'exported-config');
   mkdirSync(exportedCfg);
   writeFileSync(join(exportedCfg, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"not-real"}}');
@@ -292,7 +293,7 @@ test('isolation: an exported CLAUDE_CONFIG_DIR, HOME, API keys and backend switc
 });
 
 test('isolation: --config-dir is honoured when it holds no credentials', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var cfg = join(dir, 'plain-config');
   mkdirSync(cfg);
   writeFileSync(join(cfg, 'settings.json'), '{}');
@@ -306,7 +307,7 @@ test('isolation: --config-dir is honoured when it holds no credentials', { skip:
 });
 
 test('isolation: --config-dir with a .credentials.json refuses to run before any probe', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var cfg = join(dir, 'signed-in-config');
   mkdirSync(cfg);
   writeFileSync(join(cfg, '.credentials.json'), '{}');
@@ -347,7 +348,7 @@ test('paidTurnProblems (pure): quiet on the $0 failure captures, loud on cost or
 });
 
 test('abort: a probe that reports total_cost_usd > 0 fails loudly and stops before the next probe', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var log = join(dir, 'calls.jsonl');
   var r = await runScript(writeFakeClaude(dir, 'paidresume'), { env: { GAFFER_FAKE_LOG: log } });
   assert.equal(r.code, 1, r.stdout + r.stderr);
@@ -360,12 +361,12 @@ test('abort: a probe that reports total_cost_usd > 0 fails loudly and stops befo
 });
 
 test('abort: a signed-out turn that costs money or succeeds fails loudly', { skip: !canExecFake }, async () => {
-  var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir = tmpDir('gaffer-cc-fake-');
   var paid = await runScript(writeFakeClaude(dir, 'paid'));
   assert.equal(paid.code, 1, paid.stdout + paid.stderr);
   assert.match(paid.stdout, /FAIL signed-out turn is a \$0 signed-out failure: result reports total_cost_usd=0\.004/);
   assert.match(paid.stdout, /ABORTING/);
-  var dir2 = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+  var dir2 = tmpDir('gaffer-cc-fake-');
   var log = join(dir2, 'calls.jsonl');
   var ok = await runScript(writeFakeClaude(dir2, 'okturn'), { env: { GAFFER_FAKE_LOG: log } });
   assert.equal(ok.code, 1, ok.stdout + ok.stderr);
@@ -380,7 +381,7 @@ test('abort: a signed-out turn that costs money or succeeds fails loudly', { ski
 
 ['hangversion', 'hanghelp'].forEach(function (mode) {
   test('timeout: a fake claude whose ' + (mode === 'hangversion' ? '--version (execFile path)' : '--help (file-redirect path)') + ' ignores SIGTERM is killed and the check finishes', { skip: !canExecFake }, async () => {
-    var dir = mkdtempSync(join(tmpdir(), 'gaffer-cc-fake-'));
+    var dir = tmpDir('gaffer-cc-fake-');
     var r = await runScript(writeFakeClaude(dir, mode), { env: { GAFFER_CLI_CONTRACT_TIMEOUT_MS: '1500' } });
     assert.equal(r.code, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /CLI CONTRACT CHECK FAILED/);

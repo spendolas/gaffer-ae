@@ -3,13 +3,14 @@ import { noopModelCatalog } from './test-catalog.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, existsSync, statSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatHandler } from '../chat-handler.js';
 import { assertLockdown, value, resumeId } from './lockdown-assert.mjs';
 import { encodePng } from '../png-scale.js';
 import { resetKnownMcpIdsForTests, knownMcpIds } from '../chat-handler.js';
+import { tmpDir } from './tmp.mjs';
 
 // Drives a real ChatHandler through a fake `claude` child and checks what the
 // handler actually hands to spawn: the lockdown options, the working
@@ -17,7 +18,7 @@ import { resetKnownMcpIdsForTests, knownMcpIds } from '../chat-handler.js';
 // --tools, --strict-mcp-config, --setting-sources, the private working
 // directory or the MCP-less compaction call goes missing.
 
-var chatDir = mkdtempSync(join(tmpdir(), 'gaffer-test-chatdir-'));
+var chatDir = tmpDir('gaffer-test-chatdir-');
 process.env.GAFFER_TEST = '1';
 process.env.GAFFER_CHAT_DIR = chatDir;
 
@@ -185,8 +186,10 @@ test('fail closed: a capability check that could not run also refuses', async ()
   assert.equal(sock.ofType('chat_error').length, 1);
 });
 
-test('pasted images: sent as image blocks on stdin, no file-reading tool involved', async () => {
+test('pasted images: sent as image blocks on stdin, no file-reading tool involved', async (t) => {
+  // Pasted images are only read from the OS temp folder, so this one lives there.
   var img = join(tmpdir(), 'gaffer-paste-' + Date.now() + '-7.png');
+  t.after(function () { rmSync(img, { force: true }); });
   var px = new Uint8Array(16 * 16 * 4).fill(255);
   writeFileSync(img, await encodePng(px, 16, 16));
   var h = harness();

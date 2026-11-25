@@ -1,19 +1,20 @@
 // Run from the repo root: node --test scripts/recompute-sums.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../panel/daemon/test/tmp.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, 'recompute-sums.sh');
 const ARCHIVES = ['gaffer-install-mac.tar.gz', 'gaffer-install-win.zip', 'gaffer-update-mac.tar.gz', 'gaffer-update-win.zip'];
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-sums-'));
+  const dir = tmpDir('gaffer-sums-');
   ARCHIVES.forEach((n, i) => writeFileSync(join(dir, n), 'archive ' + i + ' ' + n + '\n'));
   return dir;
 }

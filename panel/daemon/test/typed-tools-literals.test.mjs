@@ -8,12 +8,13 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import * as acorn from 'acorn';
+import { tmpDir } from './tmp.mjs';
 
 var here = dirname(fileURLToPath(import.meta.url));
 var daemonDir = join(here, '..');
@@ -24,7 +25,7 @@ var daemonDir = join(here, '..');
 // backslash and a line separator, so a path written into a script unescaped
 // would end its string early.
 var scratchPrefix = process.platform === 'win32' ? 'gaffer-literals-' : 'gaffer-literals-"q\\b\u2028-';
-var scratch = mkdtempSync(join(tmpdir(), scratchPrefix));
+var scratch = tmpDir(scratchPrefix);
 process.env.TMPDIR = scratch;
 process.env.TEMP = scratch;
 process.env.TMP = scratch;

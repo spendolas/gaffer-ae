@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import { authStatus, authIdentityFromDisk, signIn, signOut, readCredentialFile } from '../auth.js';
 import { execFile as _execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './tmp.mjs';
 
 const execFileP = promisify(_execFile);
 
 const okJson = JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'a@b.co', orgName: 'Acme', subscriptionType: 'team' });
 
 function fakeBin(state) {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-auth-'));
+  const dir = tmpDir('gaffer-auth-');
   const sf = join(dir, 'state.json');
   writeFileSync(sf, JSON.stringify(state));
   const stub = fileURLToPath(new URL('../test-fixtures/fake-claude.mjs', import.meta.url));
@@ -237,7 +238,7 @@ test('authIdentityFromDisk never throws — a throwing reader yields loggedIn:nu
 // expiry) but the CLI leaves the credentials file in place.
 
 test('readCredentialFile: missing file is a definitive absence', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-cred-'));
+  const dir = tmpDir('gaffer-cred-');
   const r = readCredentialFile({ CLAUDE_CONFIG_DIR: dir });
   assert.equal(r.present, false);
   assert.equal(r.definitive, true);
@@ -246,7 +247,7 @@ test('readCredentialFile: missing file is a definitive absence', () => {
 test('readCredentialFile: well-formed file with a blank accessToken is a definitive absence, not indeterminate', () => {
   // Exactly the shape Claude Code leaves on disk after a sign-out/expiry —
   // `claude auth status --json` reports loggedIn:false for this same file.
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-cred-'));
+  const dir = tmpDir('gaffer-cred-');
   writeFileSync(join(dir, '.credentials.json'), JSON.stringify({
     claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0, subscriptionType: 'team' },
   }));
@@ -256,7 +257,7 @@ test('readCredentialFile: well-formed file with a blank accessToken is a definit
 });
 
 test('readCredentialFile: a valid token is present', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-cred-'));
+  const dir = tmpDir('gaffer-cred-');
   writeFileSync(join(dir, '.credentials.json'), JSON.stringify({
     claudeAiOauth: { accessToken: 'tok-123', subscriptionType: 'pro' },
   }));
@@ -267,7 +268,7 @@ test('readCredentialFile: a valid token is present', () => {
 });
 
 test('readCredentialFile: corrupt/partial-write JSON stays indeterminate', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gaffer-cred-'));
+  const dir = tmpDir('gaffer-cred-');
   writeFileSync(join(dir, '.credentials.json'), '{"claudeAiOauth": {"accessTok');
   const r = readCredentialFile({ CLAUDE_CONFIG_DIR: dir });
   assert.equal(r.present, false);
