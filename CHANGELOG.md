@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A new chat now opens with a start screen: a Clean Up Comp quick action, example prompts (Lego brick, Loading spinner, Confetti, Project cleanup) and a Change model link. Click one to send it.
+
 ## v0.12.2 - 2026-11-24
 
 **Gaffer chat, the panel and updates are locked down: safer chat tools, safe rendering of replies, a checked connection between panel and service, verified updates, and the latest Node.js security release.**

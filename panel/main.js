@@ -1023,6 +1023,7 @@
     function finishRestore() {
       if (restored) return;
       restored = true;
+      syncEmptyState();
       if (typeof onRestored === 'function') onRestored();
     }
     function applyData(data) {
@@ -1805,6 +1806,76 @@
 
   // ── Chat UI ──
 
+  // ── Empty state: quick actions + prompt templates (new chat) ──
+  // Each entry: label shown on the chip, prompt sent when clicked. Edit here.
+  var EMPTY_QUICK_ACTIONS = [
+    { label: 'Clean Up Comp', prompt: 'Clean up the active comp: give layers clear names, label and colour them by type, and group related layers into precomps where it helps. Show me the plan briefly, then do it without changing how the comp looks or animates.' }
+  ];
+  var EMPTY_TEMPLATES = [
+    { label: 'Lego brick', prompt: 'Build a 3D Lego brick that I can resize and recolour from one control layer, using shape layers and expressions.' },
+    { label: 'Loading spinner', prompt: 'Create a smooth looping loading spinner in a new comp, with controls for colour, size and speed.' },
+    { label: 'Confetti', prompt: 'Add a confetti burst to the active comp with controls for amount, colours and gravity.' },
+    { label: 'Project cleanup', prompt: 'Audit my project: find unused footage, duplicate items and unnamed comps, and organise the project panel into folders. List what you plan to change before doing it.' }
+  ];
+  var emptyStateEl = null;
+
+  function runEmptyPrompt(prompt) {
+    chatInputEl.value = prompt;
+    chatInputEl.dispatchEvent(new Event('input'));
+    sendChatMessage(); // leaves the text in the field when not connected / signed out
+    chatInputEl.focus();
+  }
+
+  function buildEmptyState() {
+    var root = document.createElement('div');
+    root.className = 'empty-state';
+    function group(labelText, items, cls) {
+      var g = document.createElement('div');
+      g.className = 'empty-group';
+      var l = document.createElement('div');
+      l.className = 'empty-label';
+      l.textContent = labelText;
+      var row = document.createElement('div');
+      row.className = 'empty-chips';
+      items.forEach(function (it) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'empty-chip' + (cls ? ' ' + cls : '');
+        b.textContent = it.label;
+        b.title = it.prompt;
+        b.addEventListener('click', function () { runEmptyPrompt(it.prompt); });
+        row.appendChild(b);
+      });
+      g.appendChild(l);
+      g.appendChild(row);
+      return g;
+    }
+    var title = document.createElement('div');
+    title.className = 'empty-title';
+    title.textContent = 'What should we build in After Effects?';
+    root.appendChild(title);
+    root.appendChild(group('Quick actions', EMPTY_QUICK_ACTIONS, 'action'));
+    root.appendChild(group('Try a prompt', EMPTY_TEMPLATES, ''));
+    var link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'empty-model-link';
+    link.textContent = 'Change model';
+    link.addEventListener('click', function () { openSettings(); });
+    root.appendChild(link);
+    return root;
+  }
+
+  // Show the empty state only while the transcript has no messages.
+  function syncEmptyState() {
+    if (!emptyStateEl) emptyStateEl = buildEmptyState();
+    var hasMessages = chatMessagesEl.children.length > (emptyStateEl.parentNode === chatMessagesEl ? 1 : 0);
+    if (hasMessages) {
+      if (emptyStateEl.parentNode) emptyStateEl.parentNode.removeChild(emptyStateEl);
+    } else if (emptyStateEl.parentNode !== chatMessagesEl) {
+      chatMessagesEl.appendChild(emptyStateEl);
+    }
+  }
+
   function sendChatMessage() {
     var text = chatInputEl.value.trim();
     if (!ws || ws.readyState !== 1 || chatBusy) return;
@@ -1891,6 +1962,7 @@
 
   function appendUserMessage(text, images, quotes) {
     chatMessagesEl.appendChild(buildUserMessageEl(text, images, quotes));
+    syncEmptyState();
     var entry = { role: 'user', text: text, timestamp: new Date().toISOString() };
     if (images && images.length) {
       entry.images = images.map(function (i) { return { dataUrl: i.dataUrl, name: i.name }; });
@@ -2632,6 +2704,7 @@
 
   function clearChat() {
     chatMessagesEl.innerHTML = '';
+    emptyStateEl = null; // innerHTML wipe detached it; rebuilt by syncEmptyState
     currentSessionId = null;
     // Tell the daemon, on the next send, to genuinely start fresh — nulling the
     // panel's currentSessionId alone doesn't reach the daemon's held session.
@@ -2640,6 +2713,7 @@
     clearReplyQuotes();
     saveChat();
     if (chatBusy) startAssistantMessage();
+    syncEmptyState();
   }
 
   function stopChat() {

@@ -184,6 +184,25 @@
       flex-direction: column;
       gap: 8px;
     }
+    /* Empty state: shown in the transcript area while a chat has no messages.
+       Quick actions + prompt templates; a click sends the prompt. */
+    .empty-state { margin: auto 0; display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
+    .empty-state[hidden] { display: none; }
+    .empty-title { font-size: calc(13px * var(--chat-text, 1)); line-height: calc(18px * var(--chat-text, 1)); color: var(--color-text-muted); }
+    .empty-group { display: flex; flex-direction: column; gap: 6px; }
+    .empty-label { font-size: calc(10px * var(--chat-text, 1)); line-height: calc(14px * var(--chat-text, 1)); color: var(--color-text-dimmer); }
+    .empty-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .empty-chip {
+      border: 1px solid var(--color-border-default); border-radius: 8px; background: transparent;
+      color: var(--color-text-default); font: inherit; font-size: calc(12px * var(--chat-text, 1));
+      line-height: calc(16px * var(--chat-text, 1)); padding: 6px 10px; cursor: pointer; text-align: left;
+    }
+    .empty-chip:hover { background: var(--color-border-default); color: var(--color-text-light); }
+    .empty-chip:disabled { opacity: 0.4; cursor: default; }
+    .empty-chip.action { border-color: var(--color-btn-primary-bg); color: var(--color-accent-blue); }
+    .empty-model-link { align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer; font: inherit;
+      font-size: calc(10px * var(--chat-text, 1)); color: var(--color-text-dimmer); text-decoration: underline; }
+    .empty-model-link:hover { color: var(--color-text-light); }
     /* Scrollbar stops at the input section's top edge — inset the track
        by the full bleed the chat box runs behind it */
     .chat-messages::-webkit-scrollbar-track {
