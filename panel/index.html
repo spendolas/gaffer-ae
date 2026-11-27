@@ -184,25 +184,28 @@
       flex-direction: column;
       gap: 8px;
     }
-    /* Empty state: shown in the transcript area while a chat has no messages.
-       Quick actions + prompt templates; a click sends the prompt. */
-    .empty-state { margin: auto 0; display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
-    .empty-state[hidden] { display: none; }
-    .empty-title { font-size: calc(13px * var(--chat-text, 1)); line-height: calc(18px * var(--chat-text, 1)); color: var(--color-text-muted); }
-    .empty-group { display: flex; flex-direction: column; gap: 6px; }
-    .empty-label { font-size: calc(10px * var(--chat-text, 1)); line-height: calc(14px * var(--chat-text, 1)); color: var(--color-text-dimmer); }
-    .empty-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-    .empty-chip {
-      border: 1px solid var(--color-border-default); border-radius: 8px; background: transparent;
-      color: var(--color-text-default); font: inherit; font-size: calc(12px * var(--chat-text, 1));
-      line-height: calc(16px * var(--chat-text, 1)); padding: 6px 10px; cursor: pointer; text-align: left;
+    /* Empty state (Figma 824:23927): shown in the transcript area while a chat
+       has no messages. Tiles pinned to the top, the Settings Models block to
+       the bottom; the space between stretches. Tiles carry no stroke. */
+    .empty-state { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-16); }
+    .empty-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+    .empty-tile {
+      display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+      min-height: 132px; padding: var(--space-12); border: none; border-radius: var(--radius-12);
+      background: linear-gradient(var(--color-btn-rest-overlay), var(--color-btn-rest-overlay)), var(--color-bg-panel);
+      color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background 0.1s ease;
     }
-    .empty-chip:hover { background: var(--color-border-default); color: var(--color-text-light); }
-    .empty-chip:disabled { opacity: 0.4; cursor: default; }
-    .empty-chip.action { border-color: var(--color-btn-primary-bg); color: var(--color-accent-blue); }
-    .empty-model-link { align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer; font: inherit;
-      font-size: calc(10px * var(--chat-text, 1)); color: var(--color-text-dimmer); text-decoration: underline; }
-    .empty-model-link:hover { color: var(--color-text-light); }
+    .empty-tile:hover { background: var(--color-border-default); }
+    .empty-tile:disabled { opacity: 0.4; cursor: default; }
+    .empty-tile-icon { width: 28px; height: 28px; padding: 6px; border-radius: var(--radius-8); color: var(--color-text-light); flex-shrink: 0; }
+    .empty-tile-icon .gicon { width: 16px; height: 16px; display: block; }
+    .empty-tile-text { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; min-width: 0; }
+    .empty-tile-title { font-size: calc(14px * var(--chat-text, 1)); line-height: calc(18px * var(--chat-text, 1)); font-weight: 600; color: var(--color-text-light-2); }
+    .empty-tile-result { font-size: calc(12px * var(--chat-text, 1)); line-height: calc(16px * var(--chat-text, 1)); color: var(--color-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Models block: the real Settings control, moved here while the empty state shows */
+    .empty-models { display: flex; flex-direction: column; gap: var(--space-16); padding: 0 var(--space-12); }
+    .empty-models-caption { font-size: calc(10px * var(--chat-text, 1)); line-height: 1.5; color: var(--color-text-dimmest); }
+    .empty-models .settings-item { padding: 0; background: transparent; }
     /* Scrollbar stops at the input section's top edge — inset the track
        by the full bleed the chat box runs behind it */
     .chat-messages::-webkit-scrollbar-track {

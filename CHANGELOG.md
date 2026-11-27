@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- A new chat now opens with a start screen: a Clean Up Comp quick action, example prompts (Lego brick, Loading spinner, Confetti, Project cleanup) and a Change model link. Click one to send it.
+- A new chat now opens with four example tiles (for example Clean Up Comp, Loading spinner, Lego brick, Confetti) taken from a curated list, with a different set each new chat. A tile either starts the job right away or fills the message box so you can edit it first. The model picker sits below the tiles while the chat is empty.
 
 ## v0.12.2 - 2026-11-24
 
