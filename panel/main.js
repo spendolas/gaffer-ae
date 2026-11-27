@@ -996,6 +996,7 @@
       dismissedUpdateVersion: dismissedUpdateVersion,
       enabledMcps: enabledMcps,
       mcpUsage: mcpUsage,
+      tileState: tileState,
     });
     // Prefer Node fs — handles large payloads (image dataUrls) reliably.
     // Fall back to ExtendScript File I/O for legacy CEP without mixed-context.
@@ -1023,6 +1024,7 @@
     function finishRestore() {
       if (restored) return;
       restored = true;
+      syncEmptyState();
       if (typeof onRestored === 'function') onRestored();
     }
     function applyData(data) {
@@ -1091,6 +1093,12 @@
         }
         if (data.mcpUsage && typeof data.mcpUsage === 'object') {
           mcpUsage = data.mcpUsage;
+        }
+        if (data.tileState && typeof data.tileState === 'object') {
+          tileState = {
+            last: Array.isArray(data.tileState.last) ? data.tileState.last.filter(function (x) { return typeof x === 'string'; }).slice(0, 8) : [],
+            used: (data.tileState.used && typeof data.tileState.used === 'object') ? data.tileState.used : {}
+          };
         }
         for (var i = 0; i < chatHistory.length; i++) {
           var msg = chatHistory[i];
@@ -1805,6 +1813,174 @@
 
   // ── Chat UI ──
 
+  // ── Empty state (Figma 824:23927): four prompt tiles + the Settings Models block ──
+  // Tiles come from the bundled prompts/tiles.json (curated list, edit there).
+  // Each new empty chat shows slots.utility + slots.creative of them; mode "run"
+  // sends the prompt, "draft" fills the input so it can be edited first.
+  var tilesConfig = { slots: { utility: 1, creative: 3 }, tiles: [] };
+  var pickedTiles = [];
+  var tileState = { last: [], used: {} }; // saved with the chat state: recent ids shown, click counts
+  var emptyTilesGridEl = null;
+
+  // Tile text is data, not trusted: check every field, drop what is wrong.
+  function cleanTiles(raw) {
+    var out = { slots: { utility: 1, creative: 3 }, tiles: [] };
+    if (!raw || typeof raw !== 'object') return out;
+    if (raw.slots && typeof raw.slots === 'object') {
+      ['utility', 'creative'].forEach(function (k) {
+        var n = raw.slots[k];
+        if (typeof n === 'number' && n >= 0 && n <= 4) out.slots[k] = Math.floor(n);
+      });
+    }
+    var seen = {};
+    (Array.isArray(raw.tiles) ? raw.tiles : []).forEach(function (t) {
+      if (!t || typeof t !== 'object' || t.enabled === false) return;
+      if (typeof t.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(t.id) || seen[t.id]) return;
+      if (typeof t.title !== 'string' || !t.title || t.title.length > 40) return;
+      if (typeof t.result !== 'string' || t.result.length > 80) return;
+      if (typeof t.prompt !== 'string' || !t.prompt || t.prompt.length > 2000) return;
+      seen[t.id] = true;
+      out.tiles.push({
+        id: t.id, title: t.title, result: t.result, prompt: t.prompt,
+        icon: (typeof t.icon === 'string' && typeof GafferIcons !== 'undefined' && GafferIcons[t.icon]) ? t.icon : 'layers',
+        mode: t.mode === 'run' ? 'run' : 'draft',
+        kind: t.kind === 'utility' ? 'utility' : 'creative',
+        weight: (typeof t.weight === 'number' && t.weight > 0 && t.weight <= 10) ? t.weight : 1
+      });
+    });
+    return out;
+  }
+
+  // Weighted pick without repeats; avoids tiles shown in the last two chats
+  // when enough others remain, and shows clicked tiles less.
+  function pickTiles() {
+    var picked = [];
+    ['utility', 'creative'].forEach(function (kind) {
+      var want = tilesConfig.slots[kind] || 0;
+      var pool = tilesConfig.tiles.filter(function (t) { return t.kind === kind; });
+      var fresh = pool.filter(function (t) { return tileState.last.indexOf(t.id) < 0; });
+      if (fresh.length >= want) pool = fresh;
+      for (var n = 0; n < want && pool.length; n++) {
+        var weights = pool.map(function (t) { return t.weight / (1 + (tileState.used[t.id] || 0)); });
+        var total = weights.reduce(function (a, b) { return a + b; }, 0);
+        var r = Math.random() * total, i = 0;
+        while (i < pool.length - 1 && r >= weights[i]) { r -= weights[i]; i++; }
+        picked.push(pool[i]);
+        pool.splice(i, 1);
+      }
+    });
+    pickedTiles = picked;
+    tileState.last = picked.map(function (t) { return t.id; }).concat(tileState.last).slice(0, 8);
+    saveChat();
+    renderEmptyTiles();
+  }
+
+  function loadTiles() {
+    function apply(text) {
+      try { tilesConfig = cleanTiles(JSON.parse(text)); } catch (e) { tilesConfig = cleanTiles(null); }
+      pickTiles();
+    }
+    var path = cs.getSystemPath(SystemPath.EXTENSION) + '/prompts/tiles.json';
+    if (typeof require !== 'undefined') {
+      try { apply(require('node:fs').readFileSync(path, 'utf8')); return; } catch (e) { /* fall through */ }
+    }
+    var jsx = "(function(){var f=new File('" + path.replace(/'/g, "\\'") + "');if(!f.exists)return '';f.open('r');var d=f.read();f.close();return d;})()";
+    cs.evalScript(jsx, function (result) { apply(result && result !== 'undefined' ? result : ''); });
+  }
+
+  var emptyStateEl = null;
+  var emptyModelsEl = null;
+  // The real Settings Models control (gate + selects + effort slider) is moved
+  // here while the empty state shows and back to Settings otherwise, so there
+  // is one set of controls, one value and no duplicated ids.
+  var modelSlotEl = document.querySelector('.model-slot');
+  var modelSlotHome = modelSlotEl ? { parent: modelSlotEl.parentNode, next: modelSlotEl.nextSibling } : null;
+  var modelLabelEl = modelSlotEl ? modelSlotEl.querySelector('.models-grid > .item-title') : null;
+
+  function runEmptyTile(it) {
+    tileState.used[it.id] = (tileState.used[it.id] || 0) + 1;
+    saveChat();
+    chatInputEl.value = it.prompt;
+    chatInputEl.dispatchEvent(new Event('input'));
+    if (it.mode === 'run') {
+      sendChatMessage(); // leaves the text in the field when not connected / signed out
+    } else {
+      resizeChatInput();
+      chatInputEl.focus();
+      chatInputEl.setSelectionRange(chatInputEl.value.length, chatInputEl.value.length);
+    }
+  }
+
+  function renderEmptyTiles() {
+    if (!emptyTilesGridEl) return;
+    while (emptyTilesGridEl.firstChild) emptyTilesGridEl.removeChild(emptyTilesGridEl.firstChild);
+    pickedTiles.forEach(function (it) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'empty-tile';
+      b.title = it.prompt;
+      var ic = icon(it.icon, 'empty-tile-icon');
+      var text = document.createElement('span');
+      text.className = 'empty-tile-text';
+      var t = document.createElement('span');
+      t.className = 'empty-tile-title';
+      t.textContent = it.title;
+      var r = document.createElement('span');
+      r.className = 'empty-tile-result';
+      r.textContent = it.result;
+      text.appendChild(t);
+      text.appendChild(r);
+      b.appendChild(ic);
+      b.appendChild(text);
+      b.addEventListener('click', function () { runEmptyTile(it); });
+      emptyTilesGridEl.appendChild(b);
+    });
+  }
+
+  function buildEmptyState() {
+    var root = document.createElement('div');
+    root.className = 'empty-state';
+    root.setAttribute('data-fig', '824:23927');
+    var grid = document.createElement('div');
+    grid.className = 'empty-tiles';
+    emptyTilesGridEl = grid;
+    renderEmptyTiles();
+    root.appendChild(grid);
+    emptyModelsEl = document.createElement('div');
+    emptyModelsEl.className = 'empty-models';
+    var cap = document.createElement('div');
+    cap.className = 'empty-models-caption';
+    cap.textContent = 'Start new chats with this model:';
+    emptyModelsEl.appendChild(cap);
+    root.appendChild(emptyModelsEl);
+    return root;
+  }
+
+  // Put the Settings Models block back where it lives in the Settings modal.
+  function restoreModelSlot() {
+    if (!modelSlotEl || !modelSlotHome || modelSlotEl.parentNode === modelSlotHome.parent) return;
+    modelSlotHome.parent.insertBefore(modelSlotEl, modelSlotHome.next);
+    if (modelLabelEl) modelLabelEl.textContent = 'Models';
+  }
+
+  // Show the empty state only while the transcript has no messages.
+  function syncEmptyState() {
+    if (!emptyStateEl) emptyStateEl = buildEmptyState();
+    var hasMessages = chatMessagesEl.children.length > (emptyStateEl.parentNode === chatMessagesEl ? 1 : 0);
+    var settingsOpen = settingsModalEl && !settingsModalEl.hidden;
+    if (hasMessages) {
+      if (emptyStateEl.parentNode) emptyStateEl.parentNode.removeChild(emptyStateEl);
+      restoreModelSlot();
+      return;
+    }
+    if (emptyStateEl.parentNode !== chatMessagesEl) chatMessagesEl.appendChild(emptyStateEl);
+    if (settingsOpen) { restoreModelSlot(); return; }
+    if (modelSlotEl && modelSlotEl.parentNode !== emptyModelsEl) {
+      emptyModelsEl.appendChild(modelSlotEl);
+      if (modelLabelEl) modelLabelEl.textContent = 'Model';
+    }
+  }
+
   function sendChatMessage() {
     var text = chatInputEl.value.trim();
     if (!ws || ws.readyState !== 1 || chatBusy) return;
@@ -1891,6 +2067,7 @@
 
   function appendUserMessage(text, images, quotes) {
     chatMessagesEl.appendChild(buildUserMessageEl(text, images, quotes));
+    syncEmptyState();
     var entry = { role: 'user', text: text, timestamp: new Date().toISOString() };
     if (images && images.length) {
       entry.images = images.map(function (i) { return { dataUrl: i.dataUrl, name: i.name }; });
@@ -2631,7 +2808,10 @@
   }
 
   function clearChat() {
+    restoreModelSlot(); // take the Models block out before the wipe detaches it
     chatMessagesEl.innerHTML = '';
+    emptyStateEl = null; // innerHTML wipe detached it; rebuilt by syncEmptyState
+    emptyTilesGridEl = null;
     currentSessionId = null;
     // Tell the daemon, on the next send, to genuinely start fresh — nulling the
     // panel's currentSessionId alone doesn't reach the daemon's held session.
@@ -2640,6 +2820,8 @@
     clearReplyQuotes();
     saveChat();
     if (chatBusy) startAssistantMessage();
+    pickTiles(); // a new chat shows a fresh set
+    syncEmptyState();
   }
 
   function stopChat() {
@@ -4275,6 +4457,7 @@
     // a cold open stays 'pending' (blank, no spinner) and a warm re-open keeps
     // its 'ready' controls — requestModelCatalog only reveals the spinner if the
     // reply is slow (a live fetch), so a fresh cache hit never flashes one.
+    restoreModelSlot(); // the Models block lives in the empty state while a chat is empty
     if (modelDiscoveryState !== 'ready') modelDiscoveryState = 'pending';
     // If auth hasn't resolved yet (the brief on-connect window), hold the account
     // slot blank and defer its spinner past the grace window — the auth_status
@@ -4290,7 +4473,11 @@
     // actually laid out (syncSettings' renderEffort ran while it was hidden).
     requestAnimationFrame(relayoutEffort);
   }
-  function closeSettings() { tkHide(settingsModalEl); }
+  function closeSettings() {
+    tkHide(settingsModalEl);
+    // after the close animation, hand the Models block back to the empty state
+    setTimeout(syncEmptyState, 300);
+  }
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsDismissBtn').addEventListener('click', closeSettings);
   dismissOnBackdrop(settingsModalEl, closeSettings); // void click only, not a drag out of the card
@@ -4384,6 +4571,7 @@
     card.classList.remove('instant');
   })();
   restoreChat(function () {
+    loadTiles(); // picks the empty-state tiles once the saved tile state is back
     // Give restored DOM/style changes one frame to settle before future user
     // scale changes may animate. This prevents the visible post-load drift
     // from the default 1× scale to a saved larger scale.
